@@ -1,0 +1,7 @@
+{
+  "memory_mib": 4096,
+  "cpu_count": 2,
+  "eif_path": "./out/memorai-enclave.eif",
+  "debug_mode": false,
+  "enclave_cid": 16
+}
