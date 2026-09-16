@@ -147,6 +147,67 @@ scripts/    build/run/deploy/smoke-test plumbing
 Phase 2 stubs -- typed and compiling, bodies are `todo!()`. No memory
 ingestion, embeddings, or agent features exist yet.
 
+## Phase 2 direction (not implemented yet)
+
+This section describes what Phase 1 is scaffolding toward. Nothing below is
+built; it's context for reading the stubs above and for whoever picks up
+ingestion work next. The Phase 1 architecture (enclave/gateway/shared,
+VSOCK-over-socat, mock/nitro split) stays as-is -- everything here is
+additive.
+
+**Product shape.** A user connects sources (starting with Google/GitHub,
+since OAuth for both exists from Phase 1); their activity is resolved into
+a structured, timestamped memory, attested inside the TEE at the points
+where it touches sensitive raw content, encrypted, and stored under the
+user's own keys. Authorized agents query it with scoped permissions over
+MCP. The bet is that the value is a **resolved, timestamped record** (who
+said what, when it changed, why, what it links to), not a pile of
+retrievable raw documents.
+
+**Two-tier split.** The Rust core stays exactly as narrow as Phase 1 built
+it -- `enclave/` is the trust boundary (identity verification, attestation,
+and eventually Seal-encrypting raw sensitive content before it leaves the
+TEE), `gateway/` owns the VSOCK bridge and will expose a query API. A new
+**Python orchestration service** (not in this repo yet) does everything
+agentic -- ingestion, entity/decision resolution, retrieval, summarization
+-- entirely outside the enclave, calling into the gateway only for the
+specific operations that need attestation. It never becomes part of the
+trust boundary. Built on **LangGraph** (control flow: ingestion graph and
+query graph, both long-running with checkpointing, not single-turn chat)
+and **LlamaIndex** (retrieval: hybrid semantic + recency + graph-proximity
+search over resolved memory objects, not raw source documents).
+
+**Memory schema (design target for `shared/src/memory.rs`).** Entities
+(people, projects, artifacts), Events (atomic ingested facts with a source
+reference and timestamp), Decisions/claims (higher-level resolved
+statements -- conflicting versions stay linked rather than overwritten,
+with a "reconciled" pointer once resolved), and Provenance (every stored
+object carries a citation chain back to its originating source event, not
+just a confidence score). This needs to be finalized before ingestion code
+is written against it -- current `MemoryObject`/`Timeline` types are
+placeholders, not this schema.
+
+**Open decisions blocking ingestion work:**
+- **Storage split** -- how much of the queryable index (entities,
+  embeddings, graph edges) lives off-chain (Postgres+pgvector, or a graph
+  database) versus written through to Walrus directly, with only attested
+  commitments anchored on-chain.
+- **Permissions** -- access control needs to be checked at query time, not
+  just ingestion time (a memory object's visibility to an agent can depend
+  on that agent's *current* authorized scope, not a static label set at
+  ingest). Long-term this should be on-chain/auditable, not just
+  application logic in the orchestration service.
+- **Rust-core <-> Python-service transport** -- likely synchronous
+  request/response for the query graph, likely an async job queue for
+  ingestion (connecting a new source means backfilling a large history in
+  bursts, not a steady trickle).
+
+**Not built yet:** ingestion connectors (Google, GitHub), the orchestration
+service itself, vector/graph storage wiring, `shared/src/memory.rs`'s real
+schema, `enclave/src/services/{seal,memory}.rs` bodies,
+`gateway/src/routes/memory.rs`'s real handler, the MCP server, the
+permission/ACL model, the async ingestion job queue.
+
 ## Env vars
 
 See `.env.example` at the repo root.
