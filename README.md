@@ -182,8 +182,9 @@ ENCLAVE_MODE=nitro ./memorai-gateway
 `suiverify/nautilus-attestation-backend/Containerfile`) producing a
 reproducible `.eif` via `eif_build`. It needs the stagex image cache and a
 network-reachable cargo registry (for the pinned
-`aws-nitro-enclaves-nsm-api` git dependency); it was not run in this
-sandboxed dev environment (no docker/stagex here) but is structurally
+`aws-nitro-enclaves-nsm-api` git dependency); the `.eif` build itself has
+not been run yet (docker is available on the dev machine, but the stagex
+images are not cached there). It is structurally
 verified: `cargo build --release --no-default-features --features nitro -p enclave`
 was run standalone and **compiles cleanly**, including resolving the
 `aws-nitro-enclaves-nsm-api` git dependency.
@@ -286,6 +287,19 @@ own node between retrieval and assembly. Retrieval is deliberately
 permission-blind, so it is structurally impossible for the assembler to see
 an unchecked candidate, and a denial surfaces as a denial with reasons
 rather than as an empty result set.
+
+Two sharp edges to fix before grants are load-bearing:
+
+- **Owner session tokens and agent grant tokens are signed with the same
+  secret and carry no type discriminator.** They are not interchangeable
+  today, but only because their claim shapes are disjoint and serde rejects
+  a missing field -- an accident, not a defence. Adding a `#[serde(default)]`
+  or an optional field to either struct would silently make a session usable
+  as a grant. A `typ` claim, or separate secrets, would make that
+  structural.
+- **A grant cannot be revoked before it expires**, except per-object via
+  `ObjectAcl.denied_agents`. There is no revocation list. Keep grant TTLs
+  short until there is one.
 
 ### The Rust/Python split
 
