@@ -36,3 +36,25 @@ fn chrono_now_secs() -> usize {
         .expect("system clock before unix epoch")
         .as_secs() as usize
 }
+
+/// Extracts and validates the owner session from an `Authorization: Bearer`
+/// header. Every memory route is owner-authenticated: the enclave will seal
+/// under whatever owner id it is told, so the gateway is what binds a
+/// request to an actual verified identity.
+pub fn require_session(
+    headers: &axum::http::HeaderMap,
+    secret: &str,
+) -> Result<SessionClaims, crate::error::GatewayError> {
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| {
+            crate::error::GatewayError::Unauthorized(
+                "missing Authorization: Bearer <session token> header".into(),
+            )
+        })?;
+
+    validate_session_token(raw, secret)
+        .map_err(|e| crate::error::GatewayError::Unauthorized(format!("invalid session: {e}")))
+}

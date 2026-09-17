@@ -12,6 +12,7 @@ fn test_state() -> Arc<AppState> {
         enclave_host: "127.0.0.1".to_string(),
         enclave_port: 4000,
         session_jwt_secret: "test-secret".to_string(),
+        session_ttl_secs: 3600,
     };
     let enclave = EnclaveClient::new(&config.enclave_host, config.enclave_port);
     Arc::new(AppState { config, enclave })

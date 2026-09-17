@@ -1,0 +1,33 @@
+# Local dev dependencies for the orchestrator. Ports are deliberately
+# non-default so this stack can coexist with other projects' Redis/Neo4j.
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: memorai-neo4j
+    ports:
+      - "127.0.0.1:7688:7687"
+      - "127.0.0.1:7475:7474"
+    environment:
+      NEO4J_AUTH: neo4j/memoraidev
+      NEO4J_server_memory_heap_max__size: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p memoraidev 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - neo4j-data:/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: memorai-redis
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  neo4j-data:

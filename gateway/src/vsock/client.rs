@@ -1,5 +1,5 @@
 use crate::error::GatewayError;
-use shared::{IdentityVerifyRequest, IdentityVerifyResponse};
+use shared::{IdentityVerifyRequest, IdentityVerifyResponse, SealEncryptRequest, SealEncryptResponse};
 use std::time::Duration;
 
 /// Plain TCP/HTTP client the gateway uses to reach the enclave.
@@ -46,6 +46,39 @@ impl EnclaveClient {
         let resp = self
             .http
             .post(format!("{}/identity/verify", self.base_url))
+            .json(req)
+            .send()
+            .await
+            .map_err(|e| GatewayError::EnclaveUnreachable(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(GatewayError::EnclaveUnreachable(format!(
+                "enclave returned {status}: {body}"
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| GatewayError::EnclaveUnreachable(e.to_string()))
+    }
+
+    pub async fn seal_encrypt(
+        &self,
+        req: &SealEncryptRequest,
+    ) -> Result<SealEncryptResponse, GatewayError> {
+        self.post_json("/seal/encrypt", req).await
+    }
+
+    async fn post_json<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        req: &Req,
+    ) -> Result<Resp, GatewayError> {
+        let resp = self
+            .http
+            .post(format!("{}{}", self.base_url, path))
             .json(req)
             .send()
             .await

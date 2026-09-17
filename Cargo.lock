@@ -866,6 +866,7 @@ dependencies = [
  "async-trait",
  "aws-nitro-enclaves-nsm-api",
  "axum",
+ "base64 0.22.1",
  "dotenvy",
  "fastcrypto",
  "hex",
@@ -1064,6 +1065,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "dotenvy",
  "hex",
  "jsonwebtoken",

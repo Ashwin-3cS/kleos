@@ -25,8 +25,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(routes::health::health))
         .route("/auth/callback", get(routes::auth::callback))
+        .route("/auth/session", post(routes::auth::session))
         .route("/identity/verify", post(routes::identity::verify))
-        .route("/memory/timeline", get(routes::memory::timeline))
+        .route("/memory/seal/encrypt", post(routes::memory::seal_encrypt))
+        .route("/memory/scope/grant", post(routes::memory::scope_grant))
+        .route("/memory/scope/introspect", post(routes::memory::scope_introspect))
         .with_state(state)
         .layer(cors)
 }

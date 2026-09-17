@@ -6,6 +6,7 @@ pub struct Config {
     pub enclave_host: String,
     pub enclave_port: u16,
     pub session_jwt_secret: String,
+    pub session_ttl_secs: usize,
 }
 
 impl Config {
@@ -26,6 +27,10 @@ impl Config {
                 .unwrap_or(4000),
             session_jwt_secret: env::var("SESSION_JWT_SECRET")
                 .unwrap_or_else(|_| "dev-insecure-secret-change-me".to_string()),
+            session_ttl_secs: env::var("SESSION_TTL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
         }
     }
 }

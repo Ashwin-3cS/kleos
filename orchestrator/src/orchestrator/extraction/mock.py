@@ -1,0 +1,164 @@
+"""Rule-based extractor used in mock mode and in tests.
+
+Deterministic and offline: no API key, no network. It recognises a narrow
+fixture grammar ("<Person> decided/agreed/noted that project <Project> will
+<...>") which is enough to produce every shape the rest of the pipeline has
+to handle -- overlapping entities across records, and claims about the same
+subject that later conflict.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+
+from ..enums import EntityKind, SourceKind
+from ..permissions import ObjectAcl, Sensitivity
+from ..schema import (
+    Candidate,
+    Citation,
+    Claim,
+    ClaimStatus,
+    Entity,
+    Event,
+    Provenance,
+    RawRecord,
+    SourceRef,
+)
+from .ids import stable_id
+
+NAME = "mock-extractor@v1"
+
+_PROJECT_RE = re.compile(r"\bproject ([A-Z][A-Za-z0-9_-]*)")
+_ARTIFACT_RE = re.compile(r"\buse ([A-Z][A-Za-z0-9_+.-]*)")
+_CLAIM_RE = re.compile(
+    r"([A-Z][a-z]+) (?:decided|agreed|noted|recorded) that (project [A-Za-z0-9_-]+ will [^.]+)"
+)
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class MockExtractor:
+    name = NAME
+
+    def extract(self, owner_id: str, record: RawRecord) -> Candidate:
+        ingested_at_ms = _now_ms()
+        source = SourceRef(
+            connector=record.connector,
+            external_id=record.external_id,
+            url=record.url,
+            occurred_at_ms=record.occurred_at_ms,
+            ingested_at_ms=ingested_at_ms,
+        )
+        event_id = stable_id("evt", owner_id, record.connector.value, record.external_id)
+
+        text = f"{record.title}. {record.body}"
+        entities: list[Entity] = []
+        seen: set[str] = set()
+
+        def add_entity(kind: EntityKind, name: str) -> Entity:
+            entity_id = stable_id("ent", owner_id, kind.value, name.lower())
+            existing = next((e for e in entities if e.id == entity_id), None)
+            if existing is not None:
+                return existing
+            entity = Entity(
+                id=entity_id,
+                owner_id=owner_id,
+                kind=kind,
+                name=name,
+                aliases=[],
+                first_seen_at_ms=record.occurred_at_ms,
+                last_seen_at_ms=record.occurred_at_ms,
+                provenance=Provenance(
+                    citations=[Citation(event_id=event_id, source=source, quote=name)],
+                    derived_by=NAME,
+                    confidence=0.9,
+                    created_at_ms=ingested_at_ms,
+                ),
+                acl=_acl(owner_id, record, [kind]),
+            )
+            entities.append(entity)
+            seen.add(entity_id)
+            return entity
+
+        for person in record.participants:
+            add_entity(EntityKind.PERSON, person)
+        for match in _CLAIM_RE.finditer(text):
+            add_entity(EntityKind.PERSON, match.group(1))
+        for match in _PROJECT_RE.finditer(text):
+            add_entity(EntityKind.PROJECT, match.group(1))
+        for match in _ARTIFACT_RE.finditer(text):
+            add_entity(EntityKind.ARTIFACT, match.group(1))
+
+        kinds = sorted({e.kind for e in entities}, key=lambda k: k.value)
+        event = Event(
+            id=event_id,
+            owner_id=owner_id,
+            summary=record.title,
+            body=None if record.sensitive else record.body,
+            entity_ids=[e.id for e in entities],
+            source=source,
+            encrypted_content=None,
+            provenance=Provenance(
+                citations=[Citation(event_id=event_id, source=source, quote=record.title)],
+                derived_by=NAME,
+                confidence=1.0,
+                created_at_ms=ingested_at_ms,
+            ),
+            acl=_acl(owner_id, record, kinds),
+        )
+
+        claims: list[Claim] = []
+        for match in _CLAIM_RE.finditer(text):
+            statement = f"{match.group(2).strip()}."
+            subject_ids = [
+                e.id for e in entities if e.kind in (EntityKind.PROJECT, EntityKind.ARTIFACT)
+            ]
+            claims.append(
+                Claim(
+                    id=stable_id("clm", owner_id, event_id, statement),
+                    owner_id=owner_id,
+                    statement=statement,
+                    subject_entity_ids=subject_ids,
+                    status=ClaimStatus.ACTIVE,
+                    supersedes=[],
+                    contradicts=[],
+                    reconciled_into=None,
+                    asserted_at_ms=record.occurred_at_ms,
+                    provenance=Provenance(
+                        citations=[
+                            Citation(event_id=event_id, source=source, quote=match.group(0))
+                        ],
+                        derived_by=NAME,
+                        confidence=0.8,
+                        created_at_ms=ingested_at_ms,
+                    ),
+                    acl=_acl(
+                        owner_id,
+                        record,
+                        sorted(
+                            {
+                                e.kind
+                                for e in entities
+                                if e.kind in (EntityKind.PROJECT, EntityKind.ARTIFACT)
+                            },
+                            key=lambda k: k.value,
+                        ),
+                    ),
+                )
+            )
+
+        return Candidate(entities=entities, events=[event], claims=claims)
+
+
+def _acl(owner_id: str, record: RawRecord, kinds: list[EntityKind]) -> ObjectAcl:
+    return ObjectAcl(
+        owner_id=owner_id,
+        source=SourceKind(record.connector),
+        sensitivity=Sensitivity.CONFIDENTIAL if record.sensitive else Sensitivity.PERSONAL,
+        entity_kinds=kinds,
+        occurred_at_ms=record.occurred_at_ms,
+        denied_agents=[],
+    )

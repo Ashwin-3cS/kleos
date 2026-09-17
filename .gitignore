@@ -2,3 +2,9 @@
 .local/
 .qodo/
 .env
+orchestrator/.venv/
+orchestrator/**/__pycache__/
+orchestrator/*.egg-info/
+orchestrator/src/*.egg-info/
+.pytest_cache/
+.ruff_cache/
