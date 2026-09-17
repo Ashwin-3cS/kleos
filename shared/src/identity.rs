@@ -5,11 +5,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "provider", rename_all = "snake_case")]
 pub enum OAuthSignal {
-    Google { subject: String, email: String },
+    Google {
+        subject: String,
+        email: String,
+    },
     #[serde(rename = "github")]
-    GitHub { subject: String, login: String },
-    Wallet { address: String },
-    Domain { domain: String },
+    GitHub {
+        subject: String,
+        login: String,
+    },
+    Wallet {
+        address: String,
+    },
+    Domain {
+        domain: String,
+    },
 }
 
 /// Trust tier derived from the number/kind of stacked signals.
@@ -26,10 +36,18 @@ pub enum TrustTier {
 
 impl TrustTier {
     pub fn from_signals(signals: &[OAuthSignal]) -> Self {
-        let has_google = signals.iter().any(|s| matches!(s, OAuthSignal::Google { .. }));
-        let has_github = signals.iter().any(|s| matches!(s, OAuthSignal::GitHub { .. }));
-        let has_wallet = signals.iter().any(|s| matches!(s, OAuthSignal::Wallet { .. }));
-        let has_domain = signals.iter().any(|s| matches!(s, OAuthSignal::Domain { .. }));
+        let has_google = signals
+            .iter()
+            .any(|s| matches!(s, OAuthSignal::Google { .. }));
+        let has_github = signals
+            .iter()
+            .any(|s| matches!(s, OAuthSignal::GitHub { .. }));
+        let has_wallet = signals
+            .iter()
+            .any(|s| matches!(s, OAuthSignal::Wallet { .. }));
+        let has_domain = signals
+            .iter()
+            .any(|s| matches!(s, OAuthSignal::Domain { .. }));
 
         match (has_google, has_github, has_wallet, has_domain) {
             (true, true, true, true) => TrustTier::GoogleGithubWalletDomain,

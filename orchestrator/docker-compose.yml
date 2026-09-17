@@ -18,6 +18,28 @@ services:
     volumes:
       - neo4j-data:/data
 
+  # The gateway's sealed OAuth refresh-token store. It lives in this compose
+  # file because this is where the project's local services are, but note
+  # that the *orchestrator* is deliberately given no credentials for it:
+  # nothing in Python ever reads these rows. 5435 because 5432-5434 were
+  # commonly taken by other local stacks.
+  postgres:
+    image: postgres:16-alpine
+    container_name: memorai-postgres
+    ports:
+      - "127.0.0.1:5435:5432"
+    environment:
+      POSTGRES_USER: memorai
+      POSTGRES_PASSWORD: memoraidev
+      POSTGRES_DB: memorai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memorai -d memorai"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   redis:
     image: redis:7-alpine
     container_name: memorai-redis
@@ -31,3 +53,4 @@ services:
 
 volumes:
   neo4j-data:
+  postgres-data:

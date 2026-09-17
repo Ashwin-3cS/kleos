@@ -9,12 +9,7 @@ use tower::util::ServiceExt;
 fn test_state() -> Arc<AppState> {
     Arc::new(AppState {
         signing_key: generate_ephemeral_key(),
-        config: Config {
-            enclave_port: 4000,
-            enclave_mode: "mock".to_string(),
-            google_tokeninfo_port: 8002,
-            github_api_port: 8003,
-        },
+        config: Config::mock(),
     })
 }
 

@@ -25,19 +25,23 @@ reference material and is not part of this repo.
 
 ```
 gateway (Axum, host, TCP)
-  - OAuth redirect flow (code exchange still a stub) + session JWT
+  - OAuth redirect flow: authorize URL (PKCE + signed state) + callback
+  - Persists per-owner SEALED refresh tokens (ciphertext only) in Postgres
   - Mints/introspects scoped agent grants; proxies seal requests
   - Proxies all sensitive work to the enclave over VSOCK
         |
         v
 enclave (Axum, inside Nitro Enclave)        <- core trust boundary
   - Verifies OAuth tokens itself, against the provider, inside the TEE
+  - Exchanges OAuth authorization codes itself, and seals the refresh
+    token before it leaves; holds the only copy of the client secret
   - Computes trust tier from stacked signals
   - NSM attestation over the result
   - Seal-encrypts raw sensitive content before it leaves the TEE
         |
         v
-storage: Neo4j (queryable index) -- Walrus for encrypted raw blobs, not wired yet
+storage: Neo4j (queryable index), Postgres (sealed refresh tokens)
+         -- Walrus for encrypted raw blobs, not wired yet
 ```
 
 Alongside, and outside the trust boundary:
@@ -58,6 +62,12 @@ happened inside the TEE. If the gateway verified the OAuth token and just
 told the enclave "trust me, this checked out," the attestation would cover
 nothing of value. So `enclave/src/routes/identity.rs` calls Google/GitHub's
 verification endpoints itself, and only then produces the attestation.
+
+The same reasoning is why the OAuth **code exchange** is in the enclave
+(`enclave/src/routes/oauth.rs`). A refresh token is not an ordinary app
+secret; it is standing, renewable access to the user's mailbox. If the host
+performed the exchange, the operator would hold that access no matter what
+was attested afterwards. See "The confidentiality model" below.
 
 **Phase 1 end-to-end flow** (see `scripts/smoke_test.sh`):
 1. Client hits `POST /identity/verify` on the gateway with a raw OAuth token
@@ -123,7 +133,7 @@ a real one.
 ```bash
 cargo build                     # workspace, mock feature (default)
 ./scripts/run_local.sh          # starts enclave + gateway in mock mode
-./scripts/smoke_test.sh         # posts mock tokens through the gateway
+./scripts/smoke_test.sh         # mock tokens + the mock OAuth connect flow
 kill $(cat .local/enclave.pid) $(cat .local/gateway.pid)
 ```
 
@@ -138,7 +148,7 @@ mode.
 cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
-docker compose up -d                     # neo4j :7688, redis :6380
+docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
 .venv/bin/pytest                         # 32 tests
 cd ..
 
@@ -196,6 +206,7 @@ enclave/      Axum server that runs inside the Nitro Enclave (or locally in mock
 gateway/      Axum server that runs on the host, proxies to the enclave
 shared/       Types shared by both: identity, the memory schema, permissions, VSOCK envelopes
 orchestrator/ Python orchestration service (LangGraph + LlamaIndex); not in the cargo workspace
+              also owns docker-compose.yml for neo4j/redis/postgres
 scripts/      build/run/deploy/smoke-test plumbing
 ```
 
@@ -301,18 +312,123 @@ Two sharp edges to fix before grants are load-bearing:
   `ObjectAcl.denied_agents`. There is no revocation list. Keep grant TTLs
   short until there is one.
 
+### The confidentiality model
+
+"Encrypted, and the user owns it" is three different claims against three
+different adversaries. They are not equally true, and the honest version is
+below.
+
+**1. Confidential from the storage provider.** Delivered. Raw sensitive
+source content is sealed inside the enclave before it is written anywhere
+(`orchestrator`'s ingestion graph calls `POST /memory/seal/encrypt`, which
+the gateway proxies to the enclave), and OAuth refresh tokens are sealed
+inside the enclave before the gateway persists them. Whoever runs the disk
+holds ciphertext.
+
+*Caveat, stated plainly:* in mock mode "sealed" means `MOCK_SEAL_V1:`, a
+reversible keystream XOR (`enclave/src/services/seal.rs`). It is
+obfuscation, not encryption, and it is labelled as such in the scheme id,
+the blob prefix and every response field that carries it. Real Seal needs a
+key-server committee and an on-chain owner policy object and is still a
+stub. What is real today is the **custody path**: the plaintext exists only
+inside the enclave, so when Seal lands the invariant already holds and
+nothing outside the TEE has to change.
+
+**2. Confidential from other users and other agents.** Delivered, via
+query-time permissions. Every stored object carries an `ObjectAcl`; every
+query carries a grant token that resolves to an authoritative `Scope`;
+`permits(scope, acl, now_ms)` is pure, total and denies by default, and it
+runs between retrieval and assembly so the assembler structurally cannot
+see an unchecked candidate. The two sharp edges listed under **Permissions**
+above (shared signing secret, no revocation list) are what stands between
+this and being load-bearing.
+
+**3. Confidential from the operator.** This is where precision matters.
+
+- **Raw source content: yes.** The operator never holds a plaintext OAuth
+  refresh token. The authorization code is exchanged inside the enclave,
+  the refresh token is sealed before the response crosses back over VSOCK,
+  and the gateway persists ciphertext it has no key for. The access token
+  obtained during the exchange is used inside the enclave to identify the
+  account and is then dropped -- it is never returned to the host at all,
+  because a host holding an access token can read the mailbox for its
+  lifetime. Only the enclave has the OAuth client secret, so the host
+  cannot repeat the exchange itself either. The same holds for sealed
+  record bodies.
+
+- **Derived memory: no.** Extraction runs in the Python orchestrator,
+  outside the enclave, and in `live` mode it sends record text to an
+  external LLM. Entities, events, claims, their text, and their embeddings
+  are written to Neo4j **in the clear**. An operator with database access
+  reads the resolved memory -- who you talked to, what you decided, when it
+  changed -- even though they cannot read the underlying mailbox. That is a
+  real gap, not a technicality: for many purposes the resolved record is
+  the more sensitive artifact.
+
+  This is a deliberate trade, not an oversight. Moving extraction into the
+  enclave would mean putting an LLM call and the ingestion pipeline inside
+  the thing being attested, which destroys the auditability that makes the
+  attestation worth anything. Closing it properly needs a different answer
+  (client-side extraction, or an attested model endpoint), and until that
+  exists the product should not claim the operator cannot read your memory.
+  It can. What it cannot read is your mailbox.
+
+**Where a plaintext refresh token exists, step by step.** This is the
+invariant the connect flow is built around, and it is checkable:
+
+| Step | Plaintext refresh token present? |
+|------|----------------------------------|
+| `GET /auth/authorize` builds the consent URL | no token exists yet |
+| Provider redirects to `/auth/callback?code=...` | no -- a code is not a token |
+| Gateway validates state, forwards the code to the enclave | no |
+| **Enclave calls the provider's token endpoint** | **yes -- inside the TEE, and only here** |
+| Enclave verifies the account with the access token | yes (in-TEE) |
+| Enclave seals the refresh token, drops the access token | leaves the TEE as ciphertext |
+| Gateway decodes base64, writes bytes to Postgres | no |
+| Orchestrator, Neo4j, logs, API responses | no -- and no code path exposes it |
+
+`gateway/tests/oauth_flow_tests.rs` runs a real enclave router in-process,
+drives the real callback, and searches the bytes that actually landed in
+the store for the mock plaintext. `gateway/tests/postgres_store_tests.rs`
+does the same against real Postgres.
+
+**Known gaps in the connect flow**, so nobody is surprised:
+
+- Pending PKCE verifiers live in gateway process memory, so a restart
+  invalidates in-flight consents and a multi-instance gateway needs shared
+  state. This is why the verifier is not stuffed into the state token
+  instead: anyone who could observe the redirect could then complete the
+  flow.
+- In `nitro` mode, tunnels 8002/8003 are pointed at `www.googleapis.com` /
+  `api.github.com` by `scripts/parent_forwarder.sh`, and the enclave speaks
+  plain HTTP to them (the socat bridge does not terminate TLS). Real OAuth
+  needs the forwarder to reach `oauth2.googleapis.com` / `github.com` for
+  the token endpoints and needs TLS handled somewhere. `GOOGLE_TOKEN_PATH`
+  / `GITHUB_TOKEN_PATH` exist so the path side of that is configuration
+  rather than code. This gap predates this work and applies to the existing
+  identity-verification calls too.
+- `SEALED_TOKEN_STORE_URL` unset means an in-memory store. Correct for mock
+  mode; it silently forgets tokens on restart, so set it for anything real.
+
 ### The Rust/Python split
 
-The enclave's surface grew by exactly one thing: `POST /seal/{encrypt,
-decrypt}`. The attestation is only meaningful if what it measures is small
-enough to audit, so nothing agentic -- no LLM calls, no retrieval, no
-ingestion logic -- went in there.
+The enclave's surface grew by two things: `POST /seal/{encrypt,decrypt}`
+and `POST /oauth/exchange`. The attestation is only meaningful if what it
+measures is small enough to audit, so nothing agentic -- no LLM calls, no
+retrieval, no ingestion logic -- went in there. Code exchange qualifies on
+the same test as sealing: it is small, it is the point at which a
+long-lived credential comes into existence, and there is nowhere else it
+can happen without breaking the confidentiality claim.
 
-The gateway's memory surface is deliberately only two things: proxying
-enclave-touching operations, and owner-authenticated permission gating.
+The gateway's surface is deliberately only three things: proxying
+enclave-touching operations, owner-authenticated permission gating, and
+receiving the OAuth redirect (which it cannot avoid -- a browser cannot
+reach the enclave).
 
 | Route | Purpose |
 |-------|---------|
+| `GET /auth/authorize` | build the provider consent URL (PKCE + signed, expiring state) |
+| `GET /auth/callback` | validate state, have the enclave exchange the code, persist the sealed refresh token, issue the owner session |
 | `POST /auth/session` | verify identity via the enclave, issue an owner session JWT |
 | `POST /memory/seal/encrypt` | seal raw content in the enclave, under the session's owner |
 | `POST /memory/scope/grant` | owner mints a scoped, expiring grant for a named agent |
@@ -322,7 +438,9 @@ There is no second implementation of retrieval or ranking in Rust, on
 purpose. `GET /memory/timeline` is gone -- it was a placeholder for
 retrieval, which is Python's.
 
-The orchestrator calls the gateway for those four things and nothing else.
+The orchestrator calls the gateway for the four `/auth/session` and
+`/memory/*` routes and nothing else -- never the OAuth routes, and it is
+given no credentials for the sealed-token store.
 Its ingestion graph's `encrypt` node is the only point in the pipeline that
 crosses the trust boundary, and if the gateway is unreachable the sensitive
 record is not written -- there is no fallback that stores a sensitive body
@@ -343,16 +461,18 @@ Typed, with real signatures, failing explicitly rather than silently:
   like `MOCK_ATTESTATION_`. It is obfuscation, not encryption. The `nitro`
   build's Seal path is a documented stub: real Seal needs a key-server
   committee and an on-chain owner policy object.
-- **The real Google/GitHub connectors.** Phase 1 OAuth proves identity; it
-  does not request Gmail/Calendar/repo data scopes, and there is no
-  per-owner refresh-token store yet.
+- **The real Google/GitHub connectors.** Consent, code exchange and the
+  sealed per-owner refresh-token store now exist (Google
+  `gmail.readonly` + `calendar.readonly`, GitHub `read:user` + `repo`), but
+  nothing yet *uses* a stored token to fetch data. The connectors in
+  `orchestrator/src/orchestrator/connectors/` are still fixtures.
 - **Live LLM/embedding calls.** `extraction/llm.py` is wired and works with
   an `ANTHROPIC_API_KEY` and `ORCHESTRATOR_MODE=live`, but has not been run
   against the live API. `VoyageEmbedder` is a stub.
 - **Anything on-chain.** Grants are signed JWTs today; the `Scope` struct is
   shaped to become an on-chain grant object verbatim.
-- **OAuth code exchange** (`gateway/src/routes/auth.rs::callback`), and
-  wallet/domain identity signals -- unchanged Phase 1 stubs.
+- **Wallet/domain identity signals** -- unchanged Phase 1 stubs. (OAuth
+  code exchange is no longer one: see "The confidentiality model".)
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
   the query graph as a tool over stdio. It is implemented but has not been
   driven from a real MCP client.

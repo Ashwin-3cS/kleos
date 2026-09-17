@@ -1,6 +1,6 @@
 use crate::error::EnclaveError;
 use crate::services::attestation::get_attestation;
-use crate::services::identity::compute_identity;
+use crate::services::identity::{compute_identity, derive_owner_id};
 use crate::services::oauth::github::GitHubProvider;
 use crate::services::oauth::google::GoogleProvider;
 use crate::services::oauth::OAuthProvider;
@@ -22,6 +22,9 @@ pub async fn verify(
         let provider = GoogleProvider {
             tunnel_port: state.config.google_tokeninfo_port,
             mock,
+            client_id: state.config.google_client_id.clone(),
+            client_secret: state.config.google_client_secret.clone(),
+            token_path: state.config.google_token_path.clone(),
         };
         signals.push(provider.verify(token).await?);
     }
@@ -30,6 +33,9 @@ pub async fn verify(
         let provider = GitHubProvider {
             tunnel_port: state.config.github_api_port,
             mock,
+            client_id: state.config.github_client_id.clone(),
+            client_secret: state.config.github_client_secret.clone(),
+            token_path: state.config.github_token_path.clone(),
         };
         signals.push(provider.verify(token).await?);
     }
@@ -68,17 +74,4 @@ pub async fn verify(
         identity,
         attestation,
     }))
-}
-
-fn derive_owner_id(signals: &[OAuthSignal]) -> String {
-    let primary = signals
-        .iter()
-        .find_map(|s| match s {
-            OAuthSignal::Google { subject, .. } => Some(format!("google:{subject}")),
-            OAuthSignal::GitHub { subject, .. } => Some(format!("github:{subject}")),
-            OAuthSignal::Wallet { address } => Some(format!("wallet:{address}")),
-            OAuthSignal::Domain { domain } => Some(format!("domain:{domain}")),
-        })
-        .expect("caller guarantees at least one signal");
-    hex::encode(primary)
 }

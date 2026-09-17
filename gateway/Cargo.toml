@@ -26,7 +26,22 @@ dotenvy = { workspace = true }
 tower-http = { workspace = true }
 base64 = { workspace = true }
 jsonwebtoken = "9"
+async-trait = "0.1"
+rand = "0.8"
+sha2 = "0.10"
+# Chosen over sqlx/diesel deliberately: the gateway needs exactly one table
+# and one idempotent CREATE TABLE IF NOT EXISTS, and tokio-postgres is the
+# thinnest thing in the tokio ecosystem already in this tree that does it.
+tokio-postgres = "0.7"
 
 [dev-dependencies]
 tokio = { workspace = true }
 tower = { version = "0.4", features = ["util"] }
+# Dev-only. The confidentiality invariant is a property of the whole
+# gateway<->enclave path, so the test that proves it runs a real enclave
+# router in-process rather than a stand-in that could be wrong in the
+# gateway's favour. Nothing in the gateway's build depends on the enclave.
+enclave = { path = "../enclave" }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }

@@ -7,7 +7,11 @@ pub struct SessionClaims {
     pub exp: usize,
 }
 
-pub fn issue_session_token(owner_id: &str, secret: &str, ttl_secs: usize) -> anyhow::Result<String> {
+pub fn issue_session_token(
+    owner_id: &str,
+    secret: &str,
+    ttl_secs: usize,
+) -> anyhow::Result<String> {
     let exp = (chrono_now_secs() + ttl_secs) as usize;
     let claims = SessionClaims {
         owner_id: owner_id.to_string(),

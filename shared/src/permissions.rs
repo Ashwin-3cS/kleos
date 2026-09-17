@@ -103,7 +103,11 @@ pub fn evaluate(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> PermissionDecisi
     if !scope.sources.contains(&acl.source) {
         return Deny(DenyReason::SourceNotInScope);
     }
-    if acl.entity_kinds.is_empty() || !acl.entity_kinds.iter().all(|k| scope.entity_kinds.contains(k))
+    if acl.entity_kinds.is_empty()
+        || !acl
+            .entity_kinds
+            .iter()
+            .all(|k| scope.entity_kinds.contains(k))
     {
         return Deny(DenyReason::EntityKindNotInScope);
     }
@@ -164,7 +168,10 @@ mod tests {
     fn denies_other_owner() {
         let mut s = scope();
         s.owner_id = "owner-2".into();
-        assert_eq!(evaluate(&s, &acl(), 0), PermissionDecision::Deny(DenyReason::WrongOwner));
+        assert_eq!(
+            evaluate(&s, &acl(), 0),
+            PermissionDecision::Deny(DenyReason::WrongOwner)
+        );
     }
 
     #[test]

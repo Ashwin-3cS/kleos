@@ -7,15 +7,14 @@ use std::sync::Arc;
 use tower::util::ServiceExt;
 
 fn test_state() -> Arc<AppState> {
-    let config = Config {
-        gateway_port: 8080,
-        enclave_host: "127.0.0.1".to_string(),
-        enclave_port: 4000,
-        session_jwt_secret: "test-secret".to_string(),
-        session_ttl_secs: 3600,
-    };
+    let config = Config::mock();
     let enclave = EnclaveClient::new(&config.enclave_host, config.enclave_port);
-    Arc::new(AppState { config, enclave })
+    Arc::new(AppState {
+        config,
+        enclave,
+        pending_auth: Default::default(),
+        tokens: Box::new(gateway::store::InMemoryTokenStore::default()),
+    })
 }
 
 #[tokio::test]
@@ -28,13 +27,15 @@ async fn health_returns_ok_even_if_enclave_unreachable() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// A callback with no `state` at all is a malformed request, not an
+/// unauthorized one -- axum rejects it at the extractor.
 #[tokio::test]
-async fn auth_callback_is_not_implemented_in_phase_1() {
+async fn auth_callback_requires_a_state_parameter() {
     let router = build_router(test_state());
     let response = router
         .oneshot(
             Request::builder()
-                .uri("/auth/callback?code=abc&provider=google")
+                .uri("/auth/callback?code=abc")
                 .body(Body::empty())
                 .unwrap(),
         )

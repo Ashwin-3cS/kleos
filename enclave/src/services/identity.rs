@@ -26,3 +26,19 @@ pub fn compute_identity(owner_id: String, signals: Vec<OAuthSignal>) -> OwnerIde
         trust_tier,
     }
 }
+
+/// Derives the stable owner id from the highest-priority signal present.
+/// Shared by /identity/verify and /oauth/exchange so a user who connects a
+/// source lands on the same owner id they log in as.
+pub fn derive_owner_id(signals: &[OAuthSignal]) -> String {
+    let primary = signals
+        .iter()
+        .find_map(|s| match s {
+            OAuthSignal::Google { subject, .. } => Some(format!("google:{subject}")),
+            OAuthSignal::GitHub { subject, .. } => Some(format!("github:{subject}")),
+            OAuthSignal::Wallet { address } => Some(format!("wallet:{address}")),
+            OAuthSignal::Domain { domain } => Some(format!("domain:{domain}")),
+        })
+        .expect("caller guarantees at least one signal");
+    hex::encode(primary)
+}

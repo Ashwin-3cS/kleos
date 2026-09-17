@@ -1,5 +1,8 @@
 use crate::error::GatewayError;
-use shared::{IdentityVerifyRequest, IdentityVerifyResponse, SealEncryptRequest, SealEncryptResponse};
+use shared::{
+    IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
+    SealEncryptRequest, SealEncryptResponse,
+};
 use std::time::Duration;
 
 /// Plain TCP/HTTP client the gateway uses to reach the enclave.
@@ -62,6 +65,17 @@ impl EnclaveClient {
         resp.json()
             .await
             .map_err(|e| GatewayError::EnclaveUnreachable(e.to_string()))
+    }
+
+    /// Forwards an authorization code to the enclave for exchange. The
+    /// gateway cannot do this itself: it has no client secret, and the
+    /// refresh token the exchange yields must never exist in plaintext out
+    /// here. What comes back is ciphertext plus metadata.
+    pub async fn exchange_oauth_code(
+        &self,
+        req: &OAuthExchangeRequest,
+    ) -> Result<OAuthExchangeResponse, GatewayError> {
+        self.post_json("/oauth/exchange", req).await
     }
 
     pub async fn seal_encrypt(

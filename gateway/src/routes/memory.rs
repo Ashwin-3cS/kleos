@@ -54,7 +54,9 @@ pub async fn scope_grant(
         ));
     }
     if req.scope.agent_id.trim().is_empty() {
-        return Err(GatewayError::BadRequest("scope.agent_id is required".into()));
+        return Err(GatewayError::BadRequest(
+            "scope.agent_id is required".into(),
+        ));
     }
 
     let (grant_token, expires_at_ms) =

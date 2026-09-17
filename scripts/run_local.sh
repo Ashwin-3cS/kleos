@@ -18,6 +18,17 @@ export ENCLAVE_PORT="${ENCLAVE_PORT:-4000}"
 export GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 export ENCLAVE_HOST="${ENCLAVE_HOST:-127.0.0.1}"
 export SESSION_JWT_SECRET="${SESSION_JWT_SECRET:-dev-insecure-secret-change-me}"
+export OAUTH_STATE_SECRET="${OAUTH_STATE_SECRET:-dev-insecure-oauth-state-secret}"
+# Placeholder client ids so /auth/authorize is exercisable with no real OAuth
+# app. The matching *secrets* would go in the enclave's environment, not here,
+# and mock-mode code exchange never uses either.
+export GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-mock-google-client-id}"
+export GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID:-mock-github-client-id}"
+export GOOGLE_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-http://127.0.0.1:$GATEWAY_PORT/auth/callback}"
+export GITHUB_REDIRECT_URI="${GITHUB_REDIRECT_URI:-http://127.0.0.1:$GATEWAY_PORT/auth/callback}"
+# Unset by default: the gateway then uses its in-memory sealed-token store.
+# Point this at the compose Postgres to persist across restarts.
+export SEALED_TOKEN_STORE_URL="${SEALED_TOKEN_STORE_URL:-}"
 
 WITH_ORCHESTRATOR=0
 for arg in "$@"; do
