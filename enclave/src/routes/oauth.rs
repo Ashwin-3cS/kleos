@@ -41,18 +41,14 @@ pub async fn exchange(
     let mock = state.config.is_mock();
     let client: Box<dyn OAuthProvider + Send + Sync> = match provider {
         Provider::Google => Box::new(GoogleProvider {
-            tunnel_port: state.config.google_tokeninfo_port,
             mock,
             client_id: state.config.google_client_id.clone(),
             client_secret: state.config.google_client_secret.clone(),
-            token_path: state.config.google_token_path.clone(),
         }),
         Provider::GitHub => Box::new(GitHubProvider {
-            tunnel_port: state.config.github_api_port,
             mock,
             client_id: state.config.github_client_id.clone(),
             client_secret: state.config.github_client_secret.clone(),
-            token_path: state.config.github_token_path.clone(),
         }),
     };
 

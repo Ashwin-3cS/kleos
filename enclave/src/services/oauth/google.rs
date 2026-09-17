@@ -1,19 +1,17 @@
 use super::{OAuthProvider, TokenEndpointResponse, TokenExchange};
 use crate::error::EnclaveError;
-use crate::services::http::{tunnel_client, tunnel_url};
+use crate::services::http::{tunnel_client, tunnel_url, GOOGLE_TOKEN, GOOGLE_TOKENINFO};
 use async_trait::async_trait;
 use serde::Deserialize;
 use shared::OAuthSignal;
 
 pub struct GoogleProvider {
-    pub tunnel_port: u16,
     pub mock: bool,
     /// Only the enclave holds the client secret. The gateway needs the
     /// client id to build an authorize URL, but a host that also held the
     /// secret could exchange codes itself and keep the refresh token.
     pub client_id: String,
     pub client_secret: String,
-    pub token_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,7 +41,7 @@ impl OAuthProvider for GoogleProvider {
         }
 
         let client = tunnel_client()?;
-        let url = tunnel_url(self.tunnel_port, "/tokeninfo");
+        let url = tunnel_url(&GOOGLE_TOKENINFO, "/oauth2/v3/tokeninfo");
         let resp = client
             .get(url)
             .query(&[("access_token", token)])
@@ -105,7 +103,7 @@ impl OAuthProvider for GoogleProvider {
         }
 
         let client = tunnel_client()?;
-        let url = tunnel_url(self.tunnel_port, &self.token_path);
+        let url = tunnel_url(&GOOGLE_TOKEN, "/token");
         let resp = client
             .post(url)
             .form(&[

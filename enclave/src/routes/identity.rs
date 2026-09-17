@@ -20,22 +20,18 @@ pub async fn verify(
 
     if let Some(token) = &req.google_token {
         let provider = GoogleProvider {
-            tunnel_port: state.config.google_tokeninfo_port,
             mock,
             client_id: state.config.google_client_id.clone(),
             client_secret: state.config.google_client_secret.clone(),
-            token_path: state.config.google_token_path.clone(),
         };
         signals.push(provider.verify(token).await?);
     }
 
     if let Some(token) = &req.github_token {
         let provider = GitHubProvider {
-            tunnel_port: state.config.github_api_port,
             mock,
             client_id: state.config.github_client_id.clone(),
             client_secret: state.config.github_client_secret.clone(),
-            token_path: state.config.github_token_path.clone(),
         };
         signals.push(provider.verify(token).await?);
     }

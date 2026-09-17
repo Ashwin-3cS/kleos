@@ -1,16 +1,14 @@
 use super::{OAuthProvider, TokenEndpointResponse, TokenExchange};
 use crate::error::EnclaveError;
-use crate::services::http::{tunnel_client, tunnel_url};
+use crate::services::http::{tunnel_client, tunnel_url, GITHUB_API, GITHUB_TOKEN};
 use async_trait::async_trait;
 use serde::Deserialize;
 use shared::OAuthSignal;
 
 pub struct GitHubProvider {
-    pub tunnel_port: u16,
     pub mock: bool,
     pub client_id: String,
     pub client_secret: String,
-    pub token_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +35,7 @@ impl OAuthProvider for GitHubProvider {
         }
 
         let client = tunnel_client()?;
-        let url = tunnel_url(self.tunnel_port, "/user");
+        let url = tunnel_url(&GITHUB_API, "/user");
         let resp = client
             .get(url)
             .bearer_auth(token)
@@ -96,7 +94,7 @@ impl OAuthProvider for GitHubProvider {
         }
 
         let client = tunnel_client()?;
-        let url = tunnel_url(self.tunnel_port, &self.token_path);
+        let url = tunnel_url(&GITHUB_TOKEN, "/login/oauth/access_token");
         let resp = client
             .post(url)
             // GitHub's token endpoint returns form-encoded output unless

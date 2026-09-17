@@ -95,29 +95,50 @@ done at the shell level with `socat`:
   `socat VSOCK-LISTEN:4000,reuseaddr,fork TCP:localhost:4000 &`, so the
   enclave's Rust binary just binds plain TCP (`enclave/src/vsock/listener.rs`)
   -- completely ordinary Axum/tokio code.
-- Outbound: `enclave/run.sh` opens tunnels like
-  `socat TCP-LISTEN:8002,reuseaddr,fork VSOCK-CONNECT:3:8002 &`, so
-  `enclave/src/services/http.rs` and the OAuth provider clients just call
-  `http://127.0.0.1:<port>/...` with plain `reqwest` and the tunnel carries
-  it out over VSOCK to the host.
-- On the host, `scripts/parent_forwarder.sh` bridges each of those VSOCK
-  ports onward to the real external service, and bridges the gateway's
-  inbound TCP calls into the enclave's VSOCK port 4000.
+- Outbound: the enclave dials the **real hostname over HTTPS**
+  (`https://oauth2.googleapis.com/token`). Inside the enclave, `/etc/hosts`
+  maps that hostname to a loopback alias where socat listens on :443 and
+  forwards over VSOCK; `scripts/parent_forwarder.sh` on the host connects
+  that VSOCK port to the real `host:443` and pipes the bytes.
+- On the host, `parent_forwarder.sh` also bridges the gateway's inbound TCP
+  calls into the enclave's VSOCK port 4000.
 
-In both `mock` and `nitro` mode the Rust code only ever speaks plain TCP/
-HTTP; the difference is entirely in whether a socat bridge exists on the
-other end.
+**TLS terminates inside the enclave**, not on the host. The host moves an
+opaque encrypted stream, and the certificate is validated in the TEE against
+the real hostname. This matters: the host forwarder is the operator, and
+letting it terminate TLS would hand it every client secret and refresh token
+in plaintext, which is exactly what doing the code exchange in the enclave
+is meant to prevent.
+
+For the same reason the upstream hostnames are compile-time constants in
+`enclave/src/services/http.rs` rather than configuration. The enclave's
+environment is supplied by the host, so a host-settable endpoint would let
+the operator repoint the client secret at a server it controls.
+
+> Historical note: until this was fixed, the enclave dialled
+> `http://127.0.0.1:<port>` — plaintext HTTP — into a tunnel that landed on
+> port 443. A TLS listener cannot answer a plaintext request, so **no
+> outbound enclave call could ever have succeeded in `nitro` mode**. It went
+> unnoticed because `nitro` mode had never been run on real hardware and
+> `mock` mode short-circuits before the network.
 
 ## VSOCK ports
 
-| Port | Direction        | Purpose                        |
-|------|-------------------|---------------------------------|
-| 4000 | Gateway -> Enclave | Main API                       |
-| 5000 | Enclave -> Host    | Log forwarding                 |
-| 8002 | Enclave -> Host    | Google OAuth APIs               |
-| 8003 | Enclave -> Host    | GitHub API                      |
-| 8004 | Enclave -> Host    | Walrus publisher/aggregator     |
-| 8005 | Enclave -> Host    | Walrus Memory relayer           |
+Each entry below carries a TLS stream terminated inside the enclave. The
+table is mirrored by the `Upstream` constants in
+`enclave/src/services/http.rs`, `enclave/run.sh`, and
+`scripts/parent_forwarder.sh`; all four must agree.
+
+| Port | Direction        | Loopback alias | Upstream                        |
+|------|-------------------|----------------|----------------------------------|
+| 4000 | Gateway -> Enclave | --            | Main API                         |
+| 5000 | Enclave -> Host    | --            | Log forwarding                   |
+| 8002 | Enclave -> Host    | 127.0.0.2     | `www.googleapis.com` (tokeninfo) |
+| 8003 | Enclave -> Host    | 127.0.0.3     | `api.github.com` (user API)      |
+| 8004 | Enclave -> Host    | --            | Walrus publisher/aggregator      |
+| 8005 | Enclave -> Host    | --            | Walrus Memory relayer            |
+| 8006 | Enclave -> Host    | 127.0.0.4     | `oauth2.googleapis.com` (token)  |
+| 8007 | Enclave -> Host    | 127.0.0.5     | `github.com` (token)             |
 
 ## Local development (mock mode)
 
@@ -399,14 +420,12 @@ does the same against real Postgres.
   state. This is why the verifier is not stuffed into the state token
   instead: anyone who could observe the redirect could then complete the
   flow.
-- In `nitro` mode, tunnels 8002/8003 are pointed at `www.googleapis.com` /
-  `api.github.com` by `scripts/parent_forwarder.sh`, and the enclave speaks
-  plain HTTP to them (the socat bridge does not terminate TLS). Real OAuth
-  needs the forwarder to reach `oauth2.googleapis.com` / `github.com` for
-  the token endpoints and needs TLS handled somewhere. `GOOGLE_TOKEN_PATH`
-  / `GITHUB_TOKEN_PATH` exist so the path side of that is configuration
-  rather than code. This gap predates this work and applies to the existing
-  identity-verification calls too.
+- `nitro` mode has still never been run on real Nitro hardware. The
+  plaintext-HTTP-into-a-TLS-port bug described under "No Rust VSOCK crate"
+  is fixed and unit-tested, and the tunnel/hostname/alias tables agree
+  across Rust, `run.sh` and `parent_forwarder.sh` — but agreeing in review
+  is not the same as having handshaked with Google, and nothing here is
+  proven until an EIF actually runs on EC2.
 - `SEALED_TOKEN_STORE_URL` unset means an in-memory store. Correct for mock
   mode; it silently forgets tokens on restart, so set it for anything real.
 
