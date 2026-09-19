@@ -61,6 +61,6 @@ class VoyageEmbedder:
 
 
 def get_embedder(settings: Settings) -> Embedder:
-    if settings.is_mock:
+    if not settings.use_real_embedder:
         return HashedTokenEmbedder(settings.embedding_dim)
     return VoyageEmbedder(settings)

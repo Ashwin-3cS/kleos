@@ -9,4 +9,4 @@ __all__ = ["Extractor", "LLMExtractor", "MockExtractor", "get_extractor"]
 
 
 def get_extractor(settings: Settings) -> Extractor:
-    return MockExtractor() if settings.is_mock else LLMExtractor(settings)
+    return LLMExtractor(settings) if settings.use_llm_extractor else MockExtractor()

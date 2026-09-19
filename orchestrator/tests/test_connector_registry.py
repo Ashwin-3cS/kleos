@@ -143,3 +143,26 @@ def test_disabled_sources_are_refused_before_the_graph_runs(store, registry, set
     finally:
         rt.store.wipe_owner(OWNER)
         rt.close()
+
+
+def test_a_real_connector_can_run_without_llm_credentials():
+    """Checking a parser must not require an LLM key.
+
+    ``mode`` used to be one switch over three unrelated things -- connector,
+    extractor, embedder -- so pointing a real connector at real data forced
+    ``live``, which demands ANTHROPIC_API_KEY for an extraction step that has
+    nothing to do with reading a file.
+    """
+    s = Settings(CONNECTOR_FIXTURES="never")
+
+    assert s.use_fixture_connectors is False
+    assert s.use_llm_extractor is False, "extraction must stay keyless"
+    assert s.use_real_embedder is False
+
+    # ...while the axes still follow `mode` when left alone.
+    assert Settings().use_fixture_connectors is True
+    live = Settings(ORCHESTRATOR_MODE="live", ANTHROPIC_API_KEY="x")
+    assert live.use_llm_extractor is True
+    assert live.use_fixture_connectors is False
+    # ...and a single axis can be pinned against the mode.
+    assert Settings(ORCHESTRATOR_MODE="live", EXTRACTOR="mock").use_llm_extractor is False

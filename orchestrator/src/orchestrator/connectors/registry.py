@@ -89,7 +89,7 @@ class ConnectorRegistry:
         for the Google/GitHub stubs that means raising, which is the truth.
         """
         spec = self.spec(source)
-        if settings.is_mock and spec.mock_factory is not None:
+        if settings.use_fixture_connectors and spec.mock_factory is not None:
             return spec.mock_factory(settings)
         return spec.factory(settings)
 
