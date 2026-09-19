@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 
-from ..enums import EntityKind, SourceKind
+from ..enums import EntityKind
 from ..permissions import ObjectAcl, Sensitivity
 from ..schema import (
     Candidate,
@@ -52,7 +52,7 @@ class MockExtractor:
             occurred_at_ms=record.occurred_at_ms,
             ingested_at_ms=ingested_at_ms,
         )
-        event_id = stable_id("evt", owner_id, record.connector.value, record.external_id)
+        event_id = stable_id("evt", owner_id, record.connector, record.external_id)
 
         text = f"{record.title}. {record.body}"
         entities: list[Entity] = []
@@ -156,7 +156,7 @@ class MockExtractor:
 def _acl(owner_id: str, record: RawRecord, kinds: list[EntityKind]) -> ObjectAcl:
     return ObjectAcl(
         owner_id=owner_id,
-        source=SourceKind(record.connector),
+        sources=[record.connector],
         sensitivity=Sensitivity.CONFIDENTIAL if record.sensitive else Sensitivity.PERSONAL,
         entity_kinds=kinds,
         occurred_at_ms=record.occurred_at_ms,

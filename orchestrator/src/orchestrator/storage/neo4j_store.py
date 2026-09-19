@@ -104,7 +104,7 @@ class Neo4jStore:
             n.payload = $payload,
             n.text = $text,
             n.occurred_at_ms = $occurred_at_ms,
-            n.acl_source = $acl_source,
+            n.acl_sources = $acl_sources,
             n.acl_sensitivity = $acl_sensitivity,
             n.acl_entity_kinds = $acl_entity_kinds,
             n.embedding = $embedding
@@ -116,7 +116,7 @@ class Neo4jStore:
             payload=node.model_dump_json(),
             text=_text_of(node),
             occurred_at_ms=_occurred_at(node),
-            acl_source=node.acl.source.value,
+            acl_sources=list(node.acl.sources),
             acl_sensitivity=node.acl.sensitivity.value,
             acl_entity_kinds=[k.value for k in node.acl.entity_kinds],
             embedding=embedding,

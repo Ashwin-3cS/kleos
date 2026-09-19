@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from orchestrator.enums import EntityKind, Sensitivity, SourceKind
+from orchestrator.enums import EntityKind, Sensitivity
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.runtime import Runtime
 from orchestrator.permissions import Scope, evaluate
@@ -35,7 +35,7 @@ def _full_scope(**overrides) -> Scope:
     base = dict(
         agent_id="agent-e2e",
         owner_id=OWNER,
-        sources=[SourceKind.MOCK],
+        sources=["mock"],
         entity_kinds=list(EntityKind),
         max_sensitivity=Sensitivity.CONFIDENTIAL,
     )
@@ -91,6 +91,6 @@ def test_chunking_differs_by_source():
     from orchestrator.retrieval.index import chunk_for_source
 
     diff = "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n@@ -9 +9 @@\n-c\n+d"
-    assert len(chunk_for_source(diff, SourceKind.GITHUB)) == 3
+    assert len(chunk_for_source(diff, "github")) == 3
     prose = "para one\n\npara two"
-    assert chunk_for_source(prose, SourceKind.GOOGLE) == ["para one\n\npara two"]
+    assert chunk_for_source(prose, "google") == ["para one\n\npara two"]

@@ -193,7 +193,7 @@ def _citation_of(candidate: dict) -> AnswerCitation:
     return AnswerCitation(
         object_id=node.id,
         label=candidate["label"],
-        source=node.acl.source.value,
+        source=",".join(node.acl.sources),
         url=first.source.url if first else None,
         occurred_at_ms=node.acl.occurred_at_ms,
         ingested_at_ms=first.source.ingested_at_ms if first else None,

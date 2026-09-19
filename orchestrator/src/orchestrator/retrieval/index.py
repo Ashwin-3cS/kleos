@@ -21,7 +21,7 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 
 from ..config import Settings
-from ..enums import SourceKind
+from ..enums import SourceId
 from ..storage.neo4j_store import Neo4jStore
 from .embeddings import Embedder
 from .ranking import rank
@@ -29,23 +29,28 @@ from .ranking import rank
 if TYPE_CHECKING:
     pass
 
+_DEFAULT_MAX_CHARS = 1000
+
+# Per-source overrides only. A source absent from this table gets the default
+# rather than raising: this used to be a total dict keyed on a closed enum, so
+# a new connector failed with a KeyError at *retrieval* time, long after
+# ingest had reported success. Connector-declared chunkers supersede this.
 _MAX_CHARS = {
-    SourceKind.GOOGLE: 1200,
-    SourceKind.GITHUB: 600,
-    SourceKind.MOCK: 800,
-    SourceKind.MANUAL: 1000,
+    "google": 1200,
+    "github": 600,
+    "mock": 800,
 }
 
 
-def chunk_for_source(text: str, connector: SourceKind) -> list[str]:
+def chunk_for_source(text: str, connector: SourceId) -> list[str]:
     """Splits raw text into retrieval-sized chunks according to source shape.
 
     GitHub content is diff-shaped, so it splits on hunk boundaries when it
     has them; everything else splits on blank lines and then packs to a
     per-source character budget.
     """
-    limit = _MAX_CHARS[connector]
-    if connector is SourceKind.GITHUB and "\n@@" in text:
+    limit = _MAX_CHARS.get(connector, _DEFAULT_MAX_CHARS)
+    if connector == "github" and "\n@@" in text:
         # A diff hunk is already the atomic unit of a code change; packing
         # several into one chunk only blurs which change a hit came from.
         parts = [p for p in text.split("\n@@") if p.strip()]

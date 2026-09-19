@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..config import Settings
-from ..enums import SourceKind
+from ..enums import SourceId
 from .base import SourceConnector
 from .github import GitHubConnector
 from .google import GoogleConnector
@@ -16,11 +16,11 @@ __all__ = [
 ]
 
 
-def get_connector(source: SourceKind, settings: Settings) -> SourceConnector:
-    if settings.is_mock or source is SourceKind.MOCK:
+def get_connector(source: SourceId, settings: Settings) -> SourceConnector:
+    if settings.is_mock or source == "mock":
         return MockConnector()
-    if source is SourceKind.GOOGLE:
+    if source == "google":
         return GoogleConnector(settings)
-    if source is SourceKind.GITHUB:
+    if source == "github":
         return GitHubConnector(settings)
     raise ValueError(f"no connector for source {source!r}")

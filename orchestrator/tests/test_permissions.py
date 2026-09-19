@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from orchestrator.enums import DenyReason, EntityKind, Sensitivity, SourceKind
+from orchestrator.enums import DenyReason, EntityKind, Sensitivity
 from orchestrator.permissions import ObjectAcl, Scope, evaluate, permits
 
 
 def acl(**overrides) -> ObjectAcl:
     base = dict(
         owner_id="owner-1",
-        source=SourceKind.MOCK,
+        sources=["mock"],
         sensitivity=Sensitivity.PERSONAL,
         entity_kinds=[EntityKind.PROJECT],
         occurred_at_ms=1_000,
@@ -20,7 +20,7 @@ def scope(**overrides) -> Scope:
     base = dict(
         agent_id="agent-1",
         owner_id="owner-1",
-        sources=[SourceKind.MOCK],
+        sources=["mock"],
         entity_kinds=[EntityKind.PROJECT],
         max_sensitivity=Sensitivity.PERSONAL,
     )

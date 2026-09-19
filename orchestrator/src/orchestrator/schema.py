@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .enums import ClaimStatus, EntityKind, SourceKind
+from .enums import ClaimStatus, EntityKind, SourceId
 from .permissions import ObjectAcl
 
 __all__ = [
@@ -25,13 +25,13 @@ __all__ = [
     "MemoryNode",
     "Provenance",
     "RawRecord",
-    "SourceKind",
+    "SourceId",
     "SourceRef",
 ]
 
 
 class SourceRef(BaseModel):
-    connector: SourceKind
+    connector: SourceId
     external_id: str
     url: str | None = None
     #: when the thing happened
@@ -111,7 +111,7 @@ class RawRecord(BaseModel):
     """
 
     external_id: str
-    connector: SourceKind
+    connector: SourceId
     occurred_at_ms: int
     title: str
     body: str

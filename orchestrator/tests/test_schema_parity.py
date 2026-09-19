@@ -80,7 +80,6 @@ def test_struct_fields_match(name: str):
 @pytest.mark.parametrize(
     "rust_name,py_enum",
     [
-        ("SourceKind", schema.SourceKind),
         ("EntityKind", schema.EntityKind),
         ("ClaimStatus", schema.ClaimStatus),
         ("Sensitivity", permissions.Sensitivity),

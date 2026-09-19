@@ -83,7 +83,7 @@ def _to_candidate(owner_id: str, record: RawRecord, parsed: dict, derived_by: st
         occurred_at_ms=record.occurred_at_ms,
         ingested_at_ms=ingested_at_ms,
     )
-    event_id = stable_id("evt", owner_id, record.connector.value, record.external_id)
+    event_id = stable_id("evt", owner_id, record.connector, record.external_id)
     sensitivity = Sensitivity.CONFIDENTIAL if record.sensitive else Sensitivity.PERSONAL
 
     def provenance(quote: str, confidence: float) -> Provenance:
@@ -97,7 +97,7 @@ def _to_candidate(owner_id: str, record: RawRecord, parsed: dict, derived_by: st
     def acl(kinds: list[EntityKind]) -> ObjectAcl:
         return ObjectAcl(
             owner_id=owner_id,
-            source=record.connector,
+            sources=[record.connector],
             sensitivity=sensitivity,
             entity_kinds=kinds,
             occurred_at_ms=record.occurred_at_ms,

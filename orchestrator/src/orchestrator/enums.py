@@ -8,14 +8,31 @@ Rust side.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
+from typing import Annotated
+
+from pydantic import AfterValidator
+
+_SOURCE_ID_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
 
-class SourceKind(StrEnum):
-    GOOGLE = "google"
-    GITHUB = "github"
-    MOCK = "mock"
-    MANUAL = "manual"
+def _check_source_id(value: str) -> str:
+    # Mirrors SourceId::parse in shared/src/memory.rs. Ids are compared as
+    # opaque strings in the permission check, so a case or whitespace variant
+    # would look identical in a grant UI while never matching.
+    if not _SOURCE_ID_RE.match(value):
+        raise ValueError(
+            f"invalid source id {value!r}: expected 1-64 chars of [a-z0-9_-]"
+        )
+    return value
+
+
+#: An open source identifier, not an enum: adding a connector must not require
+#: rebuilding the enclave (which would change the measurement the attestation
+#: commits to). The registry of *known* sources is a host-side product
+#: concern; see connectors/registry.py.
+SourceId = Annotated[str, AfterValidator(_check_source_id)]
 
 
 class EntityKind(StrEnum):

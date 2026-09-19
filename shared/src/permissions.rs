@@ -1,4 +1,4 @@
-use crate::memory::{EntityKind, SourceKind};
+use crate::memory::{EntityKind, SourceId};
 use serde::{Deserialize, Serialize};
 
 /// How sensitive a piece of stored memory is. Ordered: a scope granting
@@ -29,7 +29,11 @@ impl Default for Sensitivity {
 #[serde(rename_all = "snake_case")]
 pub struct ObjectAcl {
     pub owner_id: String,
-    pub source: SourceKind,
+    /// Every source this object draws on. Plural because a resolved object
+    /// can be derived from several: a decision evidenced by both a Slack
+    /// thread and a Notion page belongs to both, and a scope covering only
+    /// one of them must not see it.
+    pub sources: Vec<SourceId>,
     pub sensitivity: Sensitivity,
     /// Kinds of every entity this object is about (for an `Entity`, its own
     /// kind). A scope restricted to `Project` must not see an object that
@@ -51,7 +55,7 @@ pub struct ObjectAcl {
 pub struct Scope {
     pub agent_id: String,
     pub owner_id: String,
-    pub sources: Vec<SourceKind>,
+    pub sources: Vec<SourceId>,
     pub entity_kinds: Vec<EntityKind>,
     pub not_before_ms: Option<u64>,
     pub not_after_ms: Option<u64>,
@@ -100,7 +104,11 @@ pub fn evaluate(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> PermissionDecisi
     if acl.denied_agents.iter().any(|a| a == &scope.agent_id) {
         return Deny(DenyReason::AgentRevoked);
     }
-    if !scope.sources.contains(&acl.source) {
+    // `all`, not `any`: an object derived from two sources is only visible
+    // to a scope covering both. The permissive reading would leak the
+    // un-granted source's contribution through a resolved statement. Empty
+    // is a deny, same as everywhere else here.
+    if acl.sources.is_empty() || !acl.sources.iter().all(|s| scope.sources.contains(s)) {
         return Deny(DenyReason::SourceNotInScope);
     }
     if acl.entity_kinds.is_empty()
@@ -135,10 +143,14 @@ pub fn permits(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> bool {
 mod tests {
     use super::*;
 
+    fn github() -> SourceId {
+        SourceId::parse("github").expect("valid source id")
+    }
+
     fn acl() -> ObjectAcl {
         ObjectAcl {
             owner_id: "owner-1".into(),
-            source: SourceKind::Github,
+            sources: vec![github()],
             sensitivity: Sensitivity::Personal,
             entity_kinds: vec![EntityKind::Project],
             occurred_at_ms: 1_000,
@@ -150,7 +162,7 @@ mod tests {
         Scope {
             agent_id: "agent-1".into(),
             owner_id: "owner-1".into(),
-            sources: vec![SourceKind::Github],
+            sources: vec![github()],
             entity_kinds: vec![EntityKind::Project],
             not_before_ms: None,
             not_after_ms: None,
@@ -162,6 +174,66 @@ mod tests {
     #[test]
     fn allows_matching_scope() {
         assert!(permits(&scope(), &acl(), 2_000));
+    }
+
+    /// The regression the closed enum caused: a source this binary has never
+    /// heard of must deserialize and then be *denied*, not fail to parse. A
+    /// hard deserialization error on an unknown source meant every new
+    /// connector required a coordinated enclave redeploy.
+    #[test]
+    fn an_unknown_source_deserializes_and_is_denied() {
+        let json = r#"{
+            "owner_id": "owner-1",
+            "sources": ["slack"],
+            "sensitivity": "personal",
+            "entity_kinds": ["project"],
+            "occurred_at_ms": 1000,
+            "denied_agents": []
+        }"#;
+        let acl: ObjectAcl = serde_json::from_str(json).expect("unknown source must parse");
+
+        assert_eq!(
+            evaluate(&scope(), &acl, 2_000),
+            PermissionDecision::Deny(DenyReason::SourceNotInScope),
+            "a grant minted before the source existed must grant nothing for it"
+        );
+    }
+
+    /// A derived object belongs to every source it draws on, and a scope
+    /// covering only one of them must not see it -- otherwise the resolved
+    /// statement leaks the un-granted source's contribution.
+    #[test]
+    fn a_multi_source_object_needs_every_source_in_scope() {
+        let mut a = acl();
+        a.sources = vec![github(), SourceId::parse("slack").unwrap()];
+        assert_eq!(
+            evaluate(&scope(), &a, 2_000),
+            PermissionDecision::Deny(DenyReason::SourceNotInScope)
+        );
+
+        let mut s = scope();
+        s.sources = vec![github(), SourceId::parse("slack").unwrap()];
+        assert!(permits(&s, &a, 2_000));
+    }
+
+    #[test]
+    fn an_object_with_no_source_is_denied() {
+        let mut a = acl();
+        a.sources.clear();
+        assert!(!permits(&scope(), &a, 2_000));
+    }
+
+    #[test]
+    fn source_ids_that_could_confuse_a_comparison_are_rejected() {
+        assert!(SourceId::parse("github").is_some());
+        assert!(SourceId::parse("google_calendar").is_some());
+        // Case and whitespace variants would compare unequal to the
+        // canonical id while looking identical in a grant UI.
+        assert!(SourceId::parse("GitHub").is_none());
+        assert!(SourceId::parse(" github").is_none());
+        assert!(SourceId::parse("github ").is_none());
+        assert!(SourceId::parse("").is_none());
+        assert!(SourceId::parse(&"x".repeat(65)).is_none());
     }
 
     #[test]

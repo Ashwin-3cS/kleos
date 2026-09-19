@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ..enums import SourceKind
 from ..schema import RawRecord
 
 DAY_MS = 86_400_000
@@ -21,7 +20,7 @@ BASE_MS = 1_735_689_600_000  # 2025-01-01T00:00:00Z
 _FIXTURES: list[RawRecord] = [
     RawRecord(
         external_id="mock-001",
-        connector=SourceKind.MOCK,
+        connector="mock",
         occurred_at_ms=BASE_MS,
         title="Kickoff for project Atlas",
         body=(
@@ -33,7 +32,7 @@ _FIXTURES: list[RawRecord] = [
     ),
     RawRecord(
         external_id="mock-002",
-        connector=SourceKind.MOCK,
+        connector="mock",
         occurred_at_ms=BASE_MS + 3 * DAY_MS,
         title="Atlas storage revisited",
         body=(
@@ -45,7 +44,7 @@ _FIXTURES: list[RawRecord] = [
     ),
     RawRecord(
         external_id="mock-003",
-        connector=SourceKind.MOCK,
+        connector="mock",
         occurred_at_ms=BASE_MS + 5 * DAY_MS,
         title="Atlas compensation note",
         body=(
@@ -58,7 +57,7 @@ _FIXTURES: list[RawRecord] = [
     ),
     RawRecord(
         external_id="mock-004",
-        connector=SourceKind.MOCK,
+        connector="mock",
         occurred_at_ms=BASE_MS + 9 * DAY_MS,
         title="Beacon rollout owner",
         body="Alice decided that project Beacon will ship behind a feature flag.",

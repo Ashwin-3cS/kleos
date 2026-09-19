@@ -12,7 +12,7 @@ import time
 
 from pydantic import BaseModel, Field
 
-from .enums import DenyReason, EntityKind, Sensitivity, SourceKind
+from .enums import DenyReason, EntityKind, Sensitivity, SourceId
 
 __all__ = [
     "DenyReason",
@@ -27,7 +27,9 @@ __all__ = [
 
 class ObjectAcl(BaseModel):
     owner_id: str
-    source: SourceKind
+    # Plural: a resolved object can draw on several sources, and a scope
+    # covering only one of them must not see it.
+    sources: list[SourceId] = Field(default_factory=list)
     sensitivity: Sensitivity = Sensitivity.PERSONAL
     entity_kinds: list[EntityKind] = Field(default_factory=list)
     occurred_at_ms: int
@@ -37,7 +39,7 @@ class ObjectAcl(BaseModel):
 class Scope(BaseModel):
     agent_id: str
     owner_id: str
-    sources: list[SourceKind] = Field(default_factory=list)
+    sources: list[SourceId] = Field(default_factory=list)
     entity_kinds: list[EntityKind] = Field(default_factory=list)
     not_before_ms: int | None = None
     not_after_ms: int | None = None
@@ -70,7 +72,10 @@ def evaluate(scope: Scope, acl: ObjectAcl, now_ms: int | None = None) -> Permiss
         return _deny(DenyReason.GRANT_EXPIRED)
     if scope.agent_id in acl.denied_agents:
         return _deny(DenyReason.AGENT_REVOKED)
-    if acl.source not in scope.sources:
+    # `all`, not `any`: an object derived from two sources is only visible to
+    # a scope covering both, or the resolved statement leaks the un-granted
+    # source's contribution. Empty denies, as everywhere else here.
+    if not acl.sources or not all(s in scope.sources for s in acl.sources):
         return _deny(DenyReason.SOURCE_NOT_IN_SCOPE)
     # Deny by default: an object with no entity kinds, or a scope with none,
     # grants nothing rather than everything.

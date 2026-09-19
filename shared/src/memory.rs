@@ -8,14 +8,54 @@ use serde::{Deserialize, Serialize};
 // stay identical on both sides.
 
 /// Which connector a piece of memory originated from.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceKind {
-    Google,
-    Github,
-    /// Deterministic fixture connector used by mock mode and tests.
-    Mock,
-    Manual,
+///
+/// Deliberately an **open** identifier rather than an enum. This type is
+/// compiled into the enclave, so a closed enum would put every new connector
+/// on the critical path of an enclave rebuild -- and a rebuild changes the
+/// measurement the attestation commits to. An opaque id means the trust
+/// boundary never has to know the universe of sources.
+///
+/// It also has to be plural-capable downstream: an object derived from two
+/// sources (a Slack thread and a Notion page about the same decision) has no
+/// representable origin under a single closed variant. See
+/// [`crate::permissions::ObjectAcl::sources`].
+///
+/// The host-side registry of *known* sources lives outside the trust
+/// boundary, where it validates grants and labels things for display. That
+/// split is the point: validation is a product concern, evaluation is a
+/// security one, and only the latter runs in the enclave.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(transparent)]
+pub struct SourceId(String);
+
+impl SourceId {
+    /// Rejects ids that could collide or confuse once they are compared as
+    /// opaque strings in a permission check: a permission model whose
+    /// identifiers can differ by case or whitespace invites a scope that
+    /// looks like it matches but does not.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.len() > 64 {
+            return None;
+        }
+        if trimmed != raw {
+            return None;
+        }
+        let valid = raw
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+        valid.then(|| Self(raw.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SourceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// A pointer back into the originating source, carrying both timestamps the
@@ -25,7 +65,7 @@ pub enum SourceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SourceRef {
-    pub connector: SourceKind,
+    pub connector: SourceId,
     pub external_id: String,
     pub url: Option<String>,
     pub occurred_at_ms: u64,
