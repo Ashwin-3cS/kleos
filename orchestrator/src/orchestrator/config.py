@@ -35,6 +35,21 @@ class Settings(BaseSettings):
         default_factory=list, validation_alias="ENABLED_SOURCES"
     )
 
+    #: Directory holding ChatGPT data exports, one per owner (see
+    #: connectors/chatgpt.py for the layout). There is no conversation-history
+    #: API to authorise against, so the file is the only way in.
+    chatgpt_export_dir: str | None = Field(
+        default=None, validation_alias="CHATGPT_EXPORT_DIR"
+    )
+    #: Whether ChatGPT transcripts are sealed in the enclave before storage.
+    #: Defaults to true: a ChatGPT history is an undifferentiated stream of
+    #: medical, legal, financial and work questions, there is no reliable way
+    #: to tell which conversation is which, and the two errors are not
+    #: symmetric -- a needless seal costs one gateway round trip, while a
+    #: missed one writes the transcript into Neo4j in the clear, where the
+    #: operator can read it (see the README's confidentiality model).
+    chatgpt_sensitive: bool = Field(default=True, validation_alias="CHATGPT_SENSITIVE")
+
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     extraction_model: str = Field(default="claude-sonnet-5", validation_alias="EXTRACTION_MODEL")
     embedding_model: str = Field(default="voyage-3", validation_alias="EMBEDDING_MODEL")

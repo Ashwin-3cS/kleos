@@ -170,7 +170,7 @@ cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                         # 39 tests
+.venv/bin/pytest                         # 52 tests
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -480,7 +480,9 @@ Typed, with real signatures, failing explicitly rather than silently:
   like `MOCK_ATTESTATION_`. It is obfuscation, not encryption. The `nitro`
   build's Seal path is a documented stub: real Seal needs a key-server
   committee and an on-chain owner policy object.
-- **The real Google/GitHub connectors.** Consent, code exchange and the
+- **The real Google/GitHub connectors** -- note that `chatgpt` is *not* in
+  this list: it ingests real data today, because a ChatGPT export is a file
+  and needs no API. Consent, code exchange and the
   sealed per-owner refresh-token store now exist (Google
   `gmail.readonly` + `calendar.readonly`, GitHub `read:user` + `repo`), but
   nothing yet *uses* a stored token to fetch data. `GoogleConnector` and

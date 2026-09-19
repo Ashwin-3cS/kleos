@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..config import Settings
 from ..enums import SourceId
 from .base import Chunker, ConnectorSpec, SourceConnector
+from .chatgpt import ChatGPTConnector
 from .github import GitHubConnector
 from .google import GoogleConnector
 from .mock import MockConnector
@@ -10,6 +11,7 @@ from .registry import REGISTRY, ConnectorRegistry, UnknownSourceError, register
 
 __all__ = [
     "REGISTRY",
+    "ChatGPTConnector",
     "Chunker",
     "ConnectorRegistry",
     "ConnectorSpec",

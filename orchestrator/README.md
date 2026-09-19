@@ -116,6 +116,56 @@ will ingest from; empty (the default) means all of them. `GET /sources`
 lists the registry with that flag applied, and `POST /ingest` rejects an
 unknown or disabled source with a 400 rather than failing inside the graph.
 
+### ChatGPT (`chatgpt`)
+
+The second real connector, and deliberately not another OAuth one: there is
+**no ChatGPT conversation-history API** to authorise against. The only route
+to a person's conversations is their own data export -- in ChatGPT,
+**Settings -> Data controls -> Export data**; OpenAI emails a `.zip`
+containing `conversations.json`. So this is a *file-import* connector, which
+is the point: it is the first source that does not fit the shape Google and
+GitHub established, and it registers with no change to the registry, the
+schema, `enums.py`, retrieval or anything in Rust.
+
+`CHATGPT_EXPORT_DIR` says where exports live; the connector accepts
+`<dir>/<owner_id>/conversations.json`, `<dir>/<owner_id>.json`,
+`<dir>/<owner_id>.zip`, or a `*.zip` inside `<dir>/<owner_id>/` -- the `.zip`
+may be left exactly as it arrived. With no export present it raises with the
+export instructions and the paths it looked in, because that error *is* the
+onboarding flow for this source. Mock mode ignores the directory entirely
+and parses a bundled fixture export, so `chatgpt` works with no file and no
+keys.
+
+**One record per conversation, not per message.** `mapping` is a tree, not a
+list -- regenerating a response forks it -- so a transcript is the walk from
+the root taking the last child at each branch point, which is the version
+the person kept. That transcript becomes one `RawRecord`: the exchange, not
+the turn, is the unit that carries meaning, and a per-message record would
+cut a decision away from the reasoning that produced it, strand pronouns
+with no referent, and bury the graph under thousands of "thanks" events.
+Length is a retrieval problem, and `chunk_transcript` is the answer to it:
+it splits on message boundaries rather than blank lines, because a single
+assistant turn is full of blank lines and the default chunker would slice a
+coherent answer into fragments that each lose the question. ChatGPT-specific
+fields (conversation id, message counts, model slugs, archived flag) ride in
+`RawRecord.metadata` rather than in the schema.
+
+`since_ms` filters on **last activity**, not start time: a months-old thread
+the person replied to yesterday is new information. `occurred_at_ms` still
+records when the conversation began.
+
+**Records are marked `sensitive` by default** (`CHATGPT_SENSITIVE`), which
+seals the transcript inside the enclave and keeps it out of the stored
+event. A ChatGPT history is an undifferentiated stream of medical, legal,
+financial and work questions with no reliable signal distinguishing them,
+and the two errors are not symmetric: a needless seal costs one gateway
+round trip, while a missed one writes the transcript into Neo4j in the
+clear, where the operator can read it. It is configurable because sealing
+means no gateway, no ingest -- but the default stays sealed, and the honest
+limit is that the *derived* entities and claims are still stored in the
+clear (see the root README's confidentiality model); sealing the body is
+the strongest thing available at this layer, not a complete answer.
+
 ## Mock mode
 
 `ORCHESTRATOR_MODE=mock` (the default) needs no API keys and no cloud
@@ -125,6 +175,9 @@ services, mirroring the enclave's `mock` feature:
   entity overlap across records, a decision that supersedes an earlier one,
   and one record flagged sensitive so the enclave seal round trip is
   actually taken.
+- `connectors/chatgpt.py` -- a bundled fixture export, parsed by the same
+  code path as a real one, so the `chatgpt` source works with no export file
+  on disk.
 - `extraction/mock.py` -- deterministic rule-based extraction, no LLM.
 - `retrieval/embeddings.py` -- hashed-token unit vectors: stable across
   processes, not semantic, no key required.
@@ -140,7 +193,7 @@ python3 -m venv .venv
 cp .env.example .env
 
 docker compose up -d                      # neo4j :7688, redis :6380
-.venv/bin/pytest                          # 39 tests; skips if neo4j is down
+.venv/bin/pytest                          # 52 tests; skips if neo4j is down
 .venv/bin/ruff check .
 ```
 
