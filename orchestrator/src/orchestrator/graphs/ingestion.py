@@ -17,7 +17,6 @@ from typing import Annotated, Any, TypedDict
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..connectors import get_connector
 from ..enums import ClaimStatus
 from ..resolution.resolver import Resolver
 from ..schema import Candidate, RawRecord
@@ -74,9 +73,12 @@ def build_ingestion_graph(runtime: Runtime):
     resolver = Resolver(runtime.store)
 
     def fetch(state: IngestionState) -> dict:
-        connector = get_connector(state["source"], runtime.settings)
-        records = list(connector.fetch(state.get("since_ms", 0)))
-        log.info("ingestion.fetch source=%s records=%d", state["source"], len(records))
+        source = state["source"]
+        if not runtime.settings.source_enabled(source):
+            raise ValueError(f"source {source!r} is not enabled in this deployment")
+        connector = runtime.registry.connector(source, runtime.settings)
+        records = list(connector.fetch(state["owner_id"], state.get("since_ms", 0)))
+        log.info("ingestion.fetch source=%s records=%d", source, len(records))
         return {"records": [r.model_dump(mode="json") for r in records]}
 
     def extract(state: IngestionState) -> dict:

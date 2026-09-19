@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .config import get_settings
+from .connectors.registry import REGISTRY
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
 from .jobs.queue import get_queue
@@ -88,9 +89,38 @@ def health() -> dict[str, Any]:
     return status
 
 
+@app.get("/sources")
+def sources() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "sources": [
+            {
+                "id": spec.source_id,
+                "display_name": spec.display_name,
+                "requires_oauth": spec.requires_oauth,
+                "oauth_scopes": list(spec.oauth_scopes),
+                "enabled": settings.source_enabled(spec.source_id),
+                "mock_fixtures": spec.mock_factory is not None,
+            }
+            for spec in REGISTRY.specs()
+        ]
+    }
+
+
 @app.post("/ingest", response_model=IngestResponse, status_code=202)
 def enqueue_ingest(req: IngestRequest) -> IngestResponse:
     settings = get_settings()
+    # Rejected here rather than deep in the graph: an unknown source would
+    # otherwise surface as a failed background job with a traceback.
+    if req.source not in REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown source {req.source!r}; known sources: {', '.join(REGISTRY.ids())}",
+        )
+    if not settings.source_enabled(req.source):
+        raise HTTPException(
+            status_code=400, detail=f"source {req.source!r} is not enabled in this deployment"
+        )
     queue = get_queue(settings)
     job = queue.enqueue(
         ingest_source,

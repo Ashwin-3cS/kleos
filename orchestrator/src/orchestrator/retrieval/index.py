@@ -6,69 +6,32 @@ memorai memory unchanged. What it is *not* is a plain vector retriever: the
 hybrid scoring in ``ranking.py`` runs inside ``_retrieve``, because
 graph proximity needs the store, not just the vector index.
 
-Chunking also lives here rather than in the ingestion graph: how a record
-should be split is a property of the source's shape (a chat message, a code
-diff and a document are not the same object), and the thing that has to get
-it right is retrieval.
+How a record should be split is a property of the source's shape (a chat
+message, a code diff and a document are not the same object), so each
+connector declares its own chunker and ``chunk_for_source`` only dispatches
+through the registry. Retrieval knows nothing about any particular source.
 """
 
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
 
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 
 from ..config import Settings
+from ..connectors.registry import REGISTRY, ConnectorRegistry
 from ..enums import SourceId
 from ..storage.neo4j_store import Neo4jStore
 from .embeddings import Embedder
 from .ranking import rank
 
-if TYPE_CHECKING:
-    pass
 
-_DEFAULT_MAX_CHARS = 1000
-
-# Per-source overrides only. A source absent from this table gets the default
-# rather than raising: this used to be a total dict keyed on a closed enum, so
-# a new connector failed with a KeyError at *retrieval* time, long after
-# ingest had reported success. Connector-declared chunkers supersede this.
-_MAX_CHARS = {
-    "google": 1200,
-    "github": 600,
-    "mock": 800,
-}
-
-
-def chunk_for_source(text: str, connector: SourceId) -> list[str]:
-    """Splits raw text into retrieval-sized chunks according to source shape.
-
-    GitHub content is diff-shaped, so it splits on hunk boundaries when it
-    has them; everything else splits on blank lines and then packs to a
-    per-source character budget.
-    """
-    limit = _MAX_CHARS.get(connector, _DEFAULT_MAX_CHARS)
-    if connector == "github" and "\n@@" in text:
-        # A diff hunk is already the atomic unit of a code change; packing
-        # several into one chunk only blurs which change a hit came from.
-        parts = [p for p in text.split("\n@@") if p.strip()]
-        return [parts[0].strip()] + [f"@@{p}".strip() for p in parts[1:]]
-
-    units = [u.strip() for u in text.split("\n\n") if u.strip()] or [text.strip()]
-
-    chunks: list[str] = []
-    current = ""
-    for unit in units:
-        if current and len(current) + len(unit) + 2 > limit:
-            chunks.append(current)
-            current = unit
-        else:
-            current = f"{current}\n\n{unit}" if current else unit
-    if current:
-        chunks.append(current)
-    return chunks
+def chunk_for_source(
+    text: str, connector: SourceId, registry: ConnectorRegistry | None = None
+) -> list[str]:
+    """Splits raw text into retrieval-sized chunks according to source shape."""
+    return (registry or REGISTRY).chunker(connector)(text)
 
 
 class MemoryRetriever(BaseRetriever):

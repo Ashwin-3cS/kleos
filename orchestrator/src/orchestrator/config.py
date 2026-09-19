@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -26,6 +27,14 @@ class Settings(BaseSettings):
 
     embedding_dim: int = Field(default=256, validation_alias="EMBEDDING_DIM")
 
+    #: Optional allow-list of source ids this deployment will ingest from.
+    #: Empty means every registered connector is enabled -- a deployment that
+    #: wants to narrow that says so explicitly, and registering a connector
+    #: stays a one-module change.
+    enabled_sources: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, validation_alias="ENABLED_SOURCES"
+    )
+
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     extraction_model: str = Field(default="claude-sonnet-5", validation_alias="EXTRACTION_MODEL")
     embedding_model: str = Field(default="voyage-3", validation_alias="EMBEDDING_MODEL")
@@ -35,9 +44,20 @@ class Settings(BaseSettings):
         default=None, validation_alias="WALRUS_AGGREGATOR_URL"
     )
 
+    @field_validator("enabled_sources", mode="before")
+    @classmethod
+    def _split_csv(cls, value):
+        # pydantic-settings would otherwise demand JSON for a list-typed env var.
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
     @property
     def is_mock(self) -> bool:
         return self.mode != "live"
+
+    def source_enabled(self, source: str) -> bool:
+        return not self.enabled_sources or source in self.enabled_sources
 
 
 @lru_cache(maxsize=1)

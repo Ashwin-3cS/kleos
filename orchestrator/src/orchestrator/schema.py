@@ -8,6 +8,8 @@ the two definitions against each other.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from .enums import ClaimStatus, EntityKind, SourceId
@@ -119,6 +121,11 @@ class RawRecord(BaseModel):
     #: Raw body is sealed in the enclave before storage when this is set.
     sensitive: bool = False
     participants: list[str] = Field(default_factory=list)
+    #: Source-specific fields that do not fit the common shape (labels, repo,
+    #: thread id, ...). Carried through extraction untouched so a richer
+    #: connector does not need a schema change; nothing downstream interprets
+    #: it generically.
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Candidate(BaseModel):

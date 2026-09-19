@@ -170,7 +170,7 @@ cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                         # 32 tests
+.venv/bin/pytest                         # 39 tests
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -483,8 +483,12 @@ Typed, with real signatures, failing explicitly rather than silently:
 - **The real Google/GitHub connectors.** Consent, code exchange and the
   sealed per-owner refresh-token store now exist (Google
   `gmail.readonly` + `calendar.readonly`, GitHub `read:user` + `repo`), but
-  nothing yet *uses* a stored token to fetch data. The connectors in
-  `orchestrator/src/orchestrator/connectors/` are still fixtures.
+  nothing yet *uses* a stored token to fetch data. `GoogleConnector` and
+  `GitHubConnector` raise `NotImplementedError` -- in mock mode too, since
+  mock fixtures are declared per connector rather than substituted for
+  every source. They are registered in `connectors/registry.py` with their
+  real metadata (display name, OAuth scopes, chunking), so what is missing
+  is the `fetch` body and a per-owner token, nothing else.
 - **Live LLM/embedding calls.** `extraction/llm.py` is wired and works with
   an `ANTHROPIC_API_KEY` and `ORCHESTRATOR_MODE=live`, but has not been run
   against the live API. `VoyageEmbedder` is a stub.

@@ -10,7 +10,7 @@ OWNER = "owner-test"
 
 
 def test_mock_extractor_is_deterministic():
-    record = next(iter(MockConnector().fetch(0)))
+    record = next(iter(MockConnector().fetch(OWNER, 0)))
     a = MockExtractor().extract(OWNER, record)
     b = MockExtractor().extract(OWNER, record)
     assert [e.id for e in a.entities] == [e.id for e in b.entities]
@@ -18,7 +18,7 @@ def test_mock_extractor_is_deterministic():
 
 
 def test_mock_extractor_finds_project_and_claim():
-    record = next(iter(MockConnector().fetch(0)))
+    record = next(iter(MockConnector().fetch(OWNER, 0)))
     candidate = MockExtractor().extract(OWNER, record)
     kinds = {e.kind for e in candidate.entities}
     assert EntityKind.PROJECT in kinds
@@ -27,7 +27,7 @@ def test_mock_extractor_finds_project_and_claim():
 
 
 def test_sensitive_record_body_is_withheld_from_the_event():
-    sensitive = [r for r in MockConnector().fetch(0) if r.sensitive]
+    sensitive = [r for r in MockConnector().fetch(OWNER, 0) if r.sensitive]
     assert sensitive, "fixture set must contain a sensitive record"
     candidate = MockExtractor().extract(OWNER, sensitive[0])
     assert candidate.events[0].body is None
@@ -39,7 +39,7 @@ def test_resolver_supersedes_the_earlier_claim(store):
     extractor = MockExtractor()
     embedder = HashedTokenEmbedder(256)
 
-    records = list(MockConnector().fetch(0))
+    records = list(MockConnector().fetch(OWNER, 0))
     supersessions = []
     for record in records[:2]:
         candidate = extractor.extract(OWNER, record)

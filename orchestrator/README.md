@@ -45,9 +45,9 @@ sensitive body in the clear.
   memorai memory. It is not a plain vector retriever: hybrid scoring
   (semantic + recency + graph proximity, `retrieval/ranking.py`) runs
   inside `_retrieve`, because proximity needs the graph store rather than
-  just the vector index. Chunking lives here too, since how a record splits
-  is a property of the source's shape and the thing that has to get it
-  right is retrieval.
+  just the vector index. Chunking is *dispatched* from here but declared by
+  each connector (`chunk_for_source` looks the chunker up in the connector
+  registry), since how a record splits is a property of the source's shape.
 
 ## Storage
 
@@ -86,12 +86,42 @@ node between retrieval and assembly. That makes it structurally impossible
 for the assembler to see an unchecked candidate, and it makes a denial
 visible as a denial (with reasons) rather than as an empty result set.
 
+## Connectors
+
+`connectors/registry.py` maps a source id to a `ConnectorSpec`, which is
+where a connector declares everything the rest of the service needs to know
+about it: its id, display name, whether it needs OAuth and with which
+scopes, how its records chunk for retrieval, and optionally a fixture
+stand-in for mock mode. Adding a source is one module plus one
+registration -- no change to `enums.py`, to `retrieval/`, to the graphs, or
+to anything in Rust. `tests/test_connector_registry.py` registers a
+connector that exists only in that test file and ingests from it end to
+end, which is the property that test exists to hold.
+
+Source *ids* stay open strings (`enums.SourceId`, mirroring
+`SourceId::parse` in `shared/src/memory.rs`): the enclave treats them as
+opaque, so adding a connector never changes the measurement an attestation
+commits to. The registry is the host-side list of sources this build knows
+how to *fetch*, which is a different question and deliberately lives
+outside the trust boundary.
+
+Mock mode is per source, not global: a connector gets fixture data only if
+its spec declares a `mock_factory`. `mock` is itself a fixture source; the
+Google and GitHub stubs raise `NotImplementedError` in both modes. This
+replaced a short-circuit that returned the mock fixtures for *every* source
+in mock mode, which made a half-built connector look like it worked.
+
+`ENABLED_SOURCES` optionally narrows which registered sources a deployment
+will ingest from; empty (the default) means all of them. `GET /sources`
+lists the registry with that flag applied, and `POST /ingest` rejects an
+unknown or disabled source with a 400 rather than failing inside the graph.
+
 ## Mock mode
 
 `ORCHESTRATOR_MODE=mock` (the default) needs no API keys and no cloud
 services, mirroring the enclave's `mock` feature:
 
-- `connectors/mock.py` -- a fixed set of fixture records, shaped to exercise
+- `connectors/mock.py` -- the `mock` source: a fixed set of fixture records, shaped to exercise
   entity overlap across records, a decision that supersedes an earlier one,
   and one record flagged sensitive so the enclave seal round trip is
   actually taken.
@@ -110,7 +140,7 @@ python3 -m venv .venv
 cp .env.example .env
 
 docker compose up -d                      # neo4j :7688, redis :6380
-.venv/bin/pytest                          # 32 tests; skips if neo4j is down
+.venv/bin/pytest                          # 39 tests; skips if neo4j is down
 .venv/bin/ruff check .
 ```
 

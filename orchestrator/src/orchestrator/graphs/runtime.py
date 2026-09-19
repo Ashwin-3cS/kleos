@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..config import Settings, get_settings
+from ..connectors.registry import REGISTRY, ConnectorRegistry
 from ..extraction import get_extractor
 from ..extraction.base import Extractor
 from ..gateway_client import GatewayClient
@@ -26,9 +27,18 @@ class Runtime:
     embedder: Embedder
     extractor: Extractor
     gateway: GatewayClient
+    #: Which sources this run can fetch from. A copy of the process-wide
+    #: registry, so a caller can add a connector for one run without
+    #: mutating global state.
+    registry: ConnectorRegistry
 
     @classmethod
-    def build(cls, settings: Settings | None = None, migrate: bool = True) -> Runtime:
+    def build(
+        cls,
+        settings: Settings | None = None,
+        migrate: bool = True,
+        registry: ConnectorRegistry | None = None,
+    ) -> Runtime:
         settings = settings or get_settings()
         store = Neo4jStore(
             settings.neo4j_uri,
@@ -44,6 +54,7 @@ class Runtime:
             embedder=get_embedder(settings),
             extractor=get_extractor(settings),
             gateway=GatewayClient(settings.gateway_url),
+            registry=registry or REGISTRY.copy(),
         )
 
     def close(self) -> None:

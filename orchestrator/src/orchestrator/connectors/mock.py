@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ..schema import RawRecord
+from .base import ConnectorSpec, pack_paragraphs
 
 DAY_MS = 86_400_000
 BASE_MS = 1_735_689_600_000  # 2025-01-01T00:00:00Z
@@ -70,5 +71,18 @@ _FIXTURES: list[RawRecord] = [
 class MockConnector:
     name = "mock"
 
-    def fetch(self, since_ms: int) -> Iterable[RawRecord]:
+    def fetch(self, owner_id: str, since_ms: int) -> Iterable[RawRecord]:
         return [r for r in _FIXTURES if r.occurred_at_ms >= since_ms]
+
+
+def _build(settings) -> MockConnector:
+    return MockConnector()
+
+
+SPEC = ConnectorSpec(
+    source_id="mock",
+    display_name="Mock fixtures",
+    factory=_build,
+    chunker=pack_paragraphs(800),
+    mock_factory=_build,
+)
