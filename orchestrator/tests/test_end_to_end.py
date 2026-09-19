@@ -94,3 +94,38 @@ def test_chunking_differs_by_source():
     assert len(chunk_for_source(diff, "github")) == 3
     prose = "para one\n\npara two"
     assert chunk_for_source(prose, "google") == ["para one\n\npara two"]
+
+
+def test_graph_traversal_does_not_cross_owners(runtime, store):
+    """Graph proximity must not walk out of the owner's subgraph.
+
+    Proximity feeds ranking *before* the permission check runs, so an
+    unscoped traversal would leak another owner's node ids and hop distances
+    with nothing downstream to catch it.
+    """
+    other = "owner-intruder"
+    store.wipe_owner(other)
+    try:
+        run_ingestion(runtime, owner_id=OWNER, source="mock")
+        run_ingestion(runtime, owner_id=other, source="mock")
+
+        theirs = _ids_for(store, other)[:3]
+        assert theirs, "the intruder should have nodes to seed from"
+
+        # Seeding with the other owner's ids, as OWNER, must return nothing:
+        # neither end of the walk belongs to OWNER.
+        assert store.neighbour_ids(OWNER, theirs) == {}
+
+        # And OWNER's own traversal still returns neighbours, so the filter
+        # did not simply break proximity for everyone.
+        assert store.neighbour_ids(OWNER, _ids_for(store, OWNER)[:3])
+    finally:
+        store.wipe_owner(other)
+
+
+def _ids_for(store, owner_id: str) -> list[str]:
+    rows = store._run(
+        "MATCH (n:Memory {owner_id: $owner_id}) RETURN n.id AS id LIMIT 25",
+        owner_id=owner_id,
+    )
+    return [r["id"] for r in rows]

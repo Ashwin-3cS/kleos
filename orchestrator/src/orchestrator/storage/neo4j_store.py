@@ -202,13 +202,22 @@ class Neo4jStore:
         )
         return [(_hydrate(row), float(row["score"])) for row in rows[:top_k]]
 
-    def neighbour_ids(self, node_ids: Iterable[str], hops: int = 2) -> dict[str, int]:
-        """Node id -> shortest hop distance from any of ``node_ids``."""
+    def neighbour_ids(
+        self, owner_id: str, node_ids: Iterable[str], hops: int = 2
+    ) -> dict[str, int]:
+        """Node id -> shortest hop distance from any of ``node_ids``.
+
+        ``owner_id`` constrains both ends of the walk, not just the seed.
+        Unconstrained, one owner's node id could pull back another owner's
+        neighbours -- and since graph proximity feeds ranking before the
+        permission check runs, nothing downstream would catch it.
+        """
         rows = self._run(
-            f"MATCH (seed:Memory) WHERE seed.id IN $ids "
-            f"MATCH path = (seed)-[*1..{int(hops)}]-(other:Memory) "
+            f"MATCH (seed:Memory {{owner_id: $owner_id}}) WHERE seed.id IN $ids "
+            f"MATCH path = (seed)-[*1..{int(hops)}]-(other:Memory {{owner_id: $owner_id}}) "
             "RETURN other.id AS id, min(length(path)) AS hops",
             ids=list(node_ids),
+            owner_id=owner_id,
         )
         return {row["id"]: int(row["hops"]) for row in rows}
 

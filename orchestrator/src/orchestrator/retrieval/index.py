@@ -103,7 +103,7 @@ class MemoryRetriever(BaseRetriever):
         # Seed graph proximity from the strongest semantic matches: what is
         # linked to an already-relevant object is itself likely relevant.
         seed_ids = [node.id for node, _ in candidates[: max(len(candidates) // 3, 1)]]
-        hops = self._store.neighbour_ids(seed_ids)
+        hops = self._store.neighbour_ids(self._owner_id, seed_ids)
 
         ranked = rank(candidates, hops, now_ms)[: self._top_k]
         return [
@@ -136,7 +136,7 @@ class MemoryRetriever(BaseRetriever):
         if not candidates:
             return []
         seed_ids = [node.id for node, _ in candidates[: max(len(candidates) // 3, 1)]]
-        hops = self._store.neighbour_ids(seed_ids)
+        hops = self._store.neighbour_ids(self._owner_id, seed_ids)
         return rank(candidates, hops, now_ms)[: self._top_k]
 
 
