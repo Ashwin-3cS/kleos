@@ -450,15 +450,14 @@ permission-blind, so it is structurally impossible for the assembler to see
 an unchecked candidate, and a denial surfaces as a denial with reasons
 rather than as an empty result set.
 
-Two sharp edges to fix before grants are load-bearing:
+Session tokens, agent grants and OAuth state are all signed with the same
+secret, so each states its own `typ` and is rejected when presented as
+another. That used to hold only because the three claim shapes happened to
+be disjoint and serde rejects a missing field -- an accident of the structs
+rather than a defence, which one `#[serde(default)]` would have undone.
 
-- **Owner session tokens and agent grant tokens are signed with the same
-  secret and carry no type discriminator.** They are not interchangeable
-  today, but only because their claim shapes are disjoint and serde rejects
-  a missing field -- an accident, not a defence. Adding a `#[serde(default)]`
-  or an optional field to either struct would silently make a session usable
-  as a grant. A `typ` claim, or separate secrets, would make that
-  structural.
+One sharp edge remains before grants are load-bearing:
+
 - **A grant cannot be revoked before it expires**, except per-object via
   `ObjectAcl.denied_agents`. There is no revocation list. Keep grant TTLs
   short until there is one.
