@@ -3,8 +3,10 @@
 Stands in for a real source in mock mode and in tests. The fixtures are
 shaped to exercise the parts of the pipeline that matter: several sources
 of entity overlap, one record that supersedes an earlier decision, one that
-contradicts it, and one flagged sensitive so the enclave seal round trip is
-actually taken.
+contradicts it, one flagged sensitive so the enclave seal round trip is
+actually taken, and three commitments: one that is later reassigned to
+someone else with a moved deadline, its replacement, and one that goes past
+due without ever being fulfilled.
 """
 
 from __future__ import annotations
@@ -64,6 +66,39 @@ _FIXTURES: list[RawRecord] = [
         body="Alice decided that project Beacon will ship behind a feature flag.",
         url="https://mock.local/records/mock-004",
         participants=["Alice"],
+    ),
+    RawRecord(
+        external_id="mock-005",
+        connector="mock",
+        occurred_at_ms=BASE_MS + 12 * DAY_MS,
+        title="Atlas migration owner",
+        body=(
+            "Alice committed to Bob that project Atlas will ship the storage "
+            "migration by 2025-02-14."
+        ),
+        url="https://mock.local/records/mock-005",
+        participants=["Alice", "Bob"],
+    ),
+    RawRecord(
+        external_id="mock-006",
+        connector="mock",
+        occurred_at_ms=BASE_MS + 15 * DAY_MS,
+        title="Atlas migration reassigned",
+        body=(
+            "Bob committed to Alice that project Atlas will ship the storage "
+            "migration by 2025-03-07."
+        ),
+        url="https://mock.local/records/mock-006",
+        participants=["Alice", "Bob"],
+    ),
+    RawRecord(
+        external_id="mock-007",
+        connector="mock",
+        occurred_at_ms=BASE_MS + 16 * DAY_MS,
+        title="Beacon rollout plan",
+        body="Carol committed that project Beacon will publish the rollout plan by 2025-01-24.",
+        url="https://mock.local/records/mock-007",
+        participants=["Carol"],
     ),
 ]
 

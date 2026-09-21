@@ -164,6 +164,48 @@ pub enum ClaimStatus {
     Reconciled,
 }
 
+/// Whether the promised thing actually happened. Deliberately a *separate*
+/// axis from [`ClaimStatus`]: that one is epistemic (is this still our best
+/// understanding of who owes what), this one is a lifecycle (did it get
+/// done). A commitment can be `Active`/`Fulfilled`, or `Superseded`/`Open`
+/// -- reassigned to someone else and still outstanding. Collapsing the two
+/// makes both unanswerable.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FulfillmentStatus {
+    /// Outstanding. Past due is `Open` plus a `due_at_ms` in the past, not
+    /// a status of its own -- "overdue" is a function of the clock, and
+    /// storing it would mean a writer somewhere has to keep it true.
+    Open,
+    /// The thing was done.
+    Fulfilled,
+    /// Abandoned without being done, explicitly rather than by silence.
+    Dropped,
+}
+
+/// The commitment facet of a [`Claim`]: present when the claim asserts that
+/// someone owes something.
+///
+/// A facet rather than a node type because "Alice will ship the migration by
+/// Friday" is a claim in every respect that matters -- it can be superseded
+/// ("actually Bob will"), contradicted and reconciled, and the resolver
+/// already implements exactly that machinery over claims. A parallel node
+/// type would duplicate all of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Commitment {
+    /// Entity id of whoever owes it.
+    pub owed_by_entity_id: String,
+    /// Entity id of whoever it is owed to. Optional: plenty of commitments
+    /// are to oneself.
+    pub owed_to_entity_id: Option<String>,
+    /// Optional: plenty of commitments have no deadline.
+    pub due_at_ms: Option<u64>,
+    pub fulfillment: FulfillmentStatus,
+    /// When fulfillment last moved off `Open`.
+    pub settled_at_ms: Option<u64>,
+}
+
 /// A resolved, higher-level statement derived from one or more events --
 /// the decisions/claims layer. Conflicting versions stay linked rather than
 /// being overwritten, so the record can answer "when did this change, and
@@ -184,6 +226,9 @@ pub struct Claim {
     /// Set on a claim whose conflict has been resolved, pointing at the
     /// claim that reconciled it.
     pub reconciled_into: Option<String>,
+    /// Set when this claim is also a commitment. Everything above stays the
+    /// epistemic axis; this is the lifecycle one.
+    pub commitment: Option<Commitment>,
     pub asserted_at_ms: u64,
     pub provenance: Provenance,
     pub acl: ObjectAcl,

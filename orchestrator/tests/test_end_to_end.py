@@ -13,6 +13,7 @@ import time
 
 import pytest
 
+from orchestrator.connectors.mock import MockConnector
 from orchestrator.enums import EntityKind, Sensitivity
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.runtime import Runtime
@@ -20,6 +21,7 @@ from orchestrator.permissions import Scope, evaluate
 from orchestrator.retrieval.index import MemoryRetriever
 
 OWNER = "owner-e2e"
+FIXTURE_RECORDS = len(list(MockConnector().fetch(OWNER, 0)))
 
 
 @pytest.fixture
@@ -45,7 +47,7 @@ def _full_scope(**overrides) -> Scope:
 def test_ingestion_writes_resolved_memory(runtime):
     result = run_ingestion(runtime, owner_id=OWNER, source="mock")
 
-    assert result.records == 4
+    assert result.records == FIXTURE_RECORDS
     assert result.entities > 0
     assert result.claims > 0
     assert result.supersessions, "the fixture set contains a superseding decision"
@@ -77,7 +79,7 @@ def test_ingestion_is_idempotent(runtime):
     run_ingestion(runtime, owner_id=OWNER, source="mock")
     after = runtime.store.count(OWNER)
     assert before == after
-    assert first.records == 4
+    assert first.records == FIXTURE_RECORDS
 
 
 def test_sensitive_record_is_not_written_without_a_gateway(runtime):

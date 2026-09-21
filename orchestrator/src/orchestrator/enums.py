@@ -50,6 +50,17 @@ class ClaimStatus(StrEnum):
     RECONCILED = "reconciled"
 
 
+class FulfillmentStatus(StrEnum):
+    """Whether a commitment actually happened -- a separate axis from
+    ``ClaimStatus``, which is about whether we still believe the claim.
+    "Past due" is deliberately not a value here: it is ``OPEN`` plus a due
+    timestamp in the past, so no writer has to keep it true."""
+
+    OPEN = "open"
+    FULFILLED = "fulfilled"
+    DROPPED = "dropped"
+
+
 class Sensitivity(StrEnum):
     PUBLIC = "public"
     PERSONAL = "personal"

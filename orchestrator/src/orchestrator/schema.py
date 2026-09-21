@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .enums import ClaimStatus, EntityKind, SourceId
+from .enums import ClaimStatus, EntityKind, FulfillmentStatus, SourceId
 from .permissions import ObjectAcl
 
 __all__ = [
@@ -20,10 +20,12 @@ __all__ = [
     "Citation",
     "Claim",
     "ClaimStatus",
+    "Commitment",
     "EncryptedContentRef",
     "Entity",
     "EntityKind",
     "Event",
+    "FulfillmentStatus",
     "MemoryNode",
     "Provenance",
     "RawRecord",
@@ -87,6 +89,24 @@ class Event(BaseModel):
     acl: ObjectAcl
 
 
+class Commitment(BaseModel):
+    """The commitment facet of a ``Claim``: someone owes something.
+
+    A facet rather than a node type because a commitment is a claim in every
+    respect that matters -- it can be superseded ("actually Bob will"),
+    contradicted and reconciled, which is machinery the resolver already has.
+    """
+
+    owed_by_entity_id: str
+    #: Optional: plenty of commitments are to oneself.
+    owed_to_entity_id: str | None = None
+    #: Optional: plenty of commitments have no deadline.
+    due_at_ms: int | None = None
+    fulfillment: FulfillmentStatus = FulfillmentStatus.OPEN
+    #: When fulfillment last moved off ``OPEN``.
+    settled_at_ms: int | None = None
+
+
 class Claim(BaseModel):
     id: str
     owner_id: str
@@ -96,6 +116,8 @@ class Claim(BaseModel):
     supersedes: list[str] = Field(default_factory=list)
     contradicts: list[str] = Field(default_factory=list)
     reconciled_into: str | None = None
+    #: Everything above is the epistemic axis; this is the lifecycle one.
+    commitment: Commitment | None = None
     asserted_at_ms: int
     provenance: Provenance
     acl: ObjectAcl

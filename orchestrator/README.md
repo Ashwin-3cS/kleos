@@ -57,7 +57,11 @@ information: its specific label (`:Entity` / `:Event` / `:Claim`), a shared
 `:Memory` label so one vector index covers all three in a single ranking
 pass, and a `payload` JSON blob so objects round-trip back into pydantic
 without a lossy column mapping. ACL fields are additionally flattened onto
-the node for filtering.
+the node for filtering, as are a claim's status and commitment facet
+(`claim_status`, `commitment_fulfillment`, `commitment_due_at_ms`,
+`commitment_owed_by`, `commitment_owed_to`) -- promoted out of the blob
+because "which commitments are open and past due?" has to be an indexed
+Cypher query, not a scan that filters in Python.
 
 Neo4j is the queryable index, not the system of record: it is conceptually
 rebuildable from source material. Raw content belongs in Walrus under the
@@ -65,7 +69,8 @@ owner's keys, which is not wired yet (see **Stubs** below).
 
 Edges: `(:Event)-[:MENTIONS]->(:Entity)`, `(:Claim)-[:ABOUT]->(:Entity)`,
 `(:Claim|:Event)-[:CITES]->(:Event)`, `(:Claim)-[:SUPERSEDES]->(:Claim)`,
-`(:Claim)-[:CONTRADICTS]->(:Claim)`.
+`(:Claim)-[:CONTRADICTS]->(:Claim)`, and, for the commitment facet,
+`(:Claim)-[:OWED_BY]->(:Entity)` / `(:Claim)-[:OWED_TO]->(:Entity)`.
 
 ## Permissions
 
@@ -193,7 +198,7 @@ python3 -m venv .venv
 cp .env.example .env
 
 docker compose up -d                      # neo4j :7688, redis :6380
-.venv/bin/pytest                          # 52 tests; skips if neo4j is down
+.venv/bin/pytest                          # 64 tests; skips if neo4j is down
 .venv/bin/ruff check .
 ```
 

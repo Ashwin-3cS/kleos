@@ -170,7 +170,7 @@ cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                         # 52 tests
+.venv/bin/pytest                         # 64 tests
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -183,9 +183,10 @@ to see Phase 2 work:
 1. `POST /auth/session` with `mock_google_alice` -- the enclave verifies the
    identity and attests it; the gateway issues an owner session JWT.
 2. `POST /ingest` on the orchestrator enqueues an RQ job and returns a job id.
-3. The worker runs the ingestion graph: the mock connector yields 4 fixture
-   records, the rule-based extractor produces 12 entities / 4 events /
-   4 claims, the resolver links the superseding decisions, the one sensitive
+3. The worker runs the ingestion graph: the mock connector yields 7 fixture
+   records, the rule-based extractor produces 20 entities / 7 events /
+   7 claims (3 of them commitments), the resolver links the superseding
+   decisions and the reassigned commitment, the one sensitive
    record's body is sealed **inside the enclave** (the gateway round trip),
    and everything is written to Neo4j with provenance and ACL fields.
 4. `POST /memory/scope/grant` on the gateway mints a scoped grant for
@@ -294,8 +295,44 @@ Three questions were open at the end of Phase 1. They are now settled:
   linked, rather than being overwritten; unresolved conflicts are linked via
   `contradicts`, and `reconciled_into` points at the claim that eventually
   resolves them.
+- **Commitment** -- an optional *facet* on `Claim`, present when the claim
+  asserts that someone owes something: `owed_by_entity_id`,
+  `owed_to_entity_id` (optional -- plenty of commitments are to oneself),
+  `due_at_ms` (optional -- plenty have no deadline), `fulfillment` and
+  `settled_at_ms`. Stored as `(:Claim)-[:OWED_BY|:OWED_TO]->(:Entity)`.
 - **Provenance** -- a citation chain back to originating source events, not
   just a confidence float. Confidence is carried, but it is advisory.
+
+**Why a commitment is a facet and not a node type.** "Alice will ship the
+migration by Friday" is a claim in every respect that matters: it can be
+superseded ("actually Bob will"), contradicted, and reconciled. The resolver
+already implements exactly that machinery over claims, and a parallel
+`Commitment` node type would need all of it duplicated -- a second resolver
+to keep in step with the first.
+
+What a commitment does need is a **second status axis**, because conflating
+the two is how the concept rots:
+
+- `ClaimStatus` is *epistemic*: active / superseded / contradicted /
+  reconciled. Is this still our best understanding of who owes what?
+- `FulfillmentStatus` is a *lifecycle*: open / fulfilled / dropped. Did the
+  thing actually happen?
+
+They move independently. A commitment can be `active` and `fulfilled` (the
+promise was kept and we still believe it), or `superseded` and `open`
+(reassigned to someone else, and still outstanding). "Past due" is
+deliberately not a third value: it is `open` plus a `due_at_ms` in the past,
+so no writer has to keep it true.
+
+Commitments are also the first thing to need memory that is queryable
+*without* loading it: `Claim.status` and the commitment fields are promoted
+out of the `payload` blob into indexed Neo4j properties
+(`claim_status`, `commitment_fulfillment`, `commitment_due_at_ms`,
+`commitment_owed_by`, `commitment_owed_to`), so "which commitments are open
+and past due?" is one indexed Cypher query --
+`Neo4jStore.open_commitments()` -- rather than a scan that filters in
+Python. A commitment carries an `ObjectAcl` like any other claim and is
+subject to the identical query-time permission check; there is no bypass.
 - **EncryptedContentRef** -- what is stored in place of a raw body that was
   sealed inside the enclave.
 

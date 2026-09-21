@@ -6,8 +6,8 @@ pub mod protocol;
 
 pub use identity::{OAuthSignal, OwnerIdentity, TrustTier};
 pub use memory::{
-    Citation, Claim, ClaimStatus, EncryptedContentRef, Entity, EntityKind, Event, MemoryNode,
-    Provenance, SourceId, SourceRef,
+    Citation, Claim, ClaimStatus, Commitment, EncryptedContentRef, Entity, EntityKind, Event,
+    FulfillmentStatus, MemoryNode, Provenance, SourceId, SourceRef,
 };
 pub use oauth::Provider;
 pub use permissions::{

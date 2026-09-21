@@ -23,6 +23,17 @@ _CONSTRAINTS = [
 _INDEXES = [
     "CREATE INDEX memorai_memory_owner IF NOT EXISTS FOR (n:Memory) ON (n.owner_id)",
     "CREATE INDEX memorai_memory_occurred IF NOT EXISTS FOR (n:Memory) ON (n.occurred_at_ms)",
+    # The open/past-due read: fulfillment narrows to a handful of claims and
+    # the deadline orders them, so one composite index answers it without
+    # touching the payload blob.
+    "CREATE INDEX memorai_claim_commitment IF NOT EXISTS "
+    "FOR (n:Claim) ON (n.commitment_fulfillment, n.commitment_due_at_ms)",
+    # "what does this person still owe" -- the other way commitments are read.
+    "CREATE INDEX memorai_claim_commitment_owed_by IF NOT EXISTS "
+    "FOR (n:Claim) ON (n.commitment_owed_by)",
+    # Epistemic status, promoted alongside it and indexed for the same reason:
+    # the open-commitment read excludes superseded claims by default.
+    "CREATE INDEX memorai_claim_status IF NOT EXISTS FOR (n:Claim) ON (n.claim_status)",
 ]
 
 # Every stored node also carries the :Memory label so one vector index covers

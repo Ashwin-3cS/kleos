@@ -18,7 +18,7 @@ from typing import Any
 
 from neo4j import Driver, GraphDatabase
 
-from ..enums import ClaimStatus
+from ..enums import ClaimStatus, FulfillmentStatus
 from ..schema import Claim, Entity, Event, MemoryNode
 
 _LABELS = {"Entity": Entity, "Event": Event, "Claim": Claim}
@@ -51,6 +51,31 @@ def _occurred_at(node: MemoryNode) -> int:
     if isinstance(node, Event):
         return node.source.occurred_at_ms
     return node.asserted_at_ms
+
+
+#: Claim fields lifted out of the opaque ``payload`` blob into real,
+#: indexable Neo4j properties. Everything else still round-trips through the
+#: blob; these are promoted because "which commitments are open and past
+#: due?" has to be a Cypher query against an index, not a full scan that
+#: filters in Python. Non-claims get ``None``, which Neo4j stores as an
+#: absent property.
+def _promoted(node: MemoryNode) -> dict[str, Any]:
+    if not isinstance(node, Claim):
+        return {
+            "claim_status": None,
+            "commitment_fulfillment": None,
+            "commitment_due_at_ms": None,
+            "commitment_owed_by": None,
+            "commitment_owed_to": None,
+        }
+    c = node.commitment
+    return {
+        "claim_status": node.status.value,
+        "commitment_fulfillment": c.fulfillment.value if c else None,
+        "commitment_due_at_ms": c.due_at_ms if c else None,
+        "commitment_owed_by": c.owed_by_entity_id if c else None,
+        "commitment_owed_to": c.owed_to_entity_id if c else None,
+    }
 
 
 def _hydrate(record: dict[str, Any]) -> StoredNode:
@@ -107,10 +132,16 @@ class Neo4jStore:
             n.acl_sources = $acl_sources,
             n.acl_sensitivity = $acl_sensitivity,
             n.acl_entity_kinds = $acl_entity_kinds,
-            n.embedding = $embedding
+            n.embedding = $embedding,
+            n.claim_status = $claim_status,
+            n.commitment_fulfillment = $commitment_fulfillment,
+            n.commitment_due_at_ms = $commitment_due_at_ms,
+            n.commitment_owed_by = $commitment_owed_by,
+            n.commitment_owed_to = $commitment_owed_to
         """
         self._run(
             cypher,
+            **_promoted(node),
             id=node.id,
             owner_id=node.owner_id,
             payload=node.model_dump_json(),
@@ -132,25 +163,72 @@ class Neo4jStore:
             to_id=to_id,
         )
 
-    def set_claim_status(self, claim_id: str, status: str) -> None:
-        """Status lives inside the ``payload`` blob, so the claim is re-read,
-        mutated and written back rather than patched in Cypher."""
+    def _mutate_claim(self, claim_id: str, mutate) -> Claim | None:
+        """Read-modify-write a stored claim.
+
+        The claim's fields live inside the opaque ``payload`` blob, so they
+        cannot be patched in Cypher; the promoted properties are rewritten
+        from the mutated model so the blob and the indexed columns can never
+        disagree.
+        """
         rows = self._run("MATCH (c:Claim {id: $id}) RETURN c.payload AS payload", id=claim_id)
         if not rows:
-            return
+            return None
         claim = Claim.model_validate_json(rows[0]["payload"])
-        claim.status = ClaimStatus(status)
+        mutate(claim)
         self._run(
-            "MATCH (c:Claim {id: $id}) SET c.payload = $payload",
+            "MATCH (c:Claim {id: $id}) SET c.payload = $payload, "
+            "c.claim_status = $claim_status, "
+            "c.commitment_fulfillment = $commitment_fulfillment, "
+            "c.commitment_due_at_ms = $commitment_due_at_ms, "
+            "c.commitment_owed_by = $commitment_owed_by, "
+            "c.commitment_owed_to = $commitment_owed_to",
             id=claim_id,
             payload=claim.model_dump_json(),
+            **_promoted(claim),
         )
+        return claim
+
+    def set_claim_status(self, claim_id: str, status: str) -> None:
+        """Moves the *epistemic* axis only. Fulfillment is untouched: a
+        commitment that was reassigned is superseded and still open."""
+
+        def mutate(claim: Claim) -> None:
+            claim.status = ClaimStatus(status)
+
+        self._mutate_claim(claim_id, mutate)
+
+    def set_fulfillment(
+        self, claim_id: str, fulfillment: str, settled_at_ms: int | None = None
+    ) -> Claim | None:
+        """Moves the *lifecycle* axis only, leaving ``status`` alone.
+
+        Raises if the claim carries no commitment facet: fulfilling a claim
+        that promised nothing is a caller bug, not a no-op.
+        """
+        state = FulfillmentStatus(fulfillment)
+
+        def mutate(claim: Claim) -> None:
+            if claim.commitment is None:
+                raise ValueError(f"claim {claim_id!r} has no commitment facet")
+            claim.commitment.fulfillment = state
+            claim.commitment.settled_at_ms = (
+                None if state is FulfillmentStatus.OPEN else settled_at_ms
+            )
+
+        return self._mutate_claim(claim_id, mutate)
 
     def replace_payload(self, node: MemoryNode) -> None:
         self._run(
-            "MATCH (n:Memory {id: $id}) SET n.payload = $payload",
+            "MATCH (n:Memory {id: $id}) SET n.payload = $payload, "
+            "n.claim_status = $claim_status, "
+            "n.commitment_fulfillment = $commitment_fulfillment, "
+            "n.commitment_due_at_ms = $commitment_due_at_ms, "
+            "n.commitment_owed_by = $commitment_owed_by, "
+            "n.commitment_owed_to = $commitment_owed_to",
             id=node.id,
             payload=node.model_dump_json(),
+            **_promoted(node),
         )
 
     # -- reads ----------------------------------------------------------
@@ -182,6 +260,38 @@ class Neo4jStore:
             "c.text AS text, c.occurred_at_ms AS occurred_at_ms",
             owner_id=owner_id,
             entity_ids=list(entity_ids),
+        )
+        return [_hydrate(row) for row in rows]
+
+    def open_commitments(
+        self,
+        owner_id: str,
+        *,
+        due_before_ms: int | None = None,
+        owed_by_entity_id: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[StoredNode]:
+        """Commitments still outstanding, newest deadline last.
+
+        ``due_before_ms`` makes it the past-due read (a commitment with no
+        deadline can never be past due, so it drops out). By default only
+        epistemically active claims count: a commitment that was reassigned
+        is still ``open``, but it is no longer what this owner is owed by
+        that person, and returning both would double-count the obligation.
+        """
+        rows = self._run(
+            "MATCH (c:Claim {owner_id: $owner_id}) "
+            "WHERE c.commitment_fulfillment = 'open' "
+            "  AND ($include_superseded OR c.claim_status = 'active') "
+            "  AND ($due_before_ms IS NULL OR c.commitment_due_at_ms < $due_before_ms) "
+            "  AND ($owed_by IS NULL OR c.commitment_owed_by = $owed_by) "
+            "RETURN c.id AS id, labels(c) AS labels, c.payload AS payload, "
+            "c.text AS text, c.occurred_at_ms AS occurred_at_ms "
+            "ORDER BY c.commitment_due_at_ms, c.id",
+            owner_id=owner_id,
+            due_before_ms=due_before_ms,
+            owed_by=owed_by_entity_id,
+            include_superseded=include_superseded,
         )
         return [_hydrate(row) for row in rows]
 

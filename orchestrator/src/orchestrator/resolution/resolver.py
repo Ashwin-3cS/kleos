@@ -38,6 +38,20 @@ def _tokens(statement: str) -> frozenset[str]:
     return frozenset(t for t in _TOKEN_RE.findall(statement.lower()) if t not in _STOPWORDS)
 
 
+def _obligation(claim: Claim) -> tuple[str | None, str | None, int | None]:
+    """The part of a commitment that is not in its statement text.
+
+    Who owes a commitment lives in the facet, not the prose, so two claims
+    can have identical statements and still be different obligations -- a
+    reassignment with the same deadline is exactly that. Without this the
+    token comparison below would write the reassignment off as a duplicate.
+    """
+    c = claim.commitment
+    if c is None:
+        return (None, None, None)
+    return (c.owed_by_entity_id, c.owed_to_entity_id, c.due_at_ms)
+
+
 @dataclass(slots=True)
 class Resolution:
     """What the resolver decided for one batch of candidates."""
@@ -89,12 +103,13 @@ class Resolver:
 
             topic = _topic(claim.statement)
             tokens = _tokens(claim.statement)
+            obligation = _obligation(claim)
             for other in existing:
                 if other.id == claim.id:
                     continue
                 if _topic(other.statement) != topic:
                     continue
-                if _tokens(other.statement) == tokens:
+                if _tokens(other.statement) == tokens and _obligation(other) == obligation:
                     continue
                 if other.status is not ClaimStatus.ACTIVE:
                     continue

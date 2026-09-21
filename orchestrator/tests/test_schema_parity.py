@@ -66,6 +66,7 @@ PY_MODELS = {
         "EncryptedContentRef",
         "Entity",
         "Event",
+        "Commitment",
         "Claim",
         "ObjectAcl",
         "Scope",
@@ -82,6 +83,7 @@ def test_struct_fields_match(name: str):
     [
         ("EntityKind", schema.EntityKind),
         ("ClaimStatus", schema.ClaimStatus),
+        ("FulfillmentStatus", schema.FulfillmentStatus),
         ("Sensitivity", permissions.Sensitivity),
         ("DenyReason", permissions.DenyReason),
     ],

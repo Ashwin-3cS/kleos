@@ -182,6 +182,14 @@ def build_ingestion_graph(runtime: Runtime):
                 written.append(claim.id)
                 for entity_id in claim.subject_entity_ids:
                     runtime.store.link(claim.id, "ABOUT", entity_id)
+                if claim.commitment is not None:
+                    runtime.store.link(
+                        claim.id, "OWED_BY", claim.commitment.owed_by_entity_id
+                    )
+                    if claim.commitment.owed_to_entity_id:
+                        runtime.store.link(
+                            claim.id, "OWED_TO", claim.commitment.owed_to_entity_id
+                        )
                 for citation in claim.provenance.citations:
                     runtime.store.link(claim.id, "CITES", citation.event_id)
                 for superseded in claim.supersedes:
