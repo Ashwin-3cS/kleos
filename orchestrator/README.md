@@ -110,6 +110,70 @@ the endpoints (`ALL(n IN nodes(path) WHERE n.owner_id = $owner_id)`), for
 the reason `neighbour_ids` is: a claim id from another owner must not be an
 existence oracle, and an intermediate hop must not leave the subgraph.
 
+## Graph neighbourhood and the explorer
+
+`graphs/neighbourhood.py` is the first read that returns **nodes and edges**
+rather than answer text:
+
+- `neighbourhood(runtime, seed_ids, grant_token, hops)` -> `Neighbourhood`.
+  Everything within `hops` of the seeds, composed from parts that already
+  exist -- `neighbour_ids` walks, `get_many` hydrates, `edges_among` returns
+  the edges internal to the walked set. Nodes carry their label, a display
+  text, `occurred_at_ms`, their sources, and for claims the status and
+  whether they carry a commitment facet. Edges carry `{from, type, to}`,
+  where the type is `MENTIONS`, `ABOUT`, `CITES`, `SUPERSEDES`,
+  `CONTRADICTS`, `OWED_BY` or `OWED_TO`.
+
+Same graph shape as the history reads (`authorize -> walk ->
+check_permissions -> assemble`), and the same rule that a caller-supplied
+scope is rejected: the scope always comes from `introspect_scope`.
+
+**A denied object is dropped here, not withheld** -- the opposite of the
+shift history, on purpose. There, the caller named a claim and asked for its
+history, so the chain's existence and length were already implied by the
+question and a silently shortened chain would have misreported the record.
+Here the caller supplies only a seed and a hop count, and the *structure is
+the answer*: id-only placeholders would let an agent whose grant reads
+nothing recover adjacency, degree and cluster density -- the map of a
+memory and where its interesting regions are -- and then re-seed on a
+placeholder id and keep walking. So a denied node leaves the result, every
+edge with a denied endpoint leaves with it (an edge is a fact about both of
+its endpoints), and what comes back instead is an aggregate: `considered`,
+`withheld`, `withheld_edges` and the distinct `withheld_reasons`, with no
+ids and no positions. The viewer learns the picture is partial and by how
+much, not where the holes are. If nothing is permitted the read declines
+with reasons, like every other read.
+
+There is deliberately **no MCP tool** for this one. It is a visualization
+payload -- an adjacency list answers no question an agent has, and the three
+existing tools (`query_memory`, `why_this_shifted`, `memory_context_chain`)
+already cover the traversals that produce agent-legible answers. Exposing it
+over MCP would hand agents a cheap structure-enumeration primitive
+(seed, walk, re-seed) for no gain in answer quality, which is exactly the
+disclosure the drop-don't-placeholder decision above is narrowing.
+
+### The explorer
+
+`GET /explorer` serves `static/explorer.html`: one self-contained page, no
+build step, no npm, no CDN, ~40 lines of hand-rolled force layout. Paste a
+grant token and a node id (or ask a question and pick a seed from the
+answer's citations), and it draws the permission-filtered neighbourhood --
+nodes coloured by label, a dashed ring for commitments, edge types on the
+line or on hover, node detail on click. Light and dark both legible.
+
+It is served by the orchestrator because it reads localhost-only data under
+a grant token typed into it; there is nowhere external it could be hosted
+without moving both off the machine.
+
+**What it shows:** exactly what the pasted grant can see -- no more, and
+nothing cached from a wider grant.
+**What it does not show:** objects the grant denies. Those are not drawn,
+not greyed out and not placeheld; when any exist the page says so in a
+banner above the drawing, with the count of hidden nodes and dropped edges
+and the deny reasons, because a filtered subgraph rendered as if it were the
+whole graph is worse than no picture at all. It never writes, and there is
+no way to widen a grant from it.
+
 ## Permissions
 
 `permissions.py` mirrors `shared/src/permissions.rs` exactly. An agent
@@ -240,7 +304,7 @@ python3 -m venv .venv
 cp .env.example .env
 
 docker compose up -d                      # neo4j :7688, redis :6380
-.venv/bin/pytest                          # 73 tests; skips if neo4j is down
+.venv/bin/pytest                          # 82 tests; skips if neo4j is down
 .venv/bin/ruff check .
 ```
 
@@ -249,6 +313,7 @@ The full Phase 2 path needs the Rust stack running too:
 ```bash
 cd .. && ./scripts/run_local.sh --with-orchestrator
 ./scripts/orchestrator_smoke.sh           # identity -> ingest -> query -> decline
+#                                         ... -> shift -> neighbourhood -> explorer
 ```
 
 To run the service by hand instead:
@@ -269,6 +334,8 @@ To run the service by hand instead:
 | `POST /query` | sync | run the query graph against a grant token |
 | `POST /memory/shift` | sync | why a decision shifted: the supersession chain and the evidence at each step |
 | `POST /memory/context` | sync | the citation chain around one object, across sources |
+| `POST /memory/neighbourhood` | sync | nodes and typed edges within `hops` of one or more seeds, permission-filtered |
+| `GET /explorer` | static | the read-only graph explorer page (open `http://127.0.0.1:8090/explorer`) |
 
 Ingestion is enqueued from day one because connecting a source means
 backfilling a large history in bursts, which is the wrong lifetime for an

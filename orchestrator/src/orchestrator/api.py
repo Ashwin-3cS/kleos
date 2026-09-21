@@ -9,20 +9,25 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .connectors.registry import REGISTRY
 from .graphs.history import context_chain, why_did_this_shift
+from .graphs.neighbourhood import neighbourhood
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
 from .jobs.queue import get_queue
 from .jobs.tasks import ingest_source
 
 log = logging.getLogger(__name__)
+
+_STATIC = Path(__file__).resolve().parent / "static"
 
 _runtime: Runtime | None = None
 
@@ -75,6 +80,14 @@ class ContextRequest(BaseModel):
     object_id: str
     grant_token: str
     hops: int = Field(default=3, ge=1, le=6)
+
+
+class NeighbourhoodRequest(BaseModel):
+    seed_ids: list[str] = Field(min_length=1, max_length=25)
+    grant_token: str
+    # Capped low on purpose: hops are the cost knob here, and 3 hops out of a
+    # busy entity already reaches most of an owner's graph.
+    hops: int = Field(default=2, ge=1, le=4)
 
 
 @app.get("/health")
@@ -177,6 +190,31 @@ def context(req: ContextRequest) -> dict[str, Any]:
     """The citation chain around one object, which crosses sources wherever
     the underlying material does."""
     return context_chain(runtime(), req.object_id, req.grant_token, hops=req.hops).as_dict()
+
+
+@app.post("/memory/neighbourhood")
+def memory_neighbourhood(req: NeighbourhoodRequest) -> dict[str, Any]:
+    """Nodes and edges within ``hops`` of the seeds, permission-filtered.
+
+    Objects the grant does not cover are dropped rather than returned as
+    placeholders -- in an open-ended walk the placeholders would themselves
+    disclose the graph's shape -- and the response reports how many were
+    dropped so the caller knows the picture is partial.
+    """
+    return neighbourhood(
+        runtime(), req.seed_ids, req.grant_token, hops=req.hops
+    ).as_dict()
+
+
+@app.get("/explorer", include_in_schema=False)
+def explorer() -> FileResponse:
+    """The read-only graph explorer: one static page over the endpoint above.
+
+    Served from the orchestrator itself because it reads localhost-only data
+    under a grant token typed into it; there is nowhere external it could be
+    hosted without moving both of those off this machine.
+    """
+    return FileResponse(_STATIC / "explorer.html", media_type="text/html")
 
 
 def main() -> None:

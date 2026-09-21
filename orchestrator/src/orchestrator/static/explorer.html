@@ -1,0 +1,248 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>memorai graph explorer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --panel: #ffffff; --line: #d9d7d2; --fg: #1b1a18;
+    --muted: #6b6862; --warn-bg: #fdf1dc; --warn-fg: #7a4b00; --warn-line: #e0b060;
+    --edge: #b4b0a8; --entity: #3d7dd1; --event: #2f9e6b; --claim: #c2603a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --panel: #1f2124; --line: #34373c; --fg: #ececec;
+      --muted: #9b9894; --warn-bg: #3a2c10; --warn-fg: #f1c67a; --warn-line: #7a5a1c;
+      --edge: #4d5158; --entity: #6fa8ea; --event: #56c295; --claim: #e0865c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input, button, select { font: inherit; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+  input { min-width: 180px; }
+  button { cursor: pointer; }
+  main { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; align-items: flex-start; }
+  #canvas { flex: 3 1 480px; min-height: 72vh; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; }
+  aside { flex: 1 1 280px; }
+  .card { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .notice { background: var(--warn-bg); color: var(--warn-fg);
+    border: 1px solid var(--warn-line); border-radius: 8px; padding: 10px 12px;
+    margin: 0 16px 0; font-weight: 500; }
+  .muted { color: var(--muted); }
+  .k { color: var(--muted); display: inline-block; min-width: 96px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 6px; vertical-align: middle; }
+  code { font-size: 12px; word-break: break-all; }
+  ul { margin: 6px 0 0; padding-left: 18px; }
+  li { cursor: pointer; }
+  circle { cursor: pointer; }
+  text { font-size: 10px; fill: var(--fg); pointer-events: none; }
+</style>
+
+<header>
+  <h1>memorai graph explorer &mdash; read-only, shows only what this grant can see</h1>
+  <form id="f">
+    <input id="token" placeholder="grant token" autocomplete="off">
+    <input id="seed" placeholder="seed node id (ent_/evt_/clm_)" autocomplete="off">
+    <select id="hops"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+    <button type="submit">Explore</button>
+    <input id="q" placeholder="or find a seed: ask a question" autocomplete="off">
+    <button type="button" id="find">Find seeds</button>
+  </form>
+</header>
+
+<div id="banner" class="notice" hidden></div>
+
+<main>
+  <svg id="canvas" role="img" aria-label="memory neighbourhood graph"></svg>
+  <aside>
+    <div class="card" id="summary"><span class="muted">Enter a grant token and a seed id.</span></div>
+    <div class="card" id="detail"><span class="muted">Click a node for its detail.</span></div>
+    <div class="card">
+      <span class="dot" style="background:var(--entity)"></span>Entity
+      <span class="dot" style="background:var(--event);margin-left:12px"></span>Event
+      <span class="dot" style="background:var(--claim);margin-left:12px"></span>Claim
+      <div class="muted" style="margin-top:6px">Dashed ring = commitment. Edge labels are
+        relationship types as stored.</div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const svg = $("canvas");
+const COLOUR = { Entity: "var(--entity)", Event: "var(--event)", Claim: "var(--claim)" };
+let sim = null;
+
+async function post(path, body) {
+  const r = await fetch(path, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${path} -> ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+$("f").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const data = await post("/memory/neighbourhood", {
+      seed_ids: [$("seed").value.trim()],
+      grant_token: $("token").value.trim(),
+      hops: Number($("hops").value),
+    });
+    render(data);
+  } catch (err) { fail(err); }
+};
+
+$("find").onclick = async () => {
+  try {
+    const a = await post("/query", { question: $("q").value, grant_token: $("token").value.trim() });
+    const ids = (a.citations || []).map((c) => c.object_id);
+    $("summary").innerHTML = a.answered
+      ? "<b>Seeds this grant can reach:</b>" +
+        `<ul>${ids.map((i) => `<li data-id="${i}"><code>${i}</code></li>`).join("")}</ul>`
+      : `<span class="muted">${escapeHtml(a.text)}</span>`;
+    $("summary").querySelectorAll("li").forEach((li) => {
+      li.onclick = () => { $("seed").value = li.dataset.id; $("f").requestSubmit(); };
+    });
+  } catch (err) { fail(err); }
+};
+
+function fail(err) {
+  $("banner").hidden = false;
+  $("banner").textContent = String(err.message || err);
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// The whole point of this page is that a filtered subgraph must not look
+// like the whole graph, so what the grant removed is stated above the
+// drawing, every time, and an empty result says why rather than going blank.
+function render(data) {
+  const banner = $("banner");
+  const bits = [];
+  if (!data.answered) bits.push(data.text);
+  if (data.withheld) {
+    bits.push(`${data.withheld} object(s) and ${data.withheld_edges} edge(s) in this ` +
+      `neighbourhood are outside this grant and are NOT drawn ` +
+      `(${data.withheld_reasons.join(", ").replace(/_/g, " ")}). ` +
+      `Their positions are not disclosed, so the shape below is partial.`);
+  }
+  banner.hidden = bits.length === 0;
+  banner.textContent = bits.join(" ");
+
+  $("summary").innerHTML =
+    `<div>${escapeHtml(data.text)}</div>` +
+    `<div class="muted" style="margin-top:6px">walked ${data.considered} &middot; ` +
+    `shown ${data.nodes.length} &middot; withheld ${data.withheld} &middot; ` +
+    `hops ${data.hops} &middot; sources ${escapeHtml(data.sources.join(", ") || "none")}</div>`;
+  $("detail").innerHTML = '<span class="muted">Click a node for its detail.</span>';
+  draw(data.nodes, data.edges);
+}
+
+function showDetail(n) {
+  const row = (k, v) => `<div><span class="k">${k}</span>${escapeHtml(v)}</div>`;
+  $("detail").innerHTML =
+    `<div style="margin-bottom:6px"><span class="dot" style="background:${COLOUR[n.label]}"></span>` +
+    `<b>${n.label}</b></div>` +
+    `<div style="margin-bottom:8px">${escapeHtml(n.text)}</div>` +
+    row("id", n.id) + row("hops from seed", n.hops) +
+    row("occurred", new Date(n.occurred_at_ms).toISOString()) +
+    row("sources", n.sources.join(", ")) +
+    (n.status ? row("claim status", n.status) : "") +
+    (n.is_commitment ? row("commitment", "yes") : "") +
+    (n.url ? `<div><span class="k">url</span><code>${escapeHtml(n.url)}</code></div>` : "");
+}
+
+// ~40 lines of force layout: repulsion between every pair, springs along
+// edges, a pull to the centre. A CDN would buy nothing at this size.
+function draw(nodes, edges) {
+  if (sim) cancelAnimationFrame(sim);
+  const W = svg.clientWidth || 640, H = Math.max(svg.clientHeight, 420);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const P = nodes.map((n, i) => ({
+    n, x: W / 2 + Math.cos(i) * (60 + 30 * n.hops), y: H / 2 + Math.sin(i) * (60 + 30 * n.hops),
+    vx: 0, vy: 0,
+  }));
+  const byId = new Map(P.map((p) => [p.n.id, p]));
+  const links = edges.map((e) => ({ a: byId.get(e.from), b: byId.get(e.to), type: e.type }))
+                     .filter((l) => l.a && l.b);
+
+  svg.innerHTML = "";
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs) => {
+    const el = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    return el;
+  };
+  const lineEls = links.map((l) => {
+    const line = svg.appendChild(mk("line", { stroke: "var(--edge)" }));
+    const title = line.appendChild(mk("title", {}));
+    title.textContent = `${l.a.n.id} ${l.type} ${l.b.n.id}`;
+    return line;
+  });
+  // Edge type labels are drawn only on a small graph: past a couple of dozen
+  // edges they overlap into noise, and the type is on hover either way.
+  const labelEls = links.length <= 20 ? links.map((l) => {
+    const t = mk("text", { fill: "var(--muted)", "font-size": 8 });
+    t.textContent = l.type;
+    return svg.appendChild(t);
+  }) : [];
+  const nodeEls = P.map((p) => {
+    const g = svg.appendChild(mk("g", {}));
+    const c = g.appendChild(mk("circle", {
+      r: p.n.hops === 0 ? 11 : 7, fill: COLOUR[p.n.label] || "var(--muted)",
+      stroke: p.n.is_commitment ? "var(--fg)" : "none",
+      "stroke-dasharray": "3 2", "stroke-width": p.n.is_commitment ? 2 : 0,
+    }));
+    const t = g.appendChild(mk("text", { dy: -12, "text-anchor": "middle" }));
+    t.textContent = p.n.text.length > 34 ? p.n.text.slice(0, 33) + "…" : p.n.text;
+    c.onclick = () => showDetail(p.n);
+    return g;
+  });
+
+  let ticks = 0;
+  const step = () => {
+    for (let i = 0; i < P.length; i++) {
+      for (let j = i + 1; j < P.length; j++) {
+        const a = P[i], b = P[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const d2 = Math.max(dx * dx + dy * dy, 25), f = 9000 / d2, d = Math.sqrt(d2);
+        dx /= d; dy /= d;
+        a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+      }
+    }
+    for (const l of links) {
+      const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y, d = Math.hypot(dx, dy) || 1;
+      const f = (d - 150) * 0.01;
+      l.a.vx += dx / d * f; l.a.vy += dy / d * f;
+      l.b.vx -= dx / d * f; l.b.vy -= dy / d * f;
+    }
+    for (const p of P) {
+      p.vx += (W / 2 - p.x) * 0.0015; p.vy += (H / 2 - p.y) * 0.0015;
+      p.vx *= 0.85; p.vy *= 0.85;
+      p.x = Math.min(W - 20, Math.max(20, p.x + p.vx));
+      p.y = Math.min(H - 20, Math.max(20, p.y + p.vy));
+    }
+    links.forEach((l, i) => {
+      lineEls[i].setAttribute("x1", l.a.x); lineEls[i].setAttribute("y1", l.a.y);
+      lineEls[i].setAttribute("x2", l.b.x); lineEls[i].setAttribute("y2", l.b.y);
+      if (!labelEls[i]) return;
+      labelEls[i].setAttribute("x", (l.a.x + l.b.x) / 2);
+      labelEls[i].setAttribute("y", (l.a.y + l.b.y) / 2);
+    });
+    P.forEach((p, i) => nodeEls[i].setAttribute("transform", `translate(${p.x},${p.y})`));
+    if (++ticks < 600) sim = requestAnimationFrame(step);
+  };
+  step();
+}
+</script>

@@ -422,5 +422,29 @@ class Neo4jStore:
         )
         return {row["id"]: int(row["hops"]) for row in rows}
 
+    def edges_among(
+        self, owner_id: str, node_ids: Iterable[str]
+    ) -> list[tuple[str, str, str]]:
+        """``(from_id, relationship_type, to_id)`` for edges whose **both**
+        endpoints are in ``node_ids``, within one owner.
+
+        Deliberately not a traversal: it is handed a closed set of ids and
+        reports only the edges internal to it. A caller that has already
+        dropped the objects a grant does not cover therefore cannot get back
+        an edge pointing at one of them.
+        """
+        ids = list(node_ids)
+        if not ids:
+            return []
+        rows = self._run(
+            "MATCH (a:Memory {owner_id: $owner_id})-[r]->(b:Memory {owner_id: $owner_id}) "
+            "WHERE a.id IN $ids AND b.id IN $ids "
+            "RETURN DISTINCT a.id AS from_id, type(r) AS rel, b.id AS to_id "
+            "ORDER BY from_id, rel, to_id",
+            owner_id=owner_id,
+            ids=ids,
+        )
+        return [(row["from_id"], row["rel"], row["to_id"]) for row in rows]
+
     def wipe_owner(self, owner_id: str) -> None:
         self._run("MATCH (n:Memory {owner_id: $owner_id}) DETACH DELETE n", owner_id=owner_id)

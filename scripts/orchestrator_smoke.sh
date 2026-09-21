@@ -151,4 +151,35 @@ curl -sf -X POST "$ORCH_URL/memory/shift" -H 'content-type: application/json' \
   | jq '{answered, considered, text, denied: [.denied[] | .reason] | unique}'
 
 echo
+echo "== 9. the graph neighbourhood around that claim (nodes + typed edges) =="
+curl -sf -X POST "$ORCH_URL/memory/neighbourhood" -H 'content-type: application/json' \
+  -d "{\"seed_ids\": [\"$CLAIM_ID\"], \"grant_token\": \"$GRANT\", \"hops\": 2}" \
+  | jq '{answered, considered, withheld, withheld_edges, sources,
+         labels: [.nodes[] | .label] | group_by(.) | map({(.[0]): length}) | add,
+         edge_types: [.edges[] | .type] | group_by(.) | map({(.[0]): length}) | add}'
+
+echo
+echo "== 9b. the same neighbourhood under a grant that cannot read confidential =="
+echo "       (denied nodes are dropped, not blanked -- only the count comes back)"
+SHALLOW=$(curl -sf -X POST "$GATEWAY_URL/memory/scope/grant" \
+  -H 'content-type: application/json' \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  -d "{\"ttl_secs\": 3600, \"scope\": {
+        \"agent_id\": \"agent-shallow\",
+        \"owner_id\": \"$OWNER_ID\",
+        \"sources\": [\"mock\"],
+        \"entity_kinds\": [\"person\", \"project\", \"artifact\", \"organization\", \"topic\"],
+        \"not_before_ms\": null, \"not_after_ms\": null,
+        \"max_sensitivity\": \"personal\", \"expires_at_ms\": null}}" | jq -r .grant_token)
+curl -sf -X POST "$ORCH_URL/memory/neighbourhood" -H 'content-type: application/json' \
+  -d "{\"seed_ids\": [\"$CLAIM_ID\"], \"grant_token\": \"$SHALLOW\", \"hops\": 2}" \
+  | jq '{answered, considered, shown: (.nodes | length), withheld, withheld_edges,
+         withheld_reasons, text}'
+
+echo
+echo "== 10. the explorer page is served =="
+curl -sf -o /dev/null -w "GET /explorer -> %{http_code} (%{size_download} bytes)\n" "$ORCH_URL/explorer"
+echo "Open $ORCH_URL/explorer and paste a grant token to browse the same data."
+
+echo
 echo "Done. Logs: .local/orchestrator.log, .local/worker.log"

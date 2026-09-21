@@ -170,7 +170,7 @@ cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                         # 73 tests
+.venv/bin/pytest                         # 82 tests
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -202,6 +202,10 @@ to see Phase 2 work:
    which citations are new in the claim that replaced it; `POST
    /memory/context` walks the citation chain around the same claim. Under
    the narrow scope the shift read declines the same way the query does.
+8. `POST /memory/neighbourhood` returns the nodes and typed edges around
+   that claim, and the same call under a grant that cannot read confidential
+   material comes back with three objects and eight edges missing and a
+   count saying so. `GET /explorer` serves the page that draws it.
 
 ## EC2 / Nitro deploy path
 
@@ -337,6 +341,42 @@ it legible, so `graphs/history.py` adds two, and adds no node type:
 Both are exposed on the orchestrator API (`POST /memory/shift`,
 `POST /memory/context`) and over MCP (`why_this_shifted`,
 `memory_context_chain`).
+
+### Seeing the record: the graph neighbourhood, and the explorer
+
+`graphs/neighbourhood.py` adds the first read shaped as **nodes and edges**
+rather than answer text: `POST /memory/neighbourhood` takes seed ids, a
+grant token and a hop count, and returns everything within that many hops --
+nodes with their label, display text, timestamp, sources and (for claims)
+status and whether they carry a commitment, plus edges carrying their stored
+type (`MENTIONS`, `ABOUT`, `CITES`, `SUPERSEDES`, `CONTRADICTS`, `OWED_BY`,
+`OWED_TO`). It composes the walk out of `neighbour_ids` and `get_many` and
+is permission-checked with the same blind-walk-then-check structure as
+everything else.
+
+Its one deliberate divergence from the history reads: **a denied object is
+dropped, not withheld as a placeholder.** A supersession history is asked
+for by naming a claim, so the chain's existence is already implied and
+dropping a step would misreport it. A neighbourhood walk is open-ended, and
+there the structure *is* the answer -- placeholders would let an agent
+holding a grant that reads nothing map adjacency, degree and clustering
+across a person's memory, then re-seed on a placeholder id and keep going.
+So denied nodes leave, every edge with a denied endpoint leaves with them,
+and the response reports only aggregates: how many objects were walked, how
+many are hidden, how many edges went with them, and the deny reasons. The
+picture is known to be partial without disclosing where the holes are.
+There is no MCP tool for it: it is a visualization payload, and handing
+agents a structure-enumeration primitive would give back exactly what that
+decision withholds.
+
+`GET /explorer` serves a single self-contained HTML page (no build step, no
+npm, no CDN) that draws it: a grant token, a seed id or a question to pick
+one from, nodes coloured by label, detail on click, light and dark. It
+renders **only what the pasted grant can see**, and whenever the grant hid
+anything it says so in a banner above the drawing, with the counts and the
+reasons -- because "you can see exactly what an agent can see" is the
+product, and a filtered subgraph drawn as if it were the whole graph would
+be the one lie the tool must not tell.
 
 **They are permission-checked with the same structure as the query graph**:
 traverse blind, then a separate node runs `permits(scope, acl, now_ms)` per
