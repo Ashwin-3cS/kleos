@@ -170,7 +170,7 @@ cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                         # 64 tests
+.venv/bin/pytest                         # 73 tests
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -197,6 +197,11 @@ to see Phase 2 work:
 6. The same question under a scope covering only GitHub/organizations
    declines explicitly: `"8 candidate memory object(s) matched, but none are
    within the requesting agent's scope (source not in scope)"`.
+7. `POST /memory/shift` walks that answer's claim back through its
+   supersessions and prints, for each one, how long the decision stood and
+   which citations are new in the claim that replaced it; `POST
+   /memory/context` walks the citation chain around the same claim. Under
+   the narrow scope the shift read declines the same way the query does.
 
 ## EC2 / Nitro deploy path
 
@@ -302,6 +307,54 @@ Three questions were open at the end of Phase 1. They are now settled:
   `settled_at_ms`. Stored as `(:Claim)-[:OWED_BY|:OWED_TO]->(:Entity)`.
 - **Provenance** -- a citation chain back to originating source events, not
   just a confidence float. Confidence is carried, but it is advisory.
+
+### Reading the record: why a decision shifted
+
+The substrate for "why did this change" was already there -- `supersedes`,
+`contradicts`, `reconciled_into`, `asserted_at_ms`, the `SUPERSEDES` and
+`CONTRADICTS` edges the ingestion graph writes, and `Provenance.citations`
+pointing back at the source events. What was missing was a *read* that makes
+it legible, so `graphs/history.py` adds two, and adds no node type:
+
+- **`why_did_this_shift(runtime, claim_id, grant_token)`** -- the ordered
+  supersession run containing that claim, and for each `SUPERSEDES` link:
+  the superseding claim, the superseded one, the interval between them, and
+  **the citations present in the superseder that were absent from the claim
+  it replaced**. That last set is the point. "B replaced A" is visible in
+  the graph already; what is worth reading is the evidence that appeared and
+  moved the decision. Unresolved `CONTRADICTS` links and `reconciled_into`
+  targets come back alongside, because an open conflict is part of the
+  story. The walk over `SUPERSEDES` is undirected, so handing it the current
+  claim, the original, or something mid-chain all answer the same question.
+- **`context_chain(runtime, object_id, grant_token, hops)`** -- what an
+  object was derived from and what was derived from it, walked over `CITES`.
+  `CITES` is `Event -> Event` keyed by event id rather than by source, so
+  the chain crosses connectors wherever the underlying material does. There
+  is deliberately **no `Thread` node type**: everything these reads need is
+  expressible as traversal over edges ingestion already writes, and a
+  speculative node type would be a second thing to keep correct.
+
+Both are exposed on the orchestrator API (`POST /memory/shift`,
+`POST /memory/context`) and over MCP (`why_this_shifted`,
+`memory_context_chain`).
+
+**They are permission-checked with the same structure as the query graph**:
+traverse blind, then a separate node runs `permits(scope, acl, now_ms)` per
+walked claim, so the assembler cannot see an unchecked one. This matters
+more here than for a plain query -- a decision superseded *because of
+evidence from a source outside the agent's grant* is both the interesting
+case and the leak.
+
+A link the grant does not cover is **withheld, not dropped and not a
+truncation point**: the claim comes back as `{id, withheld, reason}` with no
+statement, no timestamps and no citations, and the step it sits in reports
+neither its interval nor its new citations. Dropping it would silently
+misstate the record -- a two-step history rendered as one step, with no way
+for the agent to tell -- and truncating the walk there would additionally
+hide permitted claims further along for no reason. The ids stay because they
+are opaque and the query graph already returns denied candidate ids with
+reasons; when *nothing* in the chain is permitted, the read declines with
+reasons rather than returning an empty chain.
 
 **Why a commitment is a facet and not a node type.** "Alice will ship the
 migration by Friday" is a claim in every respect that matters: it can be

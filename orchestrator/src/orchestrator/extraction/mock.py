@@ -115,6 +115,30 @@ class MockExtractor:
             add_entity(EntityKind.ARTIFACT, match.group(1))
 
         kinds = sorted({e.kind for e in entities}, key=lambda k: k.value)
+        citations = [Citation(event_id=event_id, source=source, quote=record.title)]
+        # A record that points at another record -- a reply, a commit that
+        # closes an issue, a note referencing a thread elsewhere. Declared as
+        # "<connector>:<external_id>" because an event id is derived, not
+        # something a source knows. This is what makes CITES cross
+        # connectors, and the ingestion graph already turns it into an edge.
+        for reference in record.metadata.get("cites", []):
+            connector, _, external_id = str(reference).partition(":")
+            citations.append(
+                Citation(
+                    event_id=stable_id("evt", owner_id, connector, external_id),
+                    # These timestamps are the *reference's*; the cited event
+                    # carries its own, which is what a reader should use.
+                    source=SourceRef(
+                        connector=connector,
+                        external_id=external_id,
+                        url=None,
+                        occurred_at_ms=record.occurred_at_ms,
+                        ingested_at_ms=ingested_at_ms,
+                    ),
+                    quote=None,
+                )
+            )
+
         event = Event(
             id=event_id,
             owner_id=owner_id,
@@ -124,7 +148,7 @@ class MockExtractor:
             source=source,
             encrypted_content=None,
             provenance=Provenance(
-                citations=[Citation(event_id=event_id, source=source, quote=record.title)],
+                citations=citations,
                 derived_by=NAME,
                 confidence=1.0,
                 created_at_ms=ingested_at_ms,

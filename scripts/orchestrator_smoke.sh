@@ -129,4 +129,26 @@ curl -sf -X POST "$ORCH_URL/query" -H 'content-type: application/json' \
   | jq '{answered, considered, text, denied: [.denied[] | .reason] | unique}'
 
 echo
+echo "== 7. why did this decision shift, and what is it hanging off =="
+CLAIM_ID=$(curl -sf -X POST "$ORCH_URL/query" -H 'content-type: application/json' \
+  -d "{\"question\": \"What datastore will project Atlas use?\", \"grant_token\": \"$GRANT\"}" \
+  | jq -r '[.citations[] | select(.object_id | startswith("clm_")) | .object_id][0]')
+echo "seed claim: $CLAIM_ID"
+
+curl -sf -X POST "$ORCH_URL/memory/shift" -H 'content-type: application/json' \
+  -d "{\"claim_id\": \"$CLAIM_ID\", \"grant_token\": \"$GRANT\"}" \
+  | jq '{answered, considered, text,
+         steps: [.steps[] | {elapsed_ms, new_evidence: [.new_citations[] | "\(.connector)/\(.external_id)"]}]}'
+
+curl -sf -X POST "$ORCH_URL/memory/context" -H 'content-type: application/json' \
+  -d "{\"object_id\": \"$CLAIM_ID\", \"grant_token\": \"$GRANT\", \"hops\": 3}" \
+  | jq '{answered, sources, considered, nodes: [.nodes[] | {id, hops, withheld}]}'
+
+echo
+echo "== 8. the same shift read under the narrow scope (expect a decline) =="
+curl -sf -X POST "$ORCH_URL/memory/shift" -H 'content-type: application/json' \
+  -d "{\"claim_id\": \"$CLAIM_ID\", \"grant_token\": \"$NARROW\"}" \
+  | jq '{answered, considered, text, denied: [.denied[] | .reason] | unique}'
+
+echo
 echo "Done. Logs: .local/orchestrator.log, .local/worker.log"

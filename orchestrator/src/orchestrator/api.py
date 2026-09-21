@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .connectors.registry import REGISTRY
+from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
 from .jobs.queue import get_queue
@@ -63,6 +64,17 @@ class QueryRequest(BaseModel):
     question: str
     grant_token: str
     top_k: int = Field(default=8, ge=1, le=50)
+
+
+class ShiftRequest(BaseModel):
+    claim_id: str
+    grant_token: str
+
+
+class ContextRequest(BaseModel):
+    object_id: str
+    grant_token: str
+    hops: int = Field(default=3, ge=1, le=6)
 
 
 @app.get("/health")
@@ -151,6 +163,20 @@ def ingest_status(job_id: str) -> dict[str, Any]:
 def query(req: QueryRequest) -> dict[str, Any]:
     answer = run_query(runtime(), req.question, req.grant_token, top_k=req.top_k)
     return answer.as_dict()
+
+
+@app.post("/memory/shift")
+def shift(req: ShiftRequest) -> dict[str, Any]:
+    """Why a decision shifted: the supersession chain and the evidence that
+    moved it. Permission-checked per claim, like every other read."""
+    return why_did_this_shift(runtime(), req.claim_id, req.grant_token).as_dict()
+
+
+@app.post("/memory/context")
+def context(req: ContextRequest) -> dict[str, Any]:
+    """The citation chain around one object, which crosses sources wherever
+    the underlying material does."""
+    return context_chain(runtime(), req.object_id, req.grant_token, hops=req.hops).as_dict()
 
 
 def main() -> None:

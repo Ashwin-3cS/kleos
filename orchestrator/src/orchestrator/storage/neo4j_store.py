@@ -312,6 +312,97 @@ class Neo4jStore:
         )
         return [(_hydrate(row), float(row["score"])) for row in rows[:top_k]]
 
+    def get_many(self, owner_id: str, node_ids: Iterable[str]) -> list[StoredNode]:
+        """Bulk ``get``, constrained to one owner.
+
+        ``get`` looks an id up globally, which is right for the resolver's
+        "have I stored this already?" check. Anything that hands ids to a
+        *reader* has to stay inside the owner's subgraph instead.
+        """
+        rows = self._run(
+            "MATCH (n:Memory {owner_id: $owner_id}) WHERE n.id IN $ids "
+            "RETURN n.id AS id, labels(n) AS labels, n.payload AS payload, "
+            "n.text AS text, n.occurred_at_ms AS occurred_at_ms",
+            owner_id=owner_id,
+            ids=list(node_ids),
+        )
+        return [_hydrate(row) for row in rows]
+
+    def supersession_chain(
+        self, owner_id: str, claim_id: str, max_hops: int = 24
+    ) -> list[StoredNode]:
+        """Every claim in the supersession run containing ``claim_id``, oldest first.
+
+        The walk is **undirected** on purpose: a caller holding a claim id
+        may be holding the current claim, the original, or something in the
+        middle, and all three have to answer the same question. Following
+        ``SUPERSEDES`` only outward would answer it for one of the three.
+
+        Every node on the path is owner-constrained, not just the endpoints:
+        an intermediate hop through another owner's claim would pull their
+        claims into the chain.
+        """
+        rows = self._run(
+            f"MATCH (seed:Claim {{id: $id, owner_id: $owner_id}}) "
+            f"OPTIONAL MATCH path = (seed)-[:SUPERSEDES*1..{int(max_hops)}]-(c:Claim) "
+            "WHERE ALL(n IN nodes(path) WHERE n.owner_id = $owner_id) "
+            "WITH seed, collect(DISTINCT c) AS others "
+            "UNWIND (others + [seed]) AS n "
+            "RETURN DISTINCT n.id AS id, labels(n) AS labels, n.payload AS payload, "
+            "n.text AS text, n.occurred_at_ms AS occurred_at_ms "
+            "ORDER BY occurred_at_ms, id",
+            id=claim_id,
+            owner_id=owner_id,
+        )
+        return [_hydrate(row) for row in rows]
+
+    def conflict_links(self, owner_id: str, claim_ids: Iterable[str]) -> list[tuple[str, str]]:
+        """``(claim, contradicted claim)`` pairs touching any of ``claim_ids``."""
+        rows = self._run(
+            "MATCH (a:Claim {owner_id: $owner_id})-[:CONTRADICTS]->(b:Claim {owner_id: $owner_id}) "
+            "WHERE a.id IN $ids OR b.id IN $ids "
+            "RETURN DISTINCT a.id AS from_id, b.id AS to_id ORDER BY from_id, to_id",
+            owner_id=owner_id,
+            ids=list(claim_ids),
+        )
+        return [(row["from_id"], row["to_id"]) for row in rows]
+
+    def cites_chain(
+        self, owner_id: str, node_id: str, hops: int = 3
+    ) -> tuple[dict[str, int], list[tuple[str, str]]]:
+        """``CITES`` neighbourhood of ``node_id``: hop distances and edges.
+
+        ``CITES`` is the edge that means "this was derived from that", and it
+        is keyed by event id rather than by source, so a chain over it
+        crosses connectors wherever the underlying material does. Walked
+        undirected: what an event was derived from and what was later derived
+        from it are both context.
+        """
+        depth = int(hops)
+        owner_ok = "ALL(n IN nodes(path) WHERE n.owner_id = $owner_id)"
+        nodes = self._run(
+            f"MATCH (seed:Memory {{id: $id, owner_id: $owner_id}}) "
+            f"MATCH path = (seed)-[:CITES*1..{depth}]-(other:Memory) "
+            f"WHERE {owner_ok} "
+            "RETURN other.id AS id, min(length(path)) AS hops",
+            id=node_id,
+            owner_id=owner_id,
+        )
+        edges = self._run(
+            f"MATCH (seed:Memory {{id: $id, owner_id: $owner_id}}) "
+            f"MATCH path = (seed)-[:CITES*1..{depth}]-(:Memory) "
+            f"WHERE {owner_ok} "
+            "UNWIND relationships(path) AS r "
+            "RETURN DISTINCT startNode(r).id AS from_id, endNode(r).id AS to_id "
+            "ORDER BY from_id, to_id",
+            id=node_id,
+            owner_id=owner_id,
+        )
+        return (
+            {row["id"]: int(row["hops"]) for row in nodes},
+            [(row["from_id"], row["to_id"]) for row in edges],
+        )
+
     def neighbour_ids(
         self, owner_id: str, node_ids: Iterable[str], hops: int = 2
     ) -> dict[str, int]:

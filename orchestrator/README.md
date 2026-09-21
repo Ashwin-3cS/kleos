@@ -25,6 +25,10 @@ query graph       authorize ----------------->
                   retrieve  (Neo4j + LlamaIndex)
                   permission-check
                   assemble / decline
+history graphs    authorize ----------------->
+                  walk      (Neo4j traversal)
+                  permission-check
+                  assemble / decline
 ```
 
 The only point in the pipeline that crosses the trust boundary is the
@@ -71,6 +75,40 @@ Edges: `(:Event)-[:MENTIONS]->(:Entity)`, `(:Claim)-[:ABOUT]->(:Entity)`,
 `(:Claim|:Event)-[:CITES]->(:Event)`, `(:Claim)-[:SUPERSEDES]->(:Claim)`,
 `(:Claim)-[:CONTRADICTS]->(:Claim)`, and, for the commitment facet,
 `(:Claim)-[:OWED_BY]->(:Entity)` / `(:Claim)-[:OWED_TO]->(:Entity)`.
+
+## History reads
+
+`graphs/history.py` holds two reads over what ingestion already wrote --
+no new node type, no re-derivation:
+
+- `why_did_this_shift(runtime, claim_id, grant_token)` -> `ShiftHistory`.
+  The supersession run containing `claim_id`, oldest first, plus one entry
+  per `SUPERSEDES` link carrying the two claims, the interval between them
+  and **the citations new in the superseder** -- the evidence that moved the
+  decision. `CONTRADICTS` links touching the chain and any
+  `reconciled_into` targets ride along. The walk is undirected, so the head,
+  the tail and the middle of a chain all answer the same question.
+- `context_chain(runtime, object_id, grant_token, hops)` -> `ContextChain`.
+  The `CITES` neighbourhood of one object: what it was derived from and what
+  was derived from it. `CITES` is keyed by event id, not by source, so the
+  chain crosses connectors wherever the material does -- which is why there
+  is no `Thread` node type.
+
+Both are LangGraph graphs with the query graph's shape
+(`authorize -> walk -> check_permissions -> assemble`) for the same reason:
+the walk is permission-blind and a separate node evaluates every object, so
+the assembler cannot emit an unchecked claim. A claim outside the grant is
+**withheld** -- id and deny reason only, no statement, no timestamps, no
+citations -- and the step containing it reports neither its interval nor its
+new citations, since those name the un-granted source's contribution.
+Withheld rather than dropped, because a silently shortened chain misstates
+the record. If nothing in the chain is permitted the read declines with
+reasons, exactly like the query graph.
+
+Traversals are owner-constrained at **every node on the path**, not just at
+the endpoints (`ALL(n IN nodes(path) WHERE n.owner_id = $owner_id)`), for
+the reason `neighbour_ids` is: a claim id from another owner must not be an
+existence oracle, and an intermediate hop must not leave the subgraph.
 
 ## Permissions
 
@@ -183,7 +221,11 @@ services, mirroring the enclave's `mock` feature:
 - `connectors/chatgpt.py` -- a bundled fixture export, parsed by the same
   code path as a real one, so the `chatgpt` source works with no export file
   on disk.
-- `extraction/mock.py` -- deterministic rule-based extraction, no LLM.
+- `extraction/mock.py` -- deterministic rule-based extraction, no LLM. A
+  record may declare `metadata={"cites": ["<connector>:<external_id>"]}`,
+  which becomes a citation on the extracted event and therefore a `CITES`
+  edge to another source's event -- the cross-source case the context-chain
+  read exists for.
 - `retrieval/embeddings.py` -- hashed-token unit vectors: stable across
   processes, not semantic, no key required.
 
@@ -198,7 +240,7 @@ python3 -m venv .venv
 cp .env.example .env
 
 docker compose up -d                      # neo4j :7688, redis :6380
-.venv/bin/pytest                          # 64 tests; skips if neo4j is down
+.venv/bin/pytest                          # 73 tests; skips if neo4j is down
 .venv/bin/ruff check .
 ```
 
@@ -225,6 +267,8 @@ To run the service by hand instead:
 | `POST /ingest` | **enqueued** (202, job id) | run the ingestion graph for one source |
 | `GET /ingest/{job_id}` | sync | job status and result |
 | `POST /query` | sync | run the query graph against a grant token |
+| `POST /memory/shift` | sync | why a decision shifted: the supersession chain and the evidence at each step |
+| `POST /memory/context` | sync | the citation chain around one object, across sources |
 
 Ingestion is enqueued from day one because connecting a source means
 backfilling a large history in bursts, which is the wrong lifetime for an

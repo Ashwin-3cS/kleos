@@ -14,6 +14,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
 
@@ -41,6 +42,27 @@ def query_memory(question: str, grant_token: str, top_k: int = 8) -> dict:
     """
     answer = run_query(_get_runtime(), question, grant_token, top_k=top_k)
     return answer.as_dict()
+
+
+@mcp.tool()
+def why_this_shifted(claim_id: str, grant_token: str) -> dict:
+    """Why a decision changed: the ordered supersession chain for one claim,
+    and at each step the citations that appear in the superseding claim and
+    not in the one it replaced -- the evidence that moved the decision.
+
+    Accepts the current claim, the original, or anything in between. Links a
+    grant does not cover come back withheld, with a reason and no content,
+    rather than being silently dropped from the chain.
+    """
+    return why_did_this_shift(_get_runtime(), claim_id, grant_token).as_dict()
+
+
+@mcp.tool()
+def memory_context_chain(object_id: str, grant_token: str, hops: int = 3) -> dict:
+    """What an object was derived from and what was derived from it, walked
+    over citation edges. Chains cross sources wherever the material does.
+    """
+    return context_chain(_get_runtime(), object_id, grant_token, hops=hops).as_dict()
 
 
 def main() -> None:
