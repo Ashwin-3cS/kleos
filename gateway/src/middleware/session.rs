@@ -1,8 +1,17 @@
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
+/// Marks this as an owner session and not some other token signed with the
+/// same secret. Without it, session and grant tokens are distinguishable only
+/// because their claim shapes happen to be disjoint and serde rejects a
+/// missing field -- an accident of the structs, not a defence. Adding an
+/// optional field to either one would silently make them interchangeable.
+const TOKEN_TYPE: &str = "session";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionClaims {
+    #[serde(default)]
+    pub typ: String,
     pub owner_id: String,
     pub exp: usize,
 }
@@ -14,6 +23,7 @@ pub fn issue_session_token(
 ) -> anyhow::Result<String> {
     let exp = (chrono_now_secs() + ttl_secs) as usize;
     let claims = SessionClaims {
+        typ: TOKEN_TYPE.to_string(),
         owner_id: owner_id.to_string(),
         exp,
     };
@@ -31,6 +41,9 @@ pub fn validate_session_token(token: &str, secret: &str) -> anyhow::Result<Sessi
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::default(),
     )?;
+    if data.claims.typ != TOKEN_TYPE {
+        anyhow::bail!("token is not an owner session token");
+    }
     Ok(data.claims)
 }
 
