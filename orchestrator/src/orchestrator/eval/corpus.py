@@ -10,7 +10,7 @@ that ... by <date>`), because the harness measures **retrieval and
 resolution**, not extraction coverage. If the extractor silently failed to
 produce a claim, every metric below would move and the cause would look like a
 ranking problem. Extraction quality is its own measurement, against a live LLM,
-and it is the next Phase 0 item.
+and it is the next step 0 item.
 
 What the corpus is shaped to contain:
 

@@ -21,12 +21,12 @@ template at `suiverify/nautilus-attestation-backend/` -- its NSM attestation
 logic and socat-based VSOCK bridging pattern. That project is read-only
 reference material and is not part of this repo.
 
-`PLAN.md` sets out where this goes next: a voice-first personal assistant with
-hardware nodes, a privacy gateway and a local-first hub, with Kleos as the
-memory and permissions core. `docs/adr/` carries the decisions -- one per file,
-immutable once accepted, a reversal getting its own ADR rather than an edit.
-**Phase 0** (hardening, plus measuring whether the central bet is real) is
-mostly done; see "Phase 0" below for what it changed and what it found.
+What is here is the memory and permissions core of a larger thing: a
+voice-first personal assistant, with Kleos as the layer that remembers and
+decides who may read what. "Where this is going" below is the target
+architecture and the order it has to be built in. `docs/adr/` carries the
+decisions -- one per file, immutable once accepted, a reversal getting its own
+ADR rather than an edit.
 
 ## Architecture
 
@@ -62,6 +62,89 @@ orchestrator/ (Python: LangGraph + LlamaIndex)
         v
 Neo4j (entities, events, claims, edges, native vector index) + Redis (RQ jobs)
 ```
+
+### Where this is going
+
+The memory core above is one layer of a voice-first assistant: small hardware
+nodes in each room that listen and answer, a local-first hub that coordinates
+them, and a privacy gateway that is the only thing allowed to talk to an
+external model. Privacy as a structural property rather than a promise means
+the boundaries below are where the design lives, not the features.
+
+```
+room node (Pi / ESP32-S3)            one per room
+  - hardware mute switch that physically cuts the mic; status LED
+  - on-device wake word + VAD: nothing leaves the device before the wake word
+        |  mTLS, per-device identity
+        v
+hub (mini PC, local-first)           <- the coordination layer
+  - runs the orchestrator locally; small local model for extraction + intents
+  - streamed STT -> model -> streamed TTS, budget ~1s to first audio
+  - speaker identification: each utterance attributed to an owner,
+    unknown speakers are guests and are never ingested
+  - session handoff between rooms, and to a phone/desktop client
+        |                                   |
+        |  scoped grant over MCP            |  encrypted sync, user-held keys
+        v                                   v
+KLEOS (this repo)                     enclave-backed cloud
+  - resolved memory, query-time permissions, the read log
+  - transcripts become events; audio is never stored
+        |
+        v
+privacy gateway                      <- the only path to an external model
+  - PII redaction / pseudonymisation out, reversed on the way back
+  - minimal-context builder: never send whole memory
+  - zero-retention, no-training provider terms; swappable providers
+  - local_only mode that makes no external call at all
+  - every outbound payload logged and shown to the user
+```
+
+Two things in that diagram are the whole point. The **mute switch is
+hardware**, because a software mute is a promise and a cut wire is a property.
+And the **privacy gateway is a chokepoint**, because "we only send the minimum"
+is checkable only if there is exactly one place that can send anything.
+
+Built in dependency order. Each step's exit test is a measurement, not a
+passing suite, and a step that fails its exit test stops the next one:
+
+| | step | exit test |
+|---|---|---|
+| **0** | Harden the core; measure whether a resolved record beats plain retrieval | a number comparing the two — **done**, see "Step 0" below |
+| **1** | Voice prototype, cloud-first: one room, one node | 20-turn conversation with p50/p95 latency per stage; mute switch verified to stop capture |
+| **2** | Privacy gateway, and the assistant answering from memory | correct cited answer; outbound log shows only redacted minimal context; `local_only` makes zero external calls |
+| **3** | Voice becomes memory: speaker ID, transcript connector, consolidation | eval does not regress; guest speech provably never stored; deleting a memory removes it from retrieval *and* derived claims |
+| **4** | Local-first hub, and the extraction decision | common requests work offline; the local-vs-frontier extraction gap is measured and the choice recorded in an ADR |
+| **5** | Multi-room, multi-user, real sources (Google, GitHub) | two-person household leak test; real Gmail data flows end to end with the host never holding a refresh token |
+| **6** | Actions and agent safety: tool risk tiers, revocation list | red-team suite passes; every action traceable; revoking a grant takes effect immediately |
+| **7** | Production hardening and closed beta | security review findings resolved or accepted in writing; beta metrics meet the targets |
+
+Robots and other actuators are not a separate step: they are tools in step 6's
+registry, each with its own risk tier and grant. Nothing above should need
+redesign to add one.
+
+Four decisions are deliberately open, and each gets an ADR when it is made:
+**where extraction runs** (step 4 — the tension below under "the
+confidentiality model"), **whether `assemble` synthesises or formats** (step 2),
+**the retention policy for transcripts and derived memory** (step 3), and
+**whether to adopt on-chain components at all** (step 7, only if beta users
+demonstrably need them).
+
+### Invariants
+
+These hold across every step above. A change that weakens one is a change to
+the architecture, not an implementation detail:
+
+- `permits()` stays pure, total and deny-by-default; a multi-source ACL
+  requires *all* its sources in scope.
+- Retrieval stays permission-blind, and the permission check stays its own
+  graph node between retrieval and assembly.
+- Traversals stay owner-constrained at every node on the path, not just at the
+  endpoints.
+- The withhold-vs-drop asymmetry between the history reads and the
+  neighbourhood read stays intact (see "Seeing the record" below).
+- Raw audio is never stored by default, and no real personal data goes into
+  fixtures, logs or commits.
+- The README says what is mocked, stubbed, or never run on real hardware.
 
 **Why verification happens in the enclave and not the gateway:** the NSM
 attestation only means something if the thing it's attesting actually
@@ -188,7 +271,7 @@ cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 .venv/bin/pytest                         # 146 tests
-.venv/bin/python -m orchestrator.eval    # the Phase 0 exit test
+.venv/bin/python -m orchestrator.eval    # the step 0 exit test
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -665,10 +748,16 @@ Typed, with real signatures, failing explicitly rather than silently:
   the query graph as a tool over stdio. It is implemented but has not been
   driven from a real MCP client.
 
-## Phase 0: hardening, and testing the central bet
+## Step 0: hardening, and testing the central bet
 
-`PLAN.md` Phase 0 does two things: fix what was known to be wrong, and find out
-whether the thing the whole project assumes is actually true.
+> A note on numbering, since there are two schemes. **Phase 1** and **Phase 2**
+> above are historical: what was built, in the order it was built. The numbered
+> **steps** under "Where this is going" are the forward roadmap. Step 0 is the
+> first of those, and it is the one that overlaps the present.
+
+Step 0 of "Where this is going" does two things: fix what was known to be
+wrong, and find out whether the thing the whole project assumes is actually
+true.
 
 ### What the eval found
 
@@ -736,7 +825,7 @@ outcome. See ADR 0006.
   grants and OAuth state. ADR 0004.
 - **`scripts/services.sh`** for environments with no `docker compose` plugin.
 
-### Phase 0 still open
+### Step 0 still open
 
 - **Live LLM extraction and a real embedding model**, on a consenting owner's
   own export. Needs an API key. Until then the eval's absolute numbers mean
