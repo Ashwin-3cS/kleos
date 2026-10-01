@@ -29,7 +29,7 @@ pub async fn seal_encrypt(
     headers: HeaderMap,
     Json(req): Json<SealEncryptRequest>,
 ) -> Result<Json<SealEncryptResponse>, GatewayError> {
-    let session = require_session(&headers, &state.config.session_jwt_secret)?;
+    let session = require_session(&headers, state.config.keys.session())?;
     let req = SealEncryptRequest {
         owner_id: session.owner_id,
         plaintext_b64: req.plaintext_b64,
@@ -47,7 +47,7 @@ pub async fn scope_grant(
     headers: HeaderMap,
     Json(req): Json<ScopeGrantRequest>,
 ) -> Result<Json<ScopeGrantResponse>, GatewayError> {
-    let session = require_session(&headers, &state.config.session_jwt_secret)?;
+    let session = require_session(&headers, state.config.keys.session())?;
     if req.scope.owner_id != session.owner_id {
         return Err(GatewayError::Unauthorized(
             "cannot grant a scope over another owner's memory".into(),
@@ -60,7 +60,7 @@ pub async fn scope_grant(
     }
 
     let (grant_token, expires_at_ms) =
-        issue_grant_token(&req.scope, req.ttl_secs, &state.config.session_jwt_secret)
+        issue_grant_token(&req.scope, req.ttl_secs, state.config.keys.grant())
             .map_err(|e| GatewayError::Internal(format!("failed to mint grant: {e}")))?;
 
     Ok(Json(ScopeGrantResponse {
@@ -76,7 +76,7 @@ pub async fn scope_introspect(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScopeIntrospectRequest>,
 ) -> Result<Json<ScopeIntrospectResponse>, GatewayError> {
-    let scope = validate_grant_token(&req.grant_token, &state.config.session_jwt_secret)
+    let scope = validate_grant_token(&req.grant_token, state.config.keys.grant())
         .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
     Ok(Json(ScopeIntrospectResponse {
         active: true,

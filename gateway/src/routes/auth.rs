@@ -56,7 +56,7 @@ pub async fn authorize(
 
     let issued = issue_state(
         provider.as_str(),
-        &state.config.oauth_state_secret,
+        state.config.keys.oauth_state(),
         state.config.oauth_state_ttl_secs,
     )?;
     let expires_at_secs = now_secs() + state.config.oauth_state_ttl_secs;
@@ -142,7 +142,7 @@ pub async fn callback(
     State(state): State<Arc<AppState>>,
     Query(query): Query<AuthCallbackQuery>,
 ) -> Result<Json<AuthCallbackResponse>, GatewayError> {
-    let claims = validate_state(&query.state, &state.config.oauth_state_secret)?;
+    let claims = validate_state(&query.state, state.config.keys.oauth_state())?;
     let pending = state.pending_auth.take(&claims.state_id).ok_or_else(|| {
         GatewayError::Unauthorized(
             "oauth state is unknown, expired, or has already been used".into(),
@@ -195,7 +195,7 @@ pub async fn callback(
 
     let session_token = crate::middleware::session::issue_session_token(
         &owner_id,
-        &state.config.session_jwt_secret,
+        state.config.keys.session(),
         state.config.session_ttl_secs,
     )
     .map_err(|e| GatewayError::Internal(format!("failed to issue session: {e}")))?;
@@ -231,7 +231,7 @@ pub async fn session(
     let verified = state.enclave.verify_identity(&req).await?;
     let session_token = crate::middleware::session::issue_session_token(
         &verified.identity.owner_id,
-        &state.config.session_jwt_secret,
+        state.config.keys.session(),
         state.config.session_ttl_secs,
     )
     .map_err(|e| GatewayError::Internal(format!("failed to issue session: {e}")))?;
@@ -240,6 +240,45 @@ pub async fn session(
         session_token,
         identity: verified.identity,
         attestation: verified.attestation,
+    }))
+}
+
+/// Resolves an owner session token to the owner id it was issued for.
+///
+/// The mirror of `/memory/scope/introspect`, and it exists for the same
+/// reason: the orchestrator holds no signing key, so anything it must
+/// authenticate it has to ask the gateway about. The read log is the first
+/// *owner*-authenticated thing the orchestrator serves -- every other read it
+/// does is authorised by an agent grant -- and an owner's record of which
+/// agents read what must not be readable by an agent. See ADR 0005.
+///
+/// Returns only the owner id. Nothing else in the session claims is useful to
+/// the caller, and echoing a token's contents back is how a debugging
+/// convenience becomes an oracle.
+#[derive(Debug, Deserialize)]
+pub struct SessionIntrospectRequest {
+    pub session_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionIntrospectResponse {
+    pub active: bool,
+    pub owner_id: String,
+}
+
+pub async fn session_introspect(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SessionIntrospectRequest>,
+) -> Result<Json<SessionIntrospectResponse>, GatewayError> {
+    let claims = crate::middleware::session::validate_session_token(
+        &req.session_token,
+        state.config.keys.session(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid session: {e}")))?;
+
+    Ok(Json(SessionIntrospectResponse {
+        active: true,
+        owner_id: claims.owner_id,
     }))
 }
 

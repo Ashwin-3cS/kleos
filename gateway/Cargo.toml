@@ -29,6 +29,9 @@ jsonwebtoken = "9"
 async-trait = "0.1"
 rand = "0.8"
 sha2 = "0.10"
+# Per-purpose signing keys are derived with HMAC-SHA256 rather than a
+# prefix hash, so a derived key reveals nothing about the root. See keys.rs.
+hmac = "0.12"
 # Chosen over sqlx/diesel deliberately: the gateway needs exactly one table
 # and one idempotent CREATE TABLE IF NOT EXISTS, and tokio-postgres is the
 # thinnest thing in the tokio ecosystem already in this tree that does it.

@@ -237,7 +237,7 @@ async fn a_session_token_cannot_be_used_as_state() {
     let state = gateway_with_enclave().await;
     let session = gateway::middleware::session::issue_session_token(
         "owner-1",
-        &state.config.oauth_state_secret,
+        state.config.keys.oauth_state(),
         600,
     )
     .unwrap();

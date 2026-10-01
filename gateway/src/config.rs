@@ -1,3 +1,4 @@
+use crate::keys::SigningKeys;
 use std::env;
 
 #[derive(Debug, Clone)]
@@ -5,12 +6,10 @@ pub struct Config {
     pub gateway_port: u16,
     pub enclave_host: String,
     pub enclave_port: u16,
-    pub session_jwt_secret: String,
+    /// Per-purpose signing keys, derived from one root secret so that no two
+    /// of them are ever accidentally equal. See `keys.rs` and ADR 0004.
+    pub keys: SigningKeys,
     pub session_ttl_secs: usize,
-    /// Signs the OAuth `state` parameter. Separate from the session secret
-    /// by default so a compromise of one does not mint the other; falls back
-    /// to the session secret only so local dev needs one variable.
-    pub oauth_state_secret: String,
     pub oauth_state_ttl_secs: u64,
     /// Client *ids* only. The matching secrets live in the enclave's
     /// environment and deliberately not here -- see enclave/src/config.rs.
@@ -24,10 +23,15 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_env() -> Self {
-        let session_jwt_secret = env::var("SESSION_JWT_SECRET")
-            .unwrap_or_else(|_| "dev-insecure-secret-change-me".to_string());
-        Self {
+    /// Reads configuration from the environment.
+    ///
+    /// Fallible only because of the signing keys: a gateway that boots with the
+    /// public development secret in `nitro` mode looks like it is working,
+    /// which is worse than one that refuses to boot.
+    pub fn from_env() -> anyhow::Result<Self> {
+        let nitro = env::var("ENCLAVE_MODE").map(|m| m == "nitro").unwrap_or(false);
+        Ok(Self {
+            keys: SigningKeys::from_env(nitro)?,
             gateway_port: env::var("GATEWAY_PORT")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -45,13 +49,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3600),
-            oauth_state_secret: env::var("OAUTH_STATE_SECRET")
-                .unwrap_or_else(|_| session_jwt_secret.clone()),
             oauth_state_ttl_secs: env::var("OAUTH_STATE_TTL_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(600),
-            session_jwt_secret,
             google_client_id: env::var("GOOGLE_CLIENT_ID").unwrap_or_default(),
             google_redirect_uri: env::var("GOOGLE_REDIRECT_URI")
                 .unwrap_or_else(|_| "http://127.0.0.1:8080/auth/callback".to_string()),
@@ -61,7 +62,7 @@ impl Config {
             sealed_token_store_url: env::var("SEALED_TOKEN_STORE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-        }
+        })
     }
 
     /// Mock/dev defaults; also what the test suites build on.
@@ -70,9 +71,8 @@ impl Config {
             gateway_port: 8080,
             enclave_host: "127.0.0.1".to_string(),
             enclave_port: 4000,
-            session_jwt_secret: "test-secret".to_string(),
+            keys: SigningKeys::mock(),
             session_ttl_secs: 3600,
-            oauth_state_secret: "test-state-secret".to_string(),
             oauth_state_ttl_secs: 600,
             google_client_id: "mock-google-client-id".to_string(),
             google_redirect_uri: "http://127.0.0.1:8080/auth/callback".to_string(),
