@@ -3,19 +3,16 @@ use serde::{Deserialize, Serialize};
 
 /// How sensitive a piece of stored memory is. Ordered: a scope granting
 /// `Confidential` also admits everything below it.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Sensitivity {
     Public = 0,
+    /// The default, deliberately not `Public`: an object whose sensitivity is
+    /// missing must not be the most widely readable thing in the store.
+    #[default]
     Personal = 1,
     Confidential = 2,
     Restricted = 3,
-}
-
-impl Default for Sensitivity {
-    fn default() -> Self {
-        Sensitivity::Personal
-    }
 }
 
 /// The access-control facts a stored object carries so that a permission
