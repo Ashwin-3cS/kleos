@@ -38,6 +38,9 @@ class IngestionState(TypedDict, total=False):
     candidates: list[dict]
     sealed: dict[str, dict]
     written: Annotated[list[str], _extend]
+    #: Counted in the ``write`` node, by label, as rows actually land.
+    written_by_label: dict[str, int]
+    skipped: int
     supersessions: list[list[str]]
     contradictions: list[list[str]]
     errors: Annotated[list[str], _extend]
@@ -45,12 +48,24 @@ class IngestionState(TypedDict, total=False):
 
 @dataclass(slots=True)
 class IngestionResult:
+    """What ingestion *wrote*, not what it considered.
+
+    The counts come from the ``write`` node as rows land, not from the
+    candidate set. Those two numbers differ exactly when something went
+    wrong -- an event whose sensitive body could not be sealed is skipped
+    rather than stored in the clear -- and a report that counts candidates
+    says "7 events" on a run that stored six, which is the one thing an
+    ingestion report must not do.
+    """
+
     owner_id: str
     records: int = 0
     entities: int = 0
     events: int = 0
     claims: int = 0
     sealed: int = 0
+    #: Objects dropped before the write, each with a reason in ``errors``.
+    skipped: int = 0
     supersessions: list[tuple[str, str]] = field(default_factory=list)
     contradictions: list[tuple[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -63,6 +78,7 @@ class IngestionResult:
             "events": self.events,
             "claims": self.claims,
             "sealed": self.sealed,
+            "skipped": self.skipped,
             "supersessions": [list(p) for p in self.supersessions],
             "contradictions": [list(p) for p in self.contradictions],
             "errors": self.errors,
@@ -150,9 +166,30 @@ def build_ingestion_graph(runtime: Runtime):
         return {"sealed": sealed, "errors": errors}
 
     def write(state: IngestionState) -> dict:
+        """Persists the resolved batch, and the sealed bytes it depends on.
+
+        The counts returned here are what *landed*, label by label, because
+        the alternative -- counting candidates -- reports a success number for
+        a run that skipped something. An event whose sensitive body could not
+        be sealed is skipped, never downgraded to a plaintext write.
+        """
+        owner_id = state["owner_id"]
         sealed = state.get("sealed", {})
         written: list[str] = []
         errors: list[str] = []
+        # Distinct ids, not upsert calls. An entity mentioned in five records
+        # is upserted five times and is one node; reporting five would be the
+        # same overcount in the other direction from counting candidates.
+        touched: dict[str, set[str]] = {"entities": set(), "events": set(), "claims": set()}
+        skipped = 0
+
+        def link(from_id: str, rel: str, to_id: str) -> None:
+            # An unwritten endpoint is ordinary: a citation can name an event
+            # from a record this batch skipped, or one a later batch brings in.
+            # A *cross-owner* endpoint is not ordinary, and `link` refuses it
+            # either way -- so a miss is logged at debug and not an error.
+            if not runtime.store.link(owner_id, from_id, rel, to_id):
+                log.debug("ingestion.write unlinked %s-[:%s]->%s", from_id, rel, to_id)
 
         for raw in state.get("candidates", []):
             candidate = Candidate.model_validate(raw)
@@ -160,46 +197,59 @@ def build_ingestion_graph(runtime: Runtime):
             for entity in candidate.entities:
                 _upsert(runtime, entity, entity.name + " " + " ".join(entity.aliases))
                 written.append(entity.id)
+                touched["entities"].add(entity.id)
 
             for event in candidate.events:
                 blob = sealed.get(event.source.external_id)
                 if blob is not None:
-                    event.encrypted_content = _ref_of(blob)
+                    try:
+                        event.encrypted_content = _store_blob(runtime, owner_id, blob)
+                    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                        # Same rule as a failed seal: no fallback that writes
+                        # the plaintext body. A ref whose bytes are not stored
+                        # is worse than no event -- it reads as recoverable.
+                        errors.append(f"skipped {event.id}: sealed body not persisted: {exc}")
+                        skipped += 1
+                        continue
                     event.body = None
                 elif _needs_seal(state, event.source.external_id):
                     errors.append(f"skipped {event.id}: sensitive body was not sealed")
+                    skipped += 1
                     continue
                 _upsert(runtime, event, f"{event.summary} {event.body or ''}")
                 written.append(event.id)
+                touched["events"].add(event.id)
                 for entity_id in event.entity_ids:
-                    runtime.store.link(event.id, "MENTIONS", entity_id)
+                    link(event.id, "MENTIONS", entity_id)
                 for citation in event.provenance.citations:
                     if citation.event_id != event.id:
-                        runtime.store.link(event.id, "CITES", citation.event_id)
+                        link(event.id, "CITES", citation.event_id)
 
             for claim in candidate.claims:
                 _upsert(runtime, claim, claim.statement)
                 written.append(claim.id)
+                touched["claims"].add(claim.id)
                 for entity_id in claim.subject_entity_ids:
-                    runtime.store.link(claim.id, "ABOUT", entity_id)
+                    link(claim.id, "ABOUT", entity_id)
                 if claim.commitment is not None:
-                    runtime.store.link(
-                        claim.id, "OWED_BY", claim.commitment.owed_by_entity_id
-                    )
+                    link(claim.id, "OWED_BY", claim.commitment.owed_by_entity_id)
                     if claim.commitment.owed_to_entity_id:
-                        runtime.store.link(
-                            claim.id, "OWED_TO", claim.commitment.owed_to_entity_id
-                        )
+                        link(claim.id, "OWED_TO", claim.commitment.owed_to_entity_id)
                 for citation in claim.provenance.citations:
-                    runtime.store.link(claim.id, "CITES", citation.event_id)
+                    link(claim.id, "CITES", citation.event_id)
                 for superseded in claim.supersedes:
-                    runtime.store.link(claim.id, "SUPERSEDES", superseded)
+                    link(claim.id, "SUPERSEDES", superseded)
                     runtime.store.set_claim_status(superseded, ClaimStatus.SUPERSEDED.value)
                 for conflicting in claim.contradicts:
-                    runtime.store.link(claim.id, "CONTRADICTS", conflicting)
+                    link(claim.id, "CONTRADICTS", conflicting)
 
-        log.info("ingestion.write nodes=%d", len(written))
-        return {"written": written, "errors": errors}
+        log.info("ingestion.write nodes=%d skipped=%d", len(written), skipped)
+        return {
+            "written": written,
+            "written_by_label": {k: len(v) for k, v in touched.items()},
+            "skipped": skipped,
+            "errors": errors,
+        }
 
     graph = StateGraph(IngestionState)
     graph.add_node("fetch", fetch)
@@ -223,10 +273,21 @@ def _needs_seal(state: IngestionState, external_id: str) -> bool:
     )
 
 
-def _ref_of(blob: dict):
+def _store_blob(runtime: Runtime, owner_id: str, blob: dict):
+    """Persists the sealed ciphertext and returns the ref that points at it.
+
+    This is the half that was missing. The enclave returned ciphertext and a
+    ref, the ref was stored with ``blob_id = None``, and the bytes were
+    dropped when the run ended -- so sealing a record destroyed it. Now the
+    bytes go to the blob store first and the ref carries the id they landed
+    under, which is what ``blob_id`` was declared for. See ADR 0002.
+    """
     from ..schema import EncryptedContentRef
 
-    return EncryptedContentRef.model_validate(blob["ref"])
+    ref = EncryptedContentRef.model_validate(blob["ref"])
+    ciphertext = base64.b64decode(blob["ciphertext_b64"])
+    ref.blob_id = runtime.blobs.put(owner_id, ciphertext)
+    return ref
 
 
 def _upsert(runtime: Runtime, node, text: str) -> None:
@@ -253,14 +314,17 @@ def run_ingestion(
         config=config,
     )
 
-    candidates = [Candidate.model_validate(c) for c in final.get("candidates", [])]
+    # Counts come from the write node, not from the candidate set: see the
+    # docstring on IngestionResult.
+    counts = final.get("written_by_label", {})
     return IngestionResult(
         owner_id=owner_id,
         records=len(final.get("records", [])),
-        entities=sum(len(c.entities) for c in candidates),
-        events=sum(len(c.events) for c in candidates),
-        claims=sum(len(c.claims) for c in candidates),
+        entities=counts.get("entities", 0),
+        events=counts.get("events", 0),
+        claims=counts.get("claims", 0),
         sealed=len(final.get("sealed", {})),
+        skipped=final.get("skipped", 0),
         supersessions=[tuple(p) for p in final.get("supersessions", [])],
         contradictions=[tuple(p) for p in final.get("contradictions", [])],
         errors=final.get("errors", []),
