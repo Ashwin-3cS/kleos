@@ -30,7 +30,7 @@ imported from feed ranking, where age really does imply irrelevance. In a
 resolved record, `supersedes` carries that signal — not the clock.
 
 Separately, all four numbers were module constants with no way to change them
-and no way to evaluate them. Phase 0 ends with an eval harness whose job is to
+and no way to evaluate them. Roadmap step 0 ends with an eval harness whose job is to
 measure retrieval quality; it cannot tune what it cannot set.
 
 ## Decision
@@ -72,7 +72,7 @@ that is really dict iteration order would read as a quality regression.
   deleting a term is harder to walk back than retuning one. The eval harness
   can test `RECENCY_WEIGHT=0` directly now.
 - **Learned ranking.** No labelled data, and the harness that would produce it
-  does not exist yet. Revisit after Phase 0.
+  does not exist yet. Revisit after step 0.
 
 ## Consequences
 
@@ -87,5 +87,5 @@ that is really dict iteration order would read as a quality regression.
   deployment. Bounded by validation in `RankingWeights.__post_init__`:
   non-negative weights, at least one non-zero, positive half-life.
 - The weights are still a guess. The difference is that they are now a guess
-  the eval harness can disprove, which is the only reason this ADR is in Phase 0
+  the eval harness can disprove, which is the only reason this ADR is in step 0
   rather than later.

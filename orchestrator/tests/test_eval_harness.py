@@ -2,7 +2,7 @@
 
 A harness is a measuring instrument, and an instrument that cannot be wrong is
 not measuring. These tests hold the properties that make its verdict mean
-something -- above all that it is *able to fail*, since the Phase 0 exit
+something -- above all that it is *able to fail*, since the step 0 exit
 condition is "stop and rethink if resolution does not help" and a harness that
 always prints success could never say that.
 """
@@ -185,7 +185,7 @@ def test_the_full_run_produces_a_report(runtime: Runtime) -> None:
 
 
 def test_resolution_currently_beats_the_baseline(runtime: Runtime) -> None:
-    """The Phase 0 exit test, asserted so a regression is a failing test rather
+    """Step 0's exit test, asserted so a regression is a failing test rather
     than a number nobody re-ran.
 
     Deliberately asserts the *direction* and not the figures: the numbers depend

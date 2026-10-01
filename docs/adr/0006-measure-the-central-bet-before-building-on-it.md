@@ -11,11 +11,11 @@ pile of retrievable documents. Every design decision in the repo follows from
 it — the Event/Claim split, supersession instead of overwrite, provenance as a
 citation chain, graph-proximity ranking, the history reads.
 
-It had never been measured. `PLAN.md` Phase 0 makes measuring it the exit
-condition, and says explicitly: *if resolution does not help, stop and rethink
-before building further.* Phases 1 through 7 add a voice layer, hardware nodes
-and a privacy gateway on top of this assumption; finding out it is wrong after
-that is the single most expensive mistake available.
+It had never been measured. The roadmap in the README makes measuring it step
+0's exit condition, and says explicitly: *if resolution does not help, stop and
+rethink before building further.* Steps 1 through 7 add a voice layer, hardware
+nodes and a privacy gateway on top of this assumption; finding out it is wrong
+after that is the single most expensive mistake available.
 
 ## Decision
 
@@ -112,11 +112,11 @@ mechanism rather than the outcome.
 
 ## Alternatives
 
-- **Ship on the assumption.** What the plan explicitly forbids, and the
-  expensive mistake: seven phases of voice and hardware sit on top of it.
+- **Ship on the assumption.** What the roadmap explicitly forbids, and the
+  expensive mistake: seven steps of voice and hardware sit on top of it.
 - **Measure on a real corpus (a consenting owner's own export).** More
   convincing and the natural follow-up, but it cannot be committed, cannot be a
-  regression test, and cannot be compared across machines. Phase 0's live-LLM
+  regression test, and cannot be compared across machines. Step 0's live-LLM
   item is where real data enters.
 - **Use an LLM judge instead of labels.** Scales to questions whose answer is
   prose rather than a set of records. Non-deterministic, needs a key, and in a
@@ -129,7 +129,7 @@ mechanism rather than the outcome.
 
 ## Consequences
 
-- Phase 0's exit test exists, has run, and passes. `test_eval_harness.py`
+- Step 0's exit test exists, has run, and passes. `test_eval_harness.py`
   asserts the *direction* rather than the figures, so a regression fails a test
   instead of being a number nobody re-ran.
 - The numbers are **not quotable yet**. Both systems run on

@@ -101,7 +101,7 @@ it is working, which is worse than one that refuses to start.
 - **Every existing token is invalidated** by this deploy, including live owner
   sessions and any outstanding agent grant: the keys that sign them changed.
   Acceptable now, when there are no users and grant TTLs are an hour; it would
-  need a dual-verification window after Phase 7's beta.
+  need a dual-verification window after the step 7 beta.
 - `Config::from_env` returns `Result`, so `main` propagates it. One call site.
 - A deployment that was relying on `SESSION_JWT_SECRET` keeps working, with its
   value now used as the root rather than directly as a signing key.
