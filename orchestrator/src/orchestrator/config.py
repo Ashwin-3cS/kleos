@@ -62,10 +62,30 @@ class Settings(BaseSettings):
     extraction_model: str = Field(default="claude-sonnet-5", validation_alias="EXTRACTION_MODEL")
     embedding_model: str = Field(default="voyage-3", validation_alias="EMBEDDING_MODEL")
 
+    #: Where sealed ciphertext is written when Walrus is not configured. The
+    #: bytes arrive already encrypted by the enclave, so this directory holds
+    #: no plaintext -- but it holds the *only* copy of a sensitive body, so it
+    #: belongs on storage that is backed up. See ADR 0002.
+    blob_store_dir: str = Field(default=".local/blobs", validation_alias="BLOB_STORE_DIR")
+
     walrus_publisher_url: str | None = Field(default=None, validation_alias="WALRUS_PUBLISHER_URL")
     walrus_aggregator_url: str | None = Field(
         default=None, validation_alias="WALRUS_AGGREGATOR_URL"
     )
+
+    #: Half-life of the retrieval recency term, in days. See ADR 0003: the
+    #: old constant was 30 days applied as a plain exponential, which is a
+    #: 1/e point rather than a half-life and scored a year-old decision at
+    #: ~0 -- backwards for a record whose signature read is "why did this
+    #: change". Tunable because the right value is an empirical question the
+    #: eval harness answers, not a constant to be argued about.
+    recency_half_life_days: float = Field(
+        default=180.0, validation_alias="RECENCY_HALF_LIFE_DAYS", gt=0
+    )
+    #: Hybrid ranking weights. Normalised at use, so these are ratios.
+    semantic_weight: float = Field(default=0.6, validation_alias="SEMANTIC_WEIGHT", ge=0)
+    recency_weight: float = Field(default=0.15, validation_alias="RECENCY_WEIGHT", ge=0)
+    proximity_weight: float = Field(default=0.25, validation_alias="PROXIMITY_WEIGHT", ge=0)
 
     @field_validator("enabled_sources", mode="before")
     @classmethod
