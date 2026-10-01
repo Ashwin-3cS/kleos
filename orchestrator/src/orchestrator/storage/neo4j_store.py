@@ -153,15 +153,35 @@ class Neo4jStore:
             embedding=embedding,
         )
 
-    def link(self, from_id: str, rel: str, to_id: str) -> None:
+    def link(self, owner_id: str, from_id: str, rel: str, to_id: str) -> bool:
+        """Creates ``(from)-[:rel]->(to)``, both ends inside one owner.
+
+        Owner-scoped like every traversal here, and for the same reason: an
+        edge is the unit the reads walk over, so one written across owners
+        would place a foreign node inside a permission-checked walk. The
+        owner constraint on the traversals exists precisely so a foreign node
+        never becomes a candidate in the first place; an unscoped write is
+        the one way to get one in anyway.
+
+        Ids are derived and collision is unlikely, which is why this held in
+        practice. "Unlikely" is not the property a boundary should rest on.
+
+        Returns whether an edge was written. A miss means an endpoint was
+        absent or belonged to someone else, which some callers legitimately
+        ignore -- a citation can name an event this batch has not reached yet.
+        """
         if not rel.isidentifier():
             raise ValueError(f"illegal relationship type {rel!r}")
-        self._run(
-            f"MATCH (a:Memory {{id: $from_id}}), (b:Memory {{id: $to_id}}) "
-            f"MERGE (a)-[:{rel}]->(b)",
+        rows = self._run(
+            f"MATCH (a:Memory {{id: $from_id, owner_id: $owner_id}}), "
+            f"(b:Memory {{id: $to_id, owner_id: $owner_id}}) "
+            f"MERGE (a)-[r:{rel}]->(b) "
+            f"RETURN count(r) AS n",
+            owner_id=owner_id,
             from_id=from_id,
             to_id=to_id,
         )
+        return bool(rows and rows[0]["n"])
 
     def _mutate_claim(self, claim_id: str, mutate) -> Claim | None:
         """Read-modify-write a stored claim.
@@ -446,5 +466,46 @@ class Neo4jStore:
         )
         return [(row["from_id"], row["rel"], row["to_id"]) for row in rows]
 
+    # -- the read log ---------------------------------------------------
+    #
+    # Stored here, but deliberately *not* labelled `:Memory`. Every traversal
+    # and the vector index above are keyed on that label, so staying off it is
+    # what keeps audit entries out of retrieval and out of anything an agent
+    # can reach. See `storage/reads.py` and ADR 0005.
+
+    def append_read(self, entry) -> None:
+        """Appends one read-log entry. Raises if it cannot be written."""
+        from .reads import entry_to_row
+
+        self._run(
+            "CREATE (r:AgentRead) SET r = $row",
+            row=entry_to_row(entry),
+        )
+
+    def recent_reads(self, owner_id: str, limit: int = 50) -> list:
+        from .reads import row_to_entry
+
+        rows = self._run(
+            "MATCH (r:AgentRead {owner_id: $owner_id}) "
+            "RETURN r.id AS id, r.owner_id AS owner_id, r.agent_id AS agent_id, "
+            "r.grant_fp AS grant_fp, r.kind AS kind, r.disclosed_ids AS disclosed_ids, "
+            "r.denied_json AS denied_json, r.considered AS considered, "
+            "r.subject AS subject, r.at_ms AS at_ms "
+            "ORDER BY r.at_ms DESC, r.id DESC LIMIT $limit",
+            owner_id=owner_id,
+            limit=int(limit),
+        )
+        return [row_to_entry(row) for row in rows]
+
     def wipe_owner(self, owner_id: str) -> None:
+        """Removes an owner's memory graph.
+
+        The read log is left alone on purpose: it records what was disclosed
+        to agents, and a re-ingest does not un-disclose it. Clearing it is
+        `wipe_read_log`, which exists for tests and for an explicit owner
+        request, not as a side effect of re-ingesting.
+        """
         self._run("MATCH (n:Memory {owner_id: $owner_id}) DETACH DELETE n", owner_id=owner_id)
+
+    def wipe_read_log(self, owner_id: str) -> None:
+        self._run("MATCH (r:AgentRead {owner_id: $owner_id}) DELETE r", owner_id=owner_id)

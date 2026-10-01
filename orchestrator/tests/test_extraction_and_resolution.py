@@ -50,7 +50,7 @@ def test_resolver_supersedes_the_earlier_claim(store):
             store.upsert(node, embedder.embed(text))
         for claim in resolution.new_claims:
             for entity_id in claim.subject_entity_ids:
-                store.link(claim.id, "ABOUT", entity_id)
+                store.link(claim.owner_id, claim.id, "ABOUT", entity_id)
             for superseded in claim.supersedes:
                 store.set_claim_status(superseded, ClaimStatus.SUPERSEDED.value)
 
