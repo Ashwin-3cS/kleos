@@ -21,6 +21,13 @@ template at `suiverify/nautilus-attestation-backend/` -- its NSM attestation
 logic and socat-based VSOCK bridging pattern. That project is read-only
 reference material and is not part of this repo.
 
+`PLAN.md` sets out where this goes next: a voice-first personal assistant with
+hardware nodes, a privacy gateway and a local-first hub, with Kleos as the
+memory and permissions core. `docs/adr/` carries the decisions -- one per file,
+immutable once accepted, a reversal getting its own ADR rather than an edit.
+**Phase 0** (hardening, plus measuring whether the central bet is real) is
+mostly done; see "Phase 0" below for what it changed and what it found.
+
 ## Architecture
 
 ```
@@ -163,14 +170,25 @@ needs no API keys -- fixture connector, rule-based extractor, deterministic
 hashed-token embeddings. Neo4j and Redis are real services even in mock
 mode.
 
+`scripts/services.sh` starts them. It exists because `docker compose` is a CLI
+plugin that is not always installed where `docker` is, and without it
+`docker compose up -d` fails with `unknown shorthand flag: 'd'`, which reads
+like a typo rather than a missing component. `orchestrator/docker-compose.yml`
+is still the source of truth for the definitions; the script runs the same
+three containers on the same ports with plain `docker run`, takes
+`CONTAINER_CLI=podman`, and waits for each port before returning -- the suite
+*skips* rather than fails when Neo4j is unreachable, so starting pytest too
+early looked exactly like everything passing.
+
 ### Full stack, end to end
 
 ```bash
+./scripts/services.sh up                 # neo4j :7688, redis :6380, postgres :5435
 cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
-docker compose up -d                     # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                         # 82 tests
+.venv/bin/pytest                         # 146 tests
+.venv/bin/python -m orchestrator.eval    # the Phase 0 exit test
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
@@ -456,11 +474,20 @@ another. That used to hold only because the three claim shapes happened to
 be disjoint and serde rejects a missing field -- an accident of the structs
 rather than a defence, which one `#[serde(default)]` would have undone.
 
+Session tokens, agent grants and OAuth state no longer share a signing key
+either: the gateway derives three independent keys from one root secret with
+HMAC-SHA256 over a versioned label (ADR 0004). One root rather than three
+secrets, because three env vars let an operator paste the same value into all
+of them and never know. In `nitro` mode the gateway refuses to start on the
+public development default.
+
 One sharp edge remains before grants are load-bearing:
 
 - **A grant cannot be revoked before it expires**, except per-object via
   `ObjectAcl.denied_agents`. There is no revocation list. Keep grant TTLs
-  short until there is one.
+  short until there is one. What exists now is the *evidence* layer underneath
+  one: every read is logged, so an owner can at least see what a grant it
+  cannot withdraw has actually been used for.
 
 ### The confidentiality model
 
@@ -601,8 +628,15 @@ LangGraph/LlamaIndex division of labour, and the API.
 
 Typed, with real signatures, failing explicitly rather than silently:
 
-- **Walrus** reads/writes. Sealed ciphertext is currently carried by the
-  ingestion graph and `EncryptedContentRef.blob_id` stays `None`.
+- **Walrus** reads/writes. Sealed ciphertext now goes to a local
+  content-addressed blob store and `EncryptedContentRef.blob_id` is populated
+  (ADR 0002); `WalrusBlobStore` has the same interface and raises. It does not
+  fall back to local disk when configured, because a deployment that believes it
+  writes to Walrus and actually writes to the orchestrator's disk has a
+  confidentiality bug rather than a performance one.
+  **There is still no read path**: unsealing is `POST /seal/decrypt` on the
+  enclave, which the gateway does not expose, so sealed bodies are durable and
+  not yet retrievable.
 - **Real Seal encryption.** `enclave/src/services/seal.rs` has a working
   mock implementation -- a deliberately fake, reversible keystream XOR whose
   output is prefixed `MOCK_SEAL_V1:` and whose scheme id says so, exactly
@@ -630,6 +664,86 @@ Typed, with real signatures, failing explicitly rather than silently:
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
   the query graph as a tool over stdio. It is implemented but has not been
   driven from a real MCP client.
+
+## Phase 0: hardening, and testing the central bet
+
+`PLAN.md` Phase 0 does two things: fix what was known to be wrong, and find out
+whether the thing the whole project assumes is actually true.
+
+### What the eval found
+
+Everything here follows from one claim -- that a **resolved, timestamped
+record** beats a pile of retrievable documents. It had never been measured.
+`orchestrator/src/orchestrator/eval/` now measures it: a labelled synthetic
+corpus, a plain-RAG baseline held equal on everything but resolution, and a
+harness that prints a verdict and exits non-zero if the bet does not pay.
+
+```bash
+cd orchestrator && .venv/bin/python -m orchestrator.eval
+```
+
+34 records, 6 labelled questions, `top_k=5`:
+
+| metric | resolved | resolved+history | plain-rag |
+|---|---|---|---|
+| recall | 87% | **100%** | 93% |
+| cited | 100% | 100% | 0% |
+| unmarked stale assertions | 0% | **0%** | 50% |
+| forbidden records returned | 33% | 33% | 50% |
+
+Resolution helps, and the useful part is *where it does not*:
+
+- **The win is correctness about what is current, not retrieval.** Plain RAG
+  answers "which database does Lantern use" with all three decisions and nothing
+  to say which one holds, because nothing in the text of a superseded decision
+  says it was superseded. That is structural; no embedder fixes it.
+- **The query graph alone retrieves less than the baseline** (87% vs 93%). The
+  gain comes from the supersession read and from marking superseded claims, not
+  from ranking. Worth knowing before anyone tunes weights.
+- **Graph proximity costs precision across projects.** Both Harbour questions
+  return a record that is a wrong answer, under every system.
+
+The numbers are **not quotable**: both systems run on hashed-token embeddings,
+which is the right control (embedding quality held identical, so the delta
+isolates resolution) and a poor absolute measurement. The report says so itself.
+Re-run and compare deltas once a real embedder is in.
+
+Building the harness also found a defect in the product. The README promised
+`why_did_this_shift` returns "the citations present in the superseder that were
+absent from the claim it replaced -- the evidence that moved the decision", but
+cross-source references were attached to the *event* and not the claim, so the
+read reached one hop short of evidence that was in Neo4j all along. "What
+changed and why" scored 60%; with references propagated onto the claim, 100%.
+No test caught it because every test asserted the mechanism rather than the
+outcome. See ADR 0006.
+
+### What was fixed
+
+- **Sealing a record no longer destroys it.** `EncryptedContentRef.blob_id` was
+  always `None` and the ciphertext lived only in the LangGraph checkpoint, so a
+  sensitive body was gone when the run ended -- while the stored ref advertised
+  a `key_id` and a `byte_len` that read as recoverable. Ciphertext now goes to a
+  content-addressed, owner-partitioned blob store. ADR 0002.
+- **Every agent read is logged** -- which grant, which agent, which objects,
+  when -- and surfaced in the explorer under an owner session. ADR 0005.
+- **Edge writes are owner-scoped**, like every traversal already was.
+- **Ingestion reports what it wrote**, not what it considered. A run that
+  skipped an unsealable event used to report it as stored.
+- **Recency is a real half-life** (and 180 days, not 30: in a resolved record an
+  old decision stands until something supersedes it). Ranking weights are
+  configurable so the harness can move them. ADR 0003.
+- **Three signing keys derived from one root** instead of one key for sessions,
+  grants and OAuth state. ADR 0004.
+- **`scripts/services.sh`** for environments with no `docker compose` plugin.
+
+### Phase 0 still open
+
+- **Live LLM extraction and a real embedding model**, on a consenting owner's
+  own export. Needs an API key. Until then the eval's absolute numbers mean
+  little and `extraction/llm.py` has never run against the live API.
+- **Build the `.eif` and run it on EC2.** Needs EC2. `nitro` mode has still
+  never executed on real hardware, which is the load-bearing gap under every
+  confidentiality claim here.
 
 ## Env vars
 
