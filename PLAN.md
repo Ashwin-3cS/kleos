@@ -52,10 +52,10 @@ plain retrieval.
       available; document the plain `docker`/`podman` route).
 - [x] Add an agent read log: which agent, which grant, which objects, when.
       Surface it in the explorer. (ADR 0005)
-- [ ] Build an eval harness: a labelled question set ("who decided X", "what
+- [x] Build an eval harness: a labelled question set ("who decided X", "what
       changed and why", "what do I owe whom", "what did I know on date D"),
       expected answers and citations, running both the resolved-record path
-      and a plain RAG baseline and reporting the difference.
+      and a plain RAG baseline and reporting the difference. (ADR 0006)
 - [ ] Run live LLM extraction and a real embedding model (replace the
       hashed-token stub; pin `EMBEDDING_DIM` and the Neo4j vector index) on a
       consenting owner's own export. *Needs an API key.*
@@ -66,6 +66,15 @@ plain retrieval.
 record against plain RAG. If resolution does not help, stop and rethink
 before building further. The `.eif` either runs, or its failures are
 documented in an ADR.
+
+**Status, 2026-10-01.** The retrieval half of the exit test has run and
+passes: recall 100% vs 93%, cited 100% vs 0%, unmarked stale assertions 0%
+vs 50% (ADR 0006). Two caveats carried forward rather than swept up: the
+query graph *alone* retrieves less than the baseline, so the gain is the
+supersession read and the marking rather than the ranking; and the numbers
+rest on hashed-token embeddings, so the delta is meaningful and the absolute
+figures are not. The two remaining items both need resources this machine
+does not have -- an API key, and an EC2 instance.
 
 ## Phase 1 — Voice prototype, cloud-first
 

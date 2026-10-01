@@ -69,7 +69,13 @@ Cypher query, not a scan that filters in Python.
 
 Neo4j is the queryable index, not the system of record: it is conceptually
 rebuildable from source material. Raw content belongs in Walrus under the
-owner's keys, which is not wired yet (see **Stubs** below).
+owner's keys, which is not wired yet (see **Stubs** below); until then sealed
+ciphertext goes to a content-addressed blob store with the same interface
+(`storage/blobs.py`, ADR 0002).
+
+One exception to "rebuildable", stated because it changes what has to be backed
+up: the read log (`:AgentRead`, see below) cannot be regenerated from anything.
+It is the only such thing in this database.
 
 Edges: `(:Event)-[:MENTIONS]->(:Entity)`, `(:Claim)-[:ABOUT]->(:Entity)`,
 `(:Claim|:Event)-[:CITES]->(:Event)`, `(:Claim)-[:SUPERSEDES]->(:Claim)`,
@@ -303,8 +309,9 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 
-docker compose up -d                      # neo4j :7688, redis :6380
-.venv/bin/pytest                          # 82 tests; skips if neo4j is down
+../scripts/services.sh up                 # neo4j :7688, redis :6380, postgres :5435
+.venv/bin/pytest                          # 146 tests; skips if neo4j is down
+.venv/bin/python -m orchestrator.eval     # the Phase 0 exit test
 .venv/bin/ruff check .
 ```
 
@@ -335,12 +342,60 @@ To run the service by hand instead:
 | `POST /memory/shift` | sync | why a decision shifted: the supersession chain and the evidence at each step |
 | `POST /memory/context` | sync | the citation chain around one object, across sources |
 | `POST /memory/neighbourhood` | sync | nodes and typed edges within `hops` of one or more seeds, permission-filtered |
+| `POST /memory/reads` | sync | **owner-authenticated**: what agents have actually read |
 | `GET /explorer` | static | the read-only graph explorer page (open `http://127.0.0.1:8090/explorer`) |
 
 Ingestion is enqueued from day one because connecting a source means
 backfilling a large history in bursts, which is the wrong lifetime for an
 HTTP request. Queries stay synchronous -- an agent asking a question wants
 an answer, not a job id.
+
+## The read log
+
+`storage/reads.py`, written by each read path's assembler through one helper in
+`graphs/audit.py`. The explorer always showed what a grant *could* see; nothing
+showed what it *did*, which is the only question an owner can ask about a grant
+they cannot revoke -- and there is no revocation list, only short TTLs.
+
+It records what was **returned**, not what was asked: a request log answers the
+wrong question. Denials and misses are recorded too, because one declined query
+is a misconfigured grant and two hundred is an agent mapping a memory it cannot
+read. The grant is fingerprinted with a keyed hash and never stored -- an audit
+log holding live bearer credentials is a vulnerability wearing an accountability
+costume. Writes fail closed, which costs nothing since the read already needed
+this database.
+
+Entries live under `:AgentRead` and deliberately carry **no `:Memory` label**:
+the vector index and every traversal key on that label, so a log entry
+retrievable as memory would disclose other agents' reads through the very check
+it audits. Reading the log needs an owner session (`POST /memory/reads`,
+resolved via the gateway's `/auth/session/introspect`), not a grant, and there
+is no MCP tool. `wipe_owner` leaves it alone -- re-ingesting does not
+un-disclose what an agent was already shown. See ADR 0005.
+
+## The eval harness
+
+`eval/` answers the question the rest of this service is a bet on: does a
+resolved record beat plain retrieval? A labelled synthetic corpus, a plain-RAG
+baseline held equal on everything except resolution, and a harness that prints a
+verdict and exits non-zero if it does not.
+
+```bash
+.venv/bin/python -m orchestrator.eval          # the report
+.venv/bin/python -m orchestrator.eval --json   # machine-readable, for recording a run
+```
+
+Three systems are reported rather than two: `resolved` is the query graph alone,
+which is the like-for-like retrieval comparison, and `resolved+history` adds the
+supersession read, which is what the product can actually answer with. Reporting
+only the second would be a rigged comparison; only the first would under-measure
+the design.
+
+Current result: recall 100% vs 93%, cited 100% vs 0%, unmarked stale assertions
+0% vs 50% -- but the query graph *alone* retrieves less than the baseline, so the
+gain is the marking and the supersession walk rather than the ranking. Both
+systems run on hashed-token embeddings, which makes the delta meaningful and the
+absolute numbers not. See the root README and ADR 0006.
 
 ## Stubs
 
@@ -353,8 +408,12 @@ These have real signatures and typed returns; they raise
 - `retrieval/embeddings.py::VoyageEmbedder` -- live embeddings need an API
   key and an `EMBEDDING_DIM` matching that model, which must also match the
   Neo4j vector index.
-- Walrus reads/writes -- sealed ciphertext is currently carried by the
-  ingestion graph and `EncryptedContentRef.blob_id` stays `None`.
+- Walrus reads/writes. Sealed ciphertext now lands in a content-addressed
+  blob store and `blob_id` is populated (`storage/blobs.py`, ADR 0002);
+  `WalrusBlobStore` has the same interface and raises rather than falling back
+  to local disk. There is still no *read* path: unsealing is `POST
+  /seal/decrypt` on the enclave, which the gateway does not expose, so sealed
+  bodies are durable and not yet retrievable.
 - `extraction/llm.py` is *not* a stub: it is wired and works the moment
   `ANTHROPIC_API_KEY` is set and `ORCHESTRATOR_MODE=live`. It has not been
   run against the live API from this repo.
