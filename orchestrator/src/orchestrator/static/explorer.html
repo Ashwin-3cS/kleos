@@ -55,6 +55,13 @@
     <input id="q" placeholder="or find a seed: ask a question" autocomplete="off">
     <button type="button" id="find">Find seeds</button>
   </form>
+  <!-- An owner session, not a grant: the read log is the owner's record of
+       what agents were shown, and an agent must not be able to read it. -->
+  <form id="audit">
+    <input id="session" placeholder="owner session token (to see what agents have read)"
+           autocomplete="off">
+    <button type="submit">Show reads</button>
+  </form>
 </header>
 
 <div id="banner" class="notice" hidden></div>
@@ -64,6 +71,8 @@
   <aside>
     <div class="card" id="summary"><span class="muted">Enter a grant token and a seed id.</span></div>
     <div class="card" id="detail"><span class="muted">Click a node for its detail.</span></div>
+    <div class="card" id="reads"><span class="muted">Paste an owner session token to see
+      what agents have read.</span></div>
     <div class="card">
       <span class="dot" style="background:var(--entity)"></span>Entity
       <span class="dot" style="background:var(--event);margin-left:12px"></span>Event
@@ -97,6 +106,34 @@ $("f").onsubmit = async (e) => {
       hops: Number($("hops").value),
     });
     render(data);
+  } catch (err) { fail(err); }
+};
+
+// The audit view: what each grant was actually shown, grouped by grant rather
+// than by agent, because the grant is the capability -- one agent holding two
+// grants is two authorisations an owner may want to treat differently.
+$("audit").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const data = await post("/memory/reads", { session_token: $("session").value.trim() });
+    if (!data.reads) {
+      $("reads").innerHTML = '<span class="muted">No agent has read this memory yet.</span>';
+      return;
+    }
+    const when = (ms) => new Date(ms).toISOString().replace("T", " ").slice(0, 19);
+    $("reads").innerHTML =
+      `<b>${data.reads} read(s) by ${data.grants.length} grant(s)</b>` +
+      data.grants
+        .map(
+          (g) =>
+            `<div style="margin-top:8px">` +
+            `<div><code>${escapeHtml(g.agent_id)}</code> ` +
+            `<span class="muted">grant ${escapeHtml(g.grant_fp.slice(0, 12))}</span></div>` +
+            `<div class="muted">${g.reads} read(s) &middot; ${g.disclosed} object(s) shown ` +
+            `&middot; ${g.declined} declined &middot; ${escapeHtml(g.kinds.join(", "))}</div>` +
+            `<div class="muted">last ${when(g.last_at_ms)}</div></div>`
+        )
+        .join("");
   } catch (err) { fail(err); }
 };
 

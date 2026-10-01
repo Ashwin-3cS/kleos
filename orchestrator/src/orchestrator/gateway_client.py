@@ -105,6 +105,19 @@ class GatewayClient:
         )
         return body["grant_token"]
 
+    def introspect_session(self, session_token: str) -> str:
+        """Resolves an owner session token to its owner id.
+
+        The orchestrator holds no signing key, so anything it has to
+        authenticate it asks the gateway about. This is what makes the read log
+        owner-authenticated rather than grant-authenticated: an owner's record
+        of what agents read must not be readable by an agent. See ADR 0005.
+        """
+        body = self._post("/auth/session/introspect", {"session_token": session_token})
+        if not body.get("active"):
+            raise GatewayError("session is not active")
+        return body["owner_id"]
+
     def introspect_scope(self, grant_token: str) -> Scope:
         body = self._post("/memory/scope/introspect", {"grant_token": grant_token})
         if not body.get("active"):
