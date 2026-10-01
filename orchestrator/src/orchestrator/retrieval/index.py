@@ -24,7 +24,7 @@ from ..connectors.registry import REGISTRY, ConnectorRegistry
 from ..enums import SourceId
 from ..storage.neo4j_store import Neo4jStore
 from .embeddings import Embedder
-from .ranking import rank
+from .ranking import DEFAULT_WEIGHTS, RankingWeights, rank
 
 
 def chunk_for_source(
@@ -49,12 +49,14 @@ class MemoryRetriever(BaseRetriever):
         embedder: Embedder,
         owner_id: str,
         top_k: int = 10,
+        weights: RankingWeights = DEFAULT_WEIGHTS,
     ) -> None:
         super().__init__()
         self._store = store
         self._embedder = embedder
         self._owner_id = owner_id
         self._top_k = top_k
+        self._weights = weights
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
         now_ms = int(time.time() * 1000)
@@ -68,7 +70,7 @@ class MemoryRetriever(BaseRetriever):
         seed_ids = [node.id for node, _ in candidates[: max(len(candidates) // 3, 1)]]
         hops = self._store.neighbour_ids(self._owner_id, seed_ids)
 
-        ranked = rank(candidates, hops, now_ms)[: self._top_k]
+        ranked = rank(candidates, hops, now_ms, self._weights)[: self._top_k]
         return [
             NodeWithScore(
                 node=TextNode(
@@ -100,7 +102,7 @@ class MemoryRetriever(BaseRetriever):
             return []
         seed_ids = [node.id for node, _ in candidates[: max(len(candidates) // 3, 1)]]
         hops = self._store.neighbour_ids(self._owner_id, seed_ids)
-        return rank(candidates, hops, now_ms)[: self._top_k]
+        return rank(candidates, hops, now_ms, self._weights)[: self._top_k]
 
 
 def property_graph_store(settings: Settings):
