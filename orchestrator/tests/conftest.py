@@ -12,8 +12,12 @@ from orchestrator.storage.neo4j_store import Neo4jStore  # noqa: E402
 
 
 @pytest.fixture(scope="session")
-def settings() -> Settings:
-    return Settings()
+def settings(tmp_path_factory) -> Settings:
+    # Sealed ciphertext now goes somewhere real (ADR 0002), so the suite needs
+    # a blob directory of its own: the default is `.local/blobs` under the
+    # working directory, and a test run must not write into a dev store or
+    # leave blobs behind.
+    return Settings(blob_store_dir=str(tmp_path_factory.mktemp("blobs")))
 
 
 @pytest.fixture
