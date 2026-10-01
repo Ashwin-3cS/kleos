@@ -1,6 +1,6 @@
 # orchestrator
 
-The Python orchestration service: everything agentic in memorai -- ingestion
+The Python orchestration service: everything agentic in Kleos -- ingestion
 pipelines, entity/decision resolution, retrieval, answer assembly -- runs
 here, **outside** the enclave. It calls the Rust gateway for the few
 operations that must be attested or owner-authorised, and never itself
@@ -21,14 +21,16 @@ ingestion graph   fetch                        gateway
                   resolve                        POST /memory/seal/encrypt -> enclave seals raw content
                   encrypt  ------------------->   POST /memory/scope/grant
                   write     (Neo4j)               POST /memory/scope/introspect
-query graph       authorize ----------------->
+query graph       authorize ----------------->   POST /auth/session/introspect
                   retrieve  (Neo4j + LlamaIndex)
                   permission-check
                   assemble / decline
+                  log the read
 history graphs    authorize ----------------->
                   walk      (Neo4j traversal)
                   permission-check
                   assemble / decline
+                  log the read
 ```
 
 The only point in the pipeline that crosses the trust boundary is the
@@ -46,7 +48,7 @@ sensitive body in the clear.
   insertion, not a rewrite.
 - **LlamaIndex** owns retrieval. `retrieval/index.py` exposes a real
   `BaseRetriever`, so anything in LlamaIndex that consumes one works over
-  memorai memory. It is not a plain vector retriever: hybrid scoring
+  Kleos memory. It is not a plain vector retriever: hybrid scoring
   (semantic + recency + graph proximity, `retrieval/ranking.py`) runs
   inside `_retrieve`, because proximity needs the graph store rather than
   just the vector index. Chunking is *dispatched* from here but declared by
@@ -315,7 +317,7 @@ cp .env.example .env
 .venv/bin/ruff check .
 ```
 
-The full Phase 2 path needs the Rust stack running too:
+The full path needs the Rust stack running too:
 
 ```bash
 cd .. && ./scripts/run_local.sh --with-orchestrator
@@ -403,8 +405,10 @@ These have real signatures and typed returns; they raise
 `NotImplementedError` with the reason rather than failing silently.
 
 - `connectors/google.py`, `connectors/github.py` -- need a stored per-owner
-  token with data scopes. Phase 1 OAuth proves identity only; it does not
-  request Gmail/Calendar/repo scopes.
+  token with data scopes. Consent and the sealed refresh-token store exist;
+  what is missing is a way for Python to obtain usable credentials from them
+  without the host ever holding the refresh token (roadmap step 5: the enclave
+  unseals it, mints a short-lived access token, and returns only that).
 - `retrieval/embeddings.py::VoyageEmbedder` -- live embeddings need an API
   key and an `EMBEDDING_DIM` matching that model, which must also match the
   Neo4j vector index.
