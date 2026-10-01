@@ -1,19 +1,47 @@
-# memorai (placeholder name)
+# Kleos
 
-A decentralized personal memory layer for humans and AI agents. Every
-individual's digital life is ingested inside a TEE (AWS Nitro Enclave),
-attested via NSM, and (in later phases) encrypted with Seal and stored on
-Walrus. The user owns it; authorized AI agents query it with scoped
-permissions. No government ID -- identity comes from stacked OAuth signals
-(Google, GitHub, wallet signature) verified **inside the enclave**.
+A personal memory layer for humans and AI agents. A person's sources are
+resolved into a structured, timestamped record -- who decided what, when it
+changed, why, what it links to, who owes whom -- rather than a pile of
+searchable documents. The sensitive parts are encrypted inside a TEE (AWS Nitro
+Enclave) attested via NSM, so the operator holds ciphertext. Authorized agents
+query it over MCP under scoped grants, and every read is logged. Identity comes
+from stacked OAuth signals verified **inside the enclave**, not from a
+government ID.
 
-Phase 1 built the infrastructure scaffold: the enclave, the gateway, and the
-deploy plumbing, proven end to end via CLI with a mock OAuth
-identity-verification flow. **Phase 2** adds the memory layer itself -- the
-resolved schema, a Python orchestration service running the ingestion and
-query graphs, Neo4j-backed retrieval, and query-time permissions -- all
-outside the enclave, which stays exactly as narrow as Phase 1 left it. There
-is still no web app, no SDK and no smart contracts.
+The bet is that the value is the **resolved record**. That bet is now measured
+rather than assumed: `python -m orchestrator.eval` compares this design against
+a plain RAG baseline over a labelled corpus, and plain RAG answers "which
+database did we pick" with all three past decisions and nothing to say which one
+holds. See "Step 0" below for the numbers, including the two places the resolved
+path does *worse*.
+
+What is here is the memory and permissions core of something larger: a
+voice-first personal assistant, with Kleos as the layer that remembers and
+decides who may read what. "Where this is going" is the target architecture and
+the order it has to be built in. `docs/adr/` carries the decisions -- one per
+file, immutable once accepted, a reversal getting its own ADR rather than an
+edit.
+
+**What exists:** the enclave and gateway, the resolved memory schema, the
+Python orchestration service (ingestion and query graphs, Neo4j-backed hybrid
+retrieval, query-time permissions), the history and neighbourhood reads, a
+read-only graph explorer, an agent read log, an MCP server, and one real
+connector (ChatGPT, via the user's own data export).
+
+**What does not:** no web app, no SDK, no smart contracts. Google and GitHub
+have consent and a sealed refresh-token store but no `fetch` yet. `nitro` mode
+has never run on real Nitro hardware. Real Seal and Walrus are stubs. See
+"Still stubs" for the full list, and "The confidentiality model" for what the
+encryption claim does and does not cover.
+
+> **On the name.** The product is Kleos. Identifiers inside the code still say
+> `memorai`, the earlier placeholder: binary names, the `.eif`, the Neo4j index
+> names, the Postgres table, the local container names. Renaming those is a
+> migration (a Neo4j index and a Postgres table have to be recreated), not a
+> search and replace, so it is deliberately not bundled into a documentation
+> change. Prose says Kleos; `memorai_*` in a Cypher query or a container name is
+> the same system.
 
 The only asset carried over from the abandoned prior product
 (`suiverify`, a decentralized KYC platform) is the Nitro Enclave build/deploy
@@ -21,20 +49,14 @@ template at `suiverify/nautilus-attestation-backend/` -- its NSM attestation
 logic and socat-based VSOCK bridging pattern. That project is read-only
 reference material and is not part of this repo.
 
-What is here is the memory and permissions core of a larger thing: a
-voice-first personal assistant, with Kleos as the layer that remembers and
-decides who may read what. "Where this is going" below is the target
-architecture and the order it has to be built in. `docs/adr/` carries the
-decisions -- one per file, immutable once accepted, a reversal getting its own
-ADR rather than an edit.
-
 ## Architecture
 
 ```
 gateway (Axum, host, TCP)
   - OAuth redirect flow: authorize URL (PKCE + signed state) + callback
   - Persists per-owner SEALED refresh tokens (ciphertext only) in Postgres
-  - Mints/introspects scoped agent grants; proxies seal requests
+  - Mints/introspects scoped agent grants; introspects owner sessions
+  - Three signing keys derived from one root: session, grant, oauth_state
   - Proxies all sensitive work to the enclave over VSOCK
         |
         v
@@ -47,8 +69,8 @@ enclave (Axum, inside Nitro Enclave)        <- core trust boundary
   - Seal-encrypts raw sensitive content before it leaves the TEE
         |
         v
-storage: Neo4j (queryable index), Postgres (sealed refresh tokens)
-         -- Walrus for encrypted raw blobs, not wired yet
+storage: Postgres (sealed refresh tokens), blob store (sealed bodies)
+         -- Walrus is the eventual blob store; same interface, still a stub
 ```
 
 Alongside, and outside the trust boundary:
@@ -57,11 +79,20 @@ Alongside, and outside the trust boundary:
 orchestrator/ (Python: LangGraph + LlamaIndex)
   - ingestion graph: fetch -> extract -> resolve -> encrypt -> write
   - query graph:     authorize -> retrieve -> permission-check -> assemble/decline
-  - calls the gateway only to seal raw content and to resolve agent grants
+  - history reads:   authorize -> walk -> permission-check -> assemble
+  - calls the gateway only to seal raw content, resolve agent grants,
+    and resolve an owner session for the read log
         |
         v
-Neo4j (entities, events, claims, edges, native vector index) + Redis (RQ jobs)
+Neo4j: entities, events, claims, their edges, one vector index over all
+       three (:Memory), and the agent read log (:AgentRead -- deliberately
+       NOT :Memory, so it can never be retrieved as memory)
+Redis: RQ ingestion jobs
 ```
+
+Every read is permission-checked in its own graph node *after* a
+permission-blind walk, and every read is logged with the grant that made it.
+Those two are the product: what an agent can see, and what it did see.
 
 ### Where this is going
 
@@ -159,21 +190,24 @@ secret; it is standing, renewable access to the user's mailbox. If the host
 performed the exchange, the operator would hold that access no matter what
 was attested afterwards. See "The confidentiality model" below.
 
-**Phase 1 end-to-end flow** (see `scripts/smoke_test.sh`):
-1. Client hits `POST /identity/verify` on the gateway with a raw OAuth token
-   (obtained manually -- curl, or a one-off script; real code exchange is
-   Phase 2, see `gateway/src/routes/auth.rs`).
+**The identity path** (see `scripts/smoke_test.sh`):
+1. Client hits `POST /identity/verify` on the gateway with a raw OAuth token.
+   This is the direct path, for a token obtained elsewhere; the real consent
+   flow is `GET /auth/authorize` → `GET /auth/callback`, which exchanges the
+   code in the enclave and issues an owner session.
 2. Gateway forwards the token to the enclave over its VSOCK-bridged TCP
    client (`gateway/src/vsock/client.rs`).
 3. Enclave calls the provider's verification endpoint itself, through an
    outbound VSOCK tunnel (`enclave/src/services/oauth/{google,github}.rs`).
 4. Enclave computes a trust tier from the signals present: Google alone = 1,
-   + GitHub = 2, + wallet = 3, + domain = 4 (wallet/domain are Phase 2 stubs
-   that reject explicitly rather than pretending to work).
+   + GitHub = 2, + wallet = 3, + domain = 4. Wallet and domain are still stubs
+   that reject explicitly rather than pretending to work.
 5. Enclave produces an NSM attestation document over the result.
 6. Gateway returns `{ identity, attestation }` as JSON, unmodified.
 
-No on-chain writes happen in Phase 1. Nothing is persisted.
+Nothing is persisted by that path, and nothing on-chain happens anywhere yet.
+What *is* persisted is the sealed refresh token from the consent flow, and
+sealed record bodies from ingestion -- both ciphertext the host has no key for.
 
 ## No Rust VSOCK crate
 
@@ -275,21 +309,23 @@ cp .env.example .env
 cd ..
 
 ./scripts/run_local.sh --with-orchestrator   # enclave + gateway + neo4j + redis
-./scripts/orchestrator_smoke.sh              # the Phase 2 proof, below
+./scripts/orchestrator_smoke.sh              # the end-to-end proof, below
 ```
 
-`scripts/orchestrator_smoke.sh` walks the whole path and is the thing to run
-to see Phase 2 work:
+`scripts/orchestrator_smoke.sh` walks the whole path and is the thing to run to
+see the memory layer work against the real Rust stack:
 
 1. `POST /auth/session` with `mock_google_alice` -- the enclave verifies the
    identity and attests it; the gateway issues an owner session JWT.
 2. `POST /ingest` on the orchestrator enqueues an RQ job and returns a job id.
 3. The worker runs the ingestion graph: the mock connector yields 7 fixture
-   records, the rule-based extractor produces 20 entities / 7 events /
-   7 claims (3 of them commitments), the resolver links the superseding
-   decisions and the reassigned commitment, the one sensitive
-   record's body is sealed **inside the enclave** (the gateway round trip),
-   and everything is written to Neo4j with provenance and ACL fields.
+   records, the rule-based extractor produces entities, events and claims
+   (some of them commitments), the resolver links the superseding decisions
+   and the reassigned commitment, the one sensitive record's body is sealed
+   **inside the enclave** (the gateway round trip) and its ciphertext written
+   to the blob store so the ref it stores actually points at something, and
+   everything else goes to Neo4j with provenance and ACL fields. The reported
+   counts are what landed, not what was considered.
 4. `POST /memory/scope/grant` on the gateway mints a scoped grant for
    `agent-demo`.
 5. `POST /query` runs the query graph, which introspects the grant, retrieves
@@ -303,10 +339,13 @@ to see Phase 2 work:
    which citations are new in the claim that replaced it; `POST
    /memory/context` walks the citation chain around the same claim. Under
    the narrow scope the shift read declines the same way the query does.
-8. `POST /memory/neighbourhood` returns the nodes and typed edges around
+8. Every one of those reads has appended an entry to the agent read log, so
+   `POST /memory/reads` under the **owner session** (not a grant) shows what
+   each grant was actually shown, grouped by grant.
+9. `POST /memory/neighbourhood` returns the nodes and typed edges around
    that claim, and the same call under a grant that cannot read confidential
-   material comes back with three objects and eight edges missing and a
-   count saying so. `GET /explorer` serves the page that draws it.
+   material comes back with objects and edges missing and a count saying so.
+   `GET /explorer` serves the page that draws it, including the read-log panel.
 
 ## EC2 / Nitro deploy path
 
@@ -338,8 +377,13 @@ enclave/      Axum server that runs inside the Nitro Enclave (or locally in mock
 gateway/      Axum server that runs on the host, proxies to the enclave
 shared/       Types shared by both: identity, the memory schema, permissions, VSOCK envelopes
 orchestrator/ Python orchestration service (LangGraph + LlamaIndex); not in the cargo workspace
+              graphs/     ingestion, query, history, neighbourhood
+              storage/    Neo4j, the sealed-blob store, the agent read log
+              eval/       the labelled corpus and the RAG comparison
+              static/     the graph explorer, one file, no build step
               also owns docker-compose.yml for neo4j/redis/postgres
-scripts/      build/run/deploy/smoke-test plumbing
+docs/adr/     one architecture decision per file, immutable once accepted
+scripts/      build/run/deploy/smoke-test plumbing, plus services.sh
 ```
 
 `shared/src/memory.rs` and `shared/src/permissions.rs` are the real schema
@@ -351,26 +395,27 @@ if the two ever drift.
 `enclave/src/services/memory.rs` is **gone**: it implied the enclave ingests,
 which it does not and should not. Ingestion lives entirely in
 `orchestrator/`. What the enclave gained instead is `POST /seal/{encrypt,
-decrypt}` -- the one Phase 2 operation that genuinely belongs inside the TEE.
+decrypt}` -- the one memory-layer operation that genuinely belongs in the TEE.
 
-## Phase 2: what exists now
+## The memory layer
 
-The Phase 1 architecture is untouched -- enclave/gateway/shared,
-VSOCK-over-socat, the mock/nitro split are all exactly as they were.
-Everything below is additive.
+The enclave/gateway/shared core is deliberately narrow and has stayed that way:
+VSOCK-over-socat, the mock/nitro split, and a trust boundary that grew by
+exactly two routes (`/seal/{encrypt,decrypt}` and `/oauth/exchange`) since the
+scaffold. Everything in this section is additive to it and runs outside it.
 
-**Product shape.** A user connects sources (starting with Google/GitHub,
-since OAuth for both exists from Phase 1); their activity is resolved into
-a structured, timestamped memory, attested inside the TEE at the points
-where it touches sensitive raw content, encrypted, and stored under the
-user's own keys. Authorized agents query it with scoped permissions over
-MCP. The bet is that the value is a **resolved, timestamped record** (who
-said what, when it changed, why, what it links to), not a pile of
-retrievable raw documents.
+**Product shape.** A user connects sources; their activity is resolved into a
+structured, timestamped memory, sealed inside the TEE at the points where it
+touches sensitive raw content, and stored under keys the host does not have.
+Authorized agents query it with scoped permissions over MCP, and the owner can
+see both what a grant *can* read and what it *has* read. The bet is that the
+value is a **resolved, timestamped record** -- who said what, when it changed,
+why, what it links to -- not a pile of retrievable raw documents. "Step 0" below
+has the measurement.
 
 ### Decisions made
 
-Three questions were open at the end of Phase 1. They are now settled:
+Three questions were open once the scaffold existed. They are now settled:
 
 - **Storage: a dedicated graph database, Neo4j.** Entities, events, claims
   and their edges live in Neo4j, with embeddings in its native vector index.
@@ -585,6 +630,16 @@ the gateway proxies to the enclave), and OAuth refresh tokens are sealed
 inside the enclave before the gateway persists them. Whoever runs the disk
 holds ciphertext.
 
+The ciphertext is now actually *kept*, which it was not until recently: the
+ingestion graph carried it in memory, wrote a reference with
+`blob_id = None`, and dropped the bytes when the run ended -- so sealing a
+record destroyed it, behind a stored ref that advertised a `key_id` and a
+`byte_len` and read as recoverable. Sealed bodies go to a content-addressed,
+owner-partitioned blob store and `blob_id` is populated (ADR 0002). There is
+still no *read* path: unsealing is `POST /seal/decrypt` on the enclave, which
+the gateway does not expose, so sealed bodies are durable and not yet
+retrievable.
+
 *Caveat, stated plainly:* in mock mode "sealed" means `MOCK_SEAL_V1:`, a
 reversible keystream XOR (`enclave/src/services/seal.rs`). It is
 obfuscation, not encryption, and it is labelled as such in the scheme id,
@@ -599,9 +654,11 @@ query-time permissions. Every stored object carries an `ObjectAcl`; every
 query carries a grant token that resolves to an authoritative `Scope`;
 `permits(scope, acl, now_ms)` is pure, total and denies by default, and it
 runs between retrieval and assembly so the assembler structurally cannot
-see an unchecked candidate. The two sharp edges listed under **Permissions**
-above (shared signing secret, no revocation list) are what stands between
-this and being load-bearing.
+see an unchecked candidate. Since there is no revocation list, what backs this
+up is the read log: an owner cannot withdraw a live grant, but can see exactly
+what it has been shown (ADR 0005). The sharp edge listed under **Permissions**
+above -- no revocation list -- is what stands between this and being fully
+load-bearing.
 
 **3. Confidential from the operator.** This is where precision matters.
 
@@ -688,17 +745,25 @@ reach the enclave).
 | `GET /auth/authorize` | build the provider consent URL (PKCE + signed, expiring state) |
 | `GET /auth/callback` | validate state, have the enclave exchange the code, persist the sealed refresh token, issue the owner session |
 | `POST /auth/session` | verify identity via the enclave, issue an owner session JWT |
+| `POST /auth/session/introspect` | resolve an owner session to its owner id |
 | `POST /memory/seal/encrypt` | seal raw content in the enclave, under the session's owner |
 | `POST /memory/scope/grant` | owner mints a scoped, expiring grant for a named agent |
 | `POST /memory/scope/introspect` | resolve a grant token to the authoritative scope |
+
+`/auth/session/introspect` is the mirror of `/memory/scope/introspect` and
+exists for the same reason: the orchestrator holds no signing key, so anything
+it must authenticate it has to ask the gateway about. It was added for the read
+log, which is the first **owner**-authenticated thing the orchestrator serves --
+every other read it does is authorised by an agent grant, and an owner's record
+of what agents read must not be readable by an agent.
 
 There is no second implementation of retrieval or ranking in Rust, on
 purpose. `GET /memory/timeline` is gone -- it was a placeholder for
 retrieval, which is Python's.
 
-The orchestrator calls the gateway for the four `/auth/session` and
-`/memory/*` routes and nothing else -- never the OAuth routes, and it is
-given no credentials for the sealed-token store.
+The orchestrator calls the gateway for the `/auth/session*` and `/memory/*`
+routes and nothing else -- never the OAuth routes, and it is given no
+credentials for the sealed-token store.
 Its ingestion graph's `encrypt` node is the only point in the pipeline that
 crosses the trust boundary, and if the gateway is unreachable the sensitive
 record is not written -- there is no fallback that stores a sensitive body
@@ -736,24 +801,33 @@ Typed, with real signatures, failing explicitly rather than silently:
   mock fixtures are declared per connector rather than substituted for
   every source. They are registered in `connectors/registry.py` with their
   real metadata (display name, OAuth scopes, chunking), so what is missing
-  is the `fetch` body and a per-owner token, nothing else.
+  is the `fetch` body and a way to get credentials.
+
+  That second half is an open design question, not plumbing. `/seal/decrypt`
+  exists on the enclave and the gateway deliberately does not expose it, so
+  there is no path by which Python can obtain a usable token. Handing the
+  orchestrator the unsealed refresh token would break the invariant the whole
+  connect flow is built around; fetching inside the enclave would put Gmail
+  pagination in the TCB. The likely answer is the third: the enclave unseals
+  the refresh token, mints a short-lived access token and returns only that,
+  so exposure is one token lifetime and the host still cannot renew -- it has
+  neither the refresh token nor the client secret. Roadmap step 5, ADR first.
 - **Live LLM/embedding calls.** `extraction/llm.py` is wired and works with
   an `ANTHROPIC_API_KEY` and `ORCHESTRATOR_MODE=live`, but has not been run
   against the live API. `VoyageEmbedder` is a stub.
 - **Anything on-chain.** Grants are signed JWTs today; the `Scope` struct is
   shaped to become an on-chain grant object verbatim.
-- **Wallet/domain identity signals** -- unchanged Phase 1 stubs. (OAuth
+- **Wallet/domain identity signals** -- unchanged since the scaffold. (OAuth
   code exchange is no longer one: see "The confidentiality model".)
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
-  the query graph as a tool over stdio. It is implemented but has not been
-  driven from a real MCP client.
+  three read tools over stdio -- `query_memory`, `why_this_shifted`,
+  `memory_context_chain`. Implemented, and still never driven from a real MCP
+  client, which is the first thing roadmap step 2 fixes. There is deliberately
+  no tool that writes memory, none that reads without a grant token, no
+  neighbourhood tool (see "Seeing the record") and no read-log tool (see
+  "Permissions").
 
 ## Step 0: hardening, and testing the central bet
-
-> A note on numbering, since there are two schemes. **Phase 1** and **Phase 2**
-> above are historical: what was built, in the order it was built. The numbered
-> **steps** under "Where this is going" are the forward roadmap. Step 0 is the
-> first of those, and it is the one that overlaps the present.
 
 Step 0 of "Where this is going" does two things: fix what was known to be
 wrong, and find out whether the thing the whole project assumes is actually
@@ -847,5 +921,5 @@ See `.env.example` at the repo root for the whole stack, and
 - Cargo feature renamed `aws` -> `nitro` per the new project's naming.
 - Dropped Sui, government-API, and DigiLocker-specific code paths entirely;
   replaced with the OAuth-provider + Walrus/Walrus-Memory port plan above.
-  Redis is back in Phase 2, but on the Python side only (RQ ingestion jobs)
-  -- nothing in the enclave or gateway talks to it.
+  Redis is back, but on the Python side only (RQ ingestion jobs) -- nothing in
+  the enclave or gateway talks to it.
