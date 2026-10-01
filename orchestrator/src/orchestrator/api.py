@@ -82,6 +82,12 @@ class ContextRequest(BaseModel):
     hops: int = Field(default=3, ge=1, le=6)
 
 
+class ReadLogRequest(BaseModel):
+    #: An **owner** session, not a grant. See ADR 0005.
+    session_token: str
+    limit: int = Field(default=50, ge=1, le=500)
+
+
 class NeighbourhoodRequest(BaseModel):
     seed_ids: list[str] = Field(min_length=1, max_length=25)
     grant_token: str
@@ -204,6 +210,27 @@ def memory_neighbourhood(req: NeighbourhoodRequest) -> dict[str, Any]:
     return neighbourhood(
         runtime(), req.seed_ids, req.grant_token, hops=req.hops
     ).as_dict()
+
+
+@app.post("/memory/reads")
+def memory_reads(req: ReadLogRequest) -> dict[str, Any]:
+    """What agents have actually read, for the owner of this session.
+
+    The only **owner**-authenticated read the orchestrator serves: every other
+    one is authorised by an agent grant, and this is the record of what those
+    grants disclosed. An agent able to read it could see which objects other
+    agents were shown -- a disclosure channel around the permission check
+    rather than a record of it -- so it takes a session token, resolved by the
+    gateway, and there is no grant-authorised path to it and no MCP tool.
+    See ADR 0005.
+    """
+    try:
+        owner_id = runtime().gateway.introspect_session(req.session_token)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
+    return runtime().read_log.summary(owner_id, limit=req.limit)
 
 
 @app.get("/explorer", include_in_schema=False)

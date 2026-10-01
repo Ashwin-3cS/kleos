@@ -45,6 +45,7 @@ from langgraph.graph import END, START, StateGraph
 
 from ..permissions import Scope, evaluate
 from ..schema import Claim, Entity, Event
+from .audit import record_read
 from .runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -150,6 +151,21 @@ def build_neighbourhood_graph(runtime: Runtime):
         hop_of = state.get("hop_of", {})
         walked = {c["id"]: _node_of(c) for c in candidates}
         reasons = sorted({d["reason"] for d in denials})
+
+        # The read most worth auditing: a walk is open-ended, so repeated
+        # re-seeding is both the cheapest way to probe the graph's shape and
+        # invisible in any per-object record. These entries are what makes the
+        # pattern visible to the owner afterwards.
+        record_read(
+            runtime,
+            Scope.model_validate(state["scope"]),
+            state["grant_token"],
+            kind="neighbourhood",
+            disclosed_ids=[nid for nid in walked if verdicts.get(nid) is None],
+            denied=denials,
+            considered=len(walked),
+            subject=",".join(seeds),
+        )
 
         if not walked:
             return {

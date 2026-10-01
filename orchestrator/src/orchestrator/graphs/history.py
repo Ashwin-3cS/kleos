@@ -37,6 +37,7 @@ from langgraph.graph import END, START, StateGraph
 
 from ..permissions import Scope, evaluate
 from ..schema import Citation, Claim, Entity, Event
+from .audit import record_read
 from .runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -185,6 +186,20 @@ def build_shift_graph(runtime: Runtime):
         denials = state.get("denials", [])
         claims: dict[str, Claim] = _stored(candidates)
         in_chain = state.get("hop_of", {})
+
+        # Logged whatever the outcome, including the "no such claim" case: an
+        # agent probing ids it was never given is the signal an audit log is
+        # for, and it looks identical to a typo unless the misses are recorded.
+        record_read(
+            runtime,
+            Scope.model_validate(state["scope"]),
+            state["grant_token"],
+            kind="shift",
+            disclosed_ids=[cid for cid in claims if verdicts.get(cid) is None],
+            denied=denials,
+            considered=len(claims),
+            subject=claim_id,
+        )
 
         if not claims:
             return {
@@ -376,6 +391,17 @@ def build_context_graph(runtime: Runtime):
         denials = state.get("denials", [])
         hop_of = state.get("hop_of", {})
         nodes = _stored(candidates)
+
+        record_read(
+            runtime,
+            Scope.model_validate(state["scope"]),
+            state["grant_token"],
+            kind="context",
+            disclosed_ids=[nid for nid in nodes if verdicts.get(nid) is None],
+            denied=denials,
+            considered=len(nodes),
+            subject=seed_id,
+        )
 
         if not nodes:
             return {
