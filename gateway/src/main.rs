@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let config = Config::from_env();
+    let config = Config::from_env()?;
     info!(port = config.gateway_port, "starting memorai gateway");
 
     let enclave = EnclaveClient::new(&config.enclave_host, config.enclave_port);
