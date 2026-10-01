@@ -18,6 +18,8 @@ _CONSTRAINTS = [
     "FOR (n:Event) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT memorai_claim_id IF NOT EXISTS "
     "FOR (n:Claim) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT memorai_agent_read_id IF NOT EXISTS "
+    "FOR (n:AgentRead) REQUIRE n.id IS UNIQUE",
 ]
 
 _INDEXES = [
@@ -34,6 +36,14 @@ _INDEXES = [
     # Epistemic status, promoted alongside it and indexed for the same reason:
     # the open-commitment read excludes superseded claims by default.
     "CREATE INDEX memorai_claim_status IF NOT EXISTS FOR (n:Claim) ON (n.claim_status)",
+    # The read log. Owner plus time is the only way it is read -- "show me what
+    # agents have seen, newest first" -- and the composite index serves both
+    # the filter and the ordering. `:AgentRead` carries no `:Memory` label, so
+    # none of the indexes above touch it. See ADR 0005.
+    "CREATE INDEX memorai_agent_read_owner_at IF NOT EXISTS "
+    "FOR (n:AgentRead) ON (n.owner_id, n.at_ms)",
+    "CREATE INDEX memorai_agent_read_grant IF NOT EXISTS "
+    "FOR (n:AgentRead) ON (n.grant_fp)",
 ]
 
 # Every stored node also carries the :Memory label so one vector index covers

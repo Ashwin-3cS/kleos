@@ -16,8 +16,11 @@ from ..extraction import get_extractor
 from ..extraction.base import Extractor
 from ..gateway_client import GatewayClient
 from ..retrieval.embeddings import Embedder, get_embedder
+from ..retrieval.ranking import RankingWeights
+from ..storage.blobs import BlobStore, get_blob_store
 from ..storage.migrations import apply_migrations
 from ..storage.neo4j_store import Neo4jStore
+from ..storage.reads import ReadLog
 
 
 @dataclass(slots=True)
@@ -31,6 +34,11 @@ class Runtime:
     #: registry, so a caller can add a connector for one run without
     #: mutating global state.
     registry: ConnectorRegistry
+    #: Where sealed ciphertext lands. See ADR 0002.
+    blobs: BlobStore
+    #: What every agent read actually returned. See ADR 0005.
+    read_log: ReadLog
+    weights: RankingWeights
 
     @classmethod
     def build(
@@ -55,6 +63,9 @@ class Runtime:
             extractor=get_extractor(settings),
             gateway=GatewayClient(settings.gateway_url),
             registry=registry or REGISTRY.copy(),
+            blobs=get_blob_store(settings),
+            read_log=ReadLog(store),
+            weights=RankingWeights.from_settings(settings),
         )
 
     def close(self) -> None:

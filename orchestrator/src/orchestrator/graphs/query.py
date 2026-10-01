@@ -20,6 +20,7 @@ from langgraph.graph import END, START, StateGraph
 from ..permissions import Scope, evaluate
 from ..retrieval.index import MemoryRetriever
 from ..schema import Claim, Entity, Event
+from .audit import record_read
 from .runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ def build_query_graph(runtime: Runtime):
             runtime.embedder,
             owner_id=scope.owner_id,
             top_k=state.get("top_k", 8),
+            weights=runtime.weights,
         )
         ranked = retriever.retrieve_stored(state["question"])
         log.info("query.retrieve candidates=%d", len(ranked))
@@ -119,6 +121,19 @@ def build_query_graph(runtime: Runtime):
         permitted = state.get("permitted", [])
         denials = state.get("denials", [])
         considered = len(state.get("candidates", []))
+
+        # Logged before the answer is built, so there is no path that returns
+        # content without a record of having returned it.
+        record_read(
+            runtime,
+            Scope.model_validate(state["scope"]),
+            state["grant_token"],
+            kind="query",
+            disclosed_ids=[c["id"] for c in permitted],
+            denied=denials,
+            considered=considered,
+            subject=state["question"],
+        )
 
         if not permitted:
             reasons = sorted({d["reason"] for d in denials})
