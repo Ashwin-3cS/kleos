@@ -21,7 +21,7 @@ pub fn issue_session_token(
     secret: &str,
     ttl_secs: usize,
 ) -> anyhow::Result<String> {
-    let exp = (chrono_now_secs() + ttl_secs) as usize;
+    let exp = chrono_now_secs() + ttl_secs;
     let claims = SessionClaims {
         typ: TOKEN_TYPE.to_string(),
         owner_id: owner_id.to_string(),

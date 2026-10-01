@@ -31,14 +31,18 @@ pub fn compute_identity(owner_id: String, signals: Vec<OAuthSignal>) -> OwnerIde
 /// Shared by /identity/verify and /oauth/exchange so a user who connects a
 /// source lands on the same owner id they log in as.
 pub fn derive_owner_id(signals: &[OAuthSignal]) -> String {
+    // First signal wins; the ordering is the caller's, which is why this is a
+    // `map(..).next()` rather than a search -- there is no predicate here, only
+    // a projection of whichever signal came first.
     let primary = signals
         .iter()
-        .find_map(|s| match s {
-            OAuthSignal::Google { subject, .. } => Some(format!("google:{subject}")),
-            OAuthSignal::GitHub { subject, .. } => Some(format!("github:{subject}")),
-            OAuthSignal::Wallet { address } => Some(format!("wallet:{address}")),
-            OAuthSignal::Domain { domain } => Some(format!("domain:{domain}")),
+        .map(|s| match s {
+            OAuthSignal::Google { subject, .. } => format!("google:{subject}"),
+            OAuthSignal::GitHub { subject, .. } => format!("github:{subject}"),
+            OAuthSignal::Wallet { address } => format!("wallet:{address}"),
+            OAuthSignal::Domain { domain } => format!("domain:{domain}"),
         })
+        .next()
         .expect("caller guarantees at least one signal");
     hex::encode(primary)
 }

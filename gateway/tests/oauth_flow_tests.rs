@@ -9,7 +9,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use gateway::config::Config;
-use gateway::store::{InMemoryTokenStore, SealedTokenStore};
+use gateway::store::InMemoryTokenStore;
 use gateway::vsock::client::EnclaveClient;
 use gateway::{build_router, AppState};
 use std::sync::Arc;
