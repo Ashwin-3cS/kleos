@@ -121,9 +121,10 @@ class MockExtractor:
         # "<connector>:<external_id>" because an event id is derived, not
         # something a source knows. This is what makes CITES cross
         # connectors, and the ingestion graph already turns it into an edge.
+        referenced: list[Citation] = []
         for reference in record.metadata.get("cites", []):
             connector, _, external_id = str(reference).partition(":")
-            citations.append(
+            referenced.append(
                 Citation(
                     event_id=stable_id("evt", owner_id, connector, external_id),
                     # These timestamps are the *reference's*; the cited event
@@ -138,6 +139,7 @@ class MockExtractor:
                     quote=None,
                 )
             )
+        citations.extend(referenced)
 
         event = Event(
             id=event_id,
@@ -174,8 +176,20 @@ class MockExtractor:
                     reconciled_into=None,
                     asserted_at_ms=record.occurred_at_ms,
                     provenance=Provenance(
+                        # The asserting event, plus whatever that record itself
+                        # pointed at. A note that cites a thread and then records
+                        # a decision has grounded the decision in that thread,
+                        # and `why_did_this_shift` promises exactly this: "the
+                        # citations present in the superseder that were absent
+                        # from the claim it replaced". Attaching cross-record
+                        # references to the event alone left that promise one hop
+                        # short -- the evidence was in the graph but not in the
+                        # read that exists to surface it. Found by the eval
+                        # harness, which scored 60% on "what changed and why"
+                        # while every piece of evidence was present in Neo4j.
                         citations=[
-                            Citation(event_id=event_id, source=source, quote=match.group(0))
+                            Citation(event_id=event_id, source=source, quote=match.group(0)),
+                            *referenced,
                         ],
                         derived_by=NAME,
                         confidence=0.8,
@@ -233,8 +247,20 @@ class MockExtractor:
                     ),
                     asserted_at_ms=record.occurred_at_ms,
                     provenance=Provenance(
+                        # The asserting event, plus whatever that record itself
+                        # pointed at. A note that cites a thread and then records
+                        # a decision has grounded the decision in that thread,
+                        # and `why_did_this_shift` promises exactly this: "the
+                        # citations present in the superseder that were absent
+                        # from the claim it replaced". Attaching cross-record
+                        # references to the event alone left that promise one hop
+                        # short -- the evidence was in the graph but not in the
+                        # read that exists to surface it. Found by the eval
+                        # harness, which scored 60% on "what changed and why"
+                        # while every piece of evidence was present in Neo4j.
                         citations=[
-                            Citation(event_id=event_id, source=source, quote=match.group(0))
+                            Citation(event_id=event_id, source=source, quote=match.group(0)),
+                            *referenced,
                         ],
                         derived_by=NAME,
                         confidence=0.8,
