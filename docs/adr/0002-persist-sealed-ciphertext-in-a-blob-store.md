@@ -104,7 +104,7 @@ confidentiality bug, not a performance one.
   on the enclave, which the gateway deliberately does not expose
   (`gateway/src/store/mod.rs`). So the bytes are durable and unreadable. That
   is the correct order to build these in — persisting first means the decrypt
-  route, when it lands, has something to decrypt — but it means Phase 2 owes a
+  route, when it lands, has something to decrypt — but it means roadmap step 2 owes a
   gateway route before sealed content is usable, and until then the honest
   description is "retained, not yet retrievable".
 - The local blob directory holds the *only* copy of a sensitive body. It is
@@ -113,5 +113,5 @@ confidentiality bug, not a performance one.
   config comment and the README.
 - Content addressing means a body that changes at the source produces a second
   blob and the first is never collected. Acceptable for now; a sweep for blobs
-  no ref names is straightforward whenever it matters, and deletion is a Phase
+  no ref names is straightforward whenever it matters, and deletion is a roadmap step
   3 concern (the plan's "deletion propagates to retrieval and derived claims").

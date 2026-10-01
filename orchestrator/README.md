@@ -311,7 +311,7 @@ cp .env.example .env
 
 ../scripts/services.sh up                 # neo4j :7688, redis :6380, postgres :5435
 .venv/bin/pytest                          # 146 tests; skips if neo4j is down
-.venv/bin/python -m orchestrator.eval     # the Phase 0 exit test
+.venv/bin/python -m orchestrator.eval     # the step 0 exit test
 .venv/bin/ruff check .
 ```
 

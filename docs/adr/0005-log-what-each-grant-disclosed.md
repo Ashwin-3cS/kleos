@@ -108,7 +108,7 @@ Re-ingesting does not un-disclose what an agent was already shown.
   needs them apart.
 - The repeated-reseeding attack the neighbourhood design acknowledges is now
   detectable after the fact. Still not *prevented*: nothing rate-limits it, and
-  the log is read by a human who thinks to look. Phase 6 owns rate limits and
+  the log is read by a human who thinks to look. Roadmap step 6 owns rate limits and
   the revocation list; this is the evidence layer beneath them.
 - The read log is the first thing in Neo4j that is **not** rebuildable from
   source material, which contradicts the "queryable index, not system of
@@ -117,7 +117,7 @@ Re-ingesting does not un-disclose what an agent was already shown.
   in the docstring and the README.
 - Every read now performs one extra write. Measured at ~1ms against local
   Neo4j; irrelevant beside the vector search it follows, and worth re-checking
-  when Phase 1's one-second voice budget lands.
+  when step 1's one-second voice budget lands.
 - `subject` stores a truncated question (500 chars). It is the one field that
   holds user-authored text, so it is capped: a log is not a transcript store,
-  and Phase 3's retention policy will have to cover it.
+  and step 3's retention policy will have to cover it.

@@ -1,7 +1,8 @@
 """Runs both paths over the labelled corpus and reports the difference.
 
-This is the Phase 0 exit test. The plan's instruction is explicit: *if
-resolution does not help, stop and rethink before building further.* So the
+This is step 0's exit test (see the root README, "Where this is going"). The
+instruction there is explicit: *if resolution does not help, stop and rethink
+before building further.* So the
 harness is built to be able to say no. Two of the six questions exist
 specifically as cases where the resolved path could lose -- a distractor project
 whose storage decision graph proximity might drag in, and a commitment with no
@@ -43,7 +44,7 @@ of text is its own provenance, which is not the same thing as a chain.
 The absolute numbers are close to meaningless right now, because both paths run
 on `HashedTokenEmbedder` -- stable, non-semantic, no API key. That is the right
 *control* (embedding quality is held identical, so the delta isolates
-resolution) and it is a poor absolute measurement. The next Phase 0 item is a
+resolution) and it is a poor absolute measurement. The next step 0 item is a
 real embedder, and the first thing to do after wiring it is re-run this and
 compare deltas, not scores.
 """
@@ -518,7 +519,7 @@ def format_report(report: dict[str, Any]) -> str:
 
 
 def _verdict(best: dict, baseline: dict, query_only: dict) -> str:
-    """States the Phase 0 exit condition in one line, including a failure.
+    """States the step 0 exit condition in one line, including a failure.
 
     The plan says to stop and rethink if resolution does not help. A harness
     that cannot print that sentence is not an exit test, so the failure branch
@@ -537,8 +538,8 @@ def _verdict(best: dict, baseline: dict, query_only: dict) -> str:
     if recall_delta <= 0 and stale_delta <= 0:
         return (
             "VERDICT: resolution does not help on this corpus -- it retrieves no more, "
-            "and is no more\n         correct about what is current. Per PLAN.md "
-            "Phase 0, stop and rethink before\n         building further."
+            "and is no more\n         correct about what is current. Per the step 0 "
+            "exit condition, stop and rethink\n         before building further."
         )
 
     parts = [f"recall {recall_delta:+.0%}", f"unmarked-stale {-stale_delta:+.0%}"]
