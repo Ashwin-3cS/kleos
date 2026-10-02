@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -58,8 +59,36 @@ class Settings(BaseSettings):
     #: operator can read it (see the README's confidentiality model).
     chatgpt_sensitive: bool = Field(default=True, validation_alias="CHATGPT_SENSITIVE")
 
-    anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
-    extraction_model: str = Field(default="claude-sonnet-5", validation_alias="EXTRACTION_MODEL")
+    #: The LLM used for extraction, over an OpenAI-compatible `/chat/completions`
+    #: API. The dependency is the API shape, not the vendor -- Groq, OpenAI,
+    #: Together and a local vLLM all speak it -- so switching provider is this
+    #: URL plus a model name.
+    llm_base_url: str = Field(
+        default="https://api.groq.com/openai/v1", validation_alias="LLM_BASE_URL"
+    )
+    extraction_model: str = Field(
+        default="openai/gpt-oss-120b", validation_alias="EXTRACTION_MODEL"
+    )
+    llm_timeout_secs: float = Field(default=60.0, validation_alias="LLM_TIMEOUT_SECS", gt=0)
+    #: Rate limits are the normal case for a backfill rather than an exception --
+    #: a provider's per-minute token budget is smaller than one person's export --
+    #: so the extractor retries 429 and 5xx, honouring the delay the provider
+    #: states. This caps how long it keeps trying one record.
+    llm_max_attempts: int = Field(default=6, validation_alias="LLM_MAX_ATTEMPTS", ge=1)
+
+    #: Read from the environment by preference. `GROQ_API_KEY` is accepted as the
+    #: provider-specific name people actually have set.
+    llm_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("LLM_API_KEY", "GROQ_API_KEY")
+    )
+    #: A file holding the key instead, which is how a key ends up next to a
+    #: checkout in practice. Read at settings time so the secret is never an
+    #: argument on a command line or a row in a process list. `.gitignore` covers
+    #: the obvious filenames; a real deployment uses the env var or a secret
+    #: manager and leaves this unset.
+    llm_api_key_file: str | None = Field(
+        default="api_key.txt", validation_alias="LLM_API_KEY_FILE"
+    )
     embedding_model: str = Field(default="voyage-3", validation_alias="EMBEDDING_MODEL")
 
     #: Encrypt the resolved record's text at rest (ADR 0010). Needs a reachable
@@ -97,6 +126,34 @@ class Settings(BaseSettings):
     semantic_weight: float = Field(default=0.6, validation_alias="SEMANTIC_WEIGHT", ge=0)
     recency_weight: float = Field(default=0.15, validation_alias="RECENCY_WEIGHT", ge=0)
     proximity_weight: float = Field(default=0.25, validation_alias="PROXIMITY_WEIGHT", ge=0)
+
+    @model_validator(mode="after")
+    def _load_key_from_file(self):
+        """Falls back to the key file when no key is in the environment.
+
+        After the env var, never over it: an explicitly exported key is the more
+        deliberate of the two, and a stale file silently winning would be a bad
+        afternoon.
+        """
+        if self.llm_api_key or not self.llm_api_key_file:
+            return self
+        path = Path(self.llm_api_key_file)
+        if not path.is_absolute():
+            # Relative to the repo root rather than the working directory, so the
+            # orchestrator finds it whether it was started from `orchestrator/`
+            # or from the top.
+            for base in (Path.cwd(), *Path(__file__).resolve().parents):
+                candidate = base / path
+                if candidate.is_file():
+                    path = candidate
+                    break
+        try:
+            key = path.read_text().strip()
+        except OSError:
+            return self
+        if key:
+            object.__setattr__(self, "llm_api_key", key)
+        return self
 
     @field_validator("enabled_sources", mode="before")
     @classmethod
