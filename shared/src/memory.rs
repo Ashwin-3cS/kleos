@@ -1,4 +1,4 @@
-use crate::permissions::ObjectAcl;
+use crate::permissions::{ObjectAcl, Sensitivity};
 use serde::{Deserialize, Serialize};
 
 // The resolved memory schema. Types only, no logic -- every object here is
@@ -96,15 +96,101 @@ pub struct Provenance {
 }
 
 /// Pointer to raw content that was Seal-encrypted inside the enclave before
-/// leaving it. `blob_id` is the eventual Walrus blob; until Walrus is wired
-/// the ciphertext is carried by the orchestrator and `blob_id` is `None`.
+/// leaving it.
+///
+/// Two identifiers, because a sealed record body is a *small* blob and small
+/// blobs get batched. `blob_id` names what the store holds -- a Walrus Quilt,
+/// or a standalone blob -- and `patch_id` locates this body inside it.
+/// `patch_id` is `None` when the body was stored on its own. See ADR 0008.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct EncryptedContentRef {
     pub key_id: String,
     pub scheme: String,
     pub blob_id: Option<String>,
+    /// One body within a batch. A Quilt holds up to ~660 patches and each is
+    /// readable without fetching the rest, so this field is the entire
+    /// addressing cost of batching.
+    pub patch_id: Option<String>,
     pub byte_len: u64,
+}
+
+/// The emotional register of a piece of content, as a **closed** vocabulary.
+///
+/// Closed on purpose, and this is the whole design. The obvious shape for
+/// "what kind of content is this" is free-text tags, and free text is how an
+/// extractor eventually writes `"anxious about the biopsy results"` into a field
+/// built for filtering -- putting the most sensitive sentence in the record into
+/// the one place that gets indexed, logged and read without opening the body.
+/// A fixed vocabulary cannot carry content. It can only say which of ten coarse
+/// registers a body sits in, which is enough to answer "what was I anxious about
+/// last spring" and not enough to be a leak.
+///
+/// It is also never written to the blob store. Walrus Quilt supports immutable
+/// per-patch tags, which is exactly where this would naturally go and exactly
+/// where it must not: plaintext, public and permanent, beside the ciphertext
+/// that was the point. See ADR 0009.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AffectTone {
+    Neutral,
+    Joy,
+    Relief,
+    Affection,
+    Frustration,
+    Anger,
+    Anxiety,
+    Sadness,
+    Shame,
+    Grief,
+}
+
+impl AffectTone {
+    /// The lowest sensitivity a body in this register may be stored at.
+    ///
+    /// Affect **raises** the floor and never lowers it, which makes the label
+    /// self-protecting: tagging a transcript as grief narrows who can read it
+    /// rather than widening it. A connector declares sensitivity from the
+    /// source it came from and cannot know that one conversation in the export
+    /// was about a death; this is where that is corrected.
+    pub fn sensitivity_floor(&self) -> Sensitivity {
+        match self {
+            // Ordinary register. Still Personal -- nothing here is public.
+            AffectTone::Neutral
+            | AffectTone::Joy
+            | AffectTone::Relief
+            | AffectTone::Frustration
+            | AffectTone::Anger => Sensitivity::Personal,
+            // Discloses something about a relationship or a state of mind.
+            AffectTone::Affection | AffectTone::Anxiety | AffectTone::Sadness => {
+                Sensitivity::Confidential
+            }
+            // The two registers a person is least likely to want an agent in.
+            AffectTone::Shame | AffectTone::Grief => Sensitivity::Restricted,
+        }
+    }
+}
+
+/// The affective facet of an [`Event`]: what register its content sits in.
+///
+/// A facet rather than a node type, for the same reason [`Commitment`] is one:
+/// it is a property of something already stored, and a parallel node type would
+/// duplicate the provenance and ACL machinery that already governs it.
+///
+/// Deliberately has no free-text field of any kind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Affect {
+    pub tone: AffectTone,
+    /// How strongly, in `0.0..=1.0`. Separate from `tone` because "mildly
+    /// frustrated" and "furious" are the same register and want different
+    /// ordering; not separate enough to be its own axis.
+    pub intensity: f32,
+    pub confidence: f32,
+    /// Which extractor decided, e.g. "mock-extractor@v1". Same contract as
+    /// [`Provenance::derived_by`]: an affect label is a derived claim about
+    /// content, and a reader is entitled to know what derived it.
+    pub detected_by: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -147,6 +233,11 @@ pub struct Event {
     /// Present when the raw body was sensitive enough to be encrypted in the
     /// enclave rather than stored in the clear.
     pub encrypted_content: Option<EncryptedContentRef>,
+    /// What register the body is in, when an extractor could tell. Sits next to
+    /// `encrypted_content` because together they are the answer to "what kind of
+    /// thing is in that blob" -- which is the question the blob store itself
+    /// must never be able to answer. See ADR 0009.
+    pub affect: Option<Affect>,
     pub provenance: Provenance,
     pub acl: ObjectAcl,
 }
@@ -267,5 +358,77 @@ impl MemoryNode {
             MemoryNode::Event(e) => &e.provenance,
             MemoryNode::Claim(c) => &c.provenance,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The property the whole design rests on: an affect label can only ever
+    /// narrow who may read a body. If any tone mapped below `Personal`, tagging
+    /// a transcript would be a way to *widen* access to it.
+    #[test]
+    fn no_tone_lowers_the_floor_below_personal() {
+        for tone in [
+            AffectTone::Neutral,
+            AffectTone::Joy,
+            AffectTone::Relief,
+            AffectTone::Affection,
+            AffectTone::Frustration,
+            AffectTone::Anger,
+            AffectTone::Anxiety,
+            AffectTone::Sadness,
+            AffectTone::Shame,
+            AffectTone::Grief,
+        ] {
+            assert!(
+                tone.sensitivity_floor() >= Sensitivity::Personal,
+                "{tone:?} would make tagging a way to widen access"
+            );
+        }
+    }
+
+    #[test]
+    fn the_heaviest_registers_are_restricted() {
+        assert_eq!(AffectTone::Grief.sensitivity_floor(), Sensitivity::Restricted);
+        assert_eq!(AffectTone::Shame.sensitivity_floor(), Sensitivity::Restricted);
+    }
+
+    /// An affect facet must not be able to carry content. Checked structurally
+    /// rather than by reading the struct: the risk is a future field, and a test
+    /// that enumerates today's fields would pass right through one.
+    #[test]
+    fn the_only_strings_in_an_affect_are_its_tone_and_its_extractor() {
+        let affect = Affect {
+            tone: AffectTone::Grief,
+            intensity: 0.9,
+            confidence: 0.5,
+            detected_by: "mock-extractor@v1".into(),
+        };
+        let json = serde_json::to_value(&affect).expect("serialises");
+        let mut string_fields: Vec<&str> = json
+            .as_object()
+            .expect("an object")
+            .iter()
+            .filter(|(_, value)| value.is_string())
+            .map(|(key, _)| key.as_str())
+            .collect();
+        string_fields.sort_unstable();
+        assert_eq!(
+            string_fields,
+            ["detected_by", "tone"],
+            "a new string field on Affect is a place for an extractor to write content"
+        );
+    }
+
+    /// A tone this binary has never heard of must fail to deserialise rather
+    /// than being silently admitted: unlike a source id, the vocabulary is
+    /// closed on purpose, and an unknown value means the writer had a field we
+    /// cannot reason about the sensitivity of.
+    #[test]
+    fn an_unknown_tone_is_rejected() {
+        let json = r#"{"tone":"existential_dread","intensity":0.5,"confidence":0.5,"detected_by":"x"}"#;
+        assert!(serde_json::from_str::<Affect>(json).is_err());
     }
 }

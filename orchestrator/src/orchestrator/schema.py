@@ -12,10 +12,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .enums import ClaimStatus, EntityKind, FulfillmentStatus, SourceId
+from .enums import AffectTone, ClaimStatus, EntityKind, FulfillmentStatus, SourceId
 from .permissions import ObjectAcl
 
 __all__ = [
+    "Affect",
+    "AffectTone",
     "Candidate",
     "Citation",
     "Claim",
@@ -60,9 +62,33 @@ class Provenance(BaseModel):
 class EncryptedContentRef(BaseModel):
     key_id: str
     scheme: str
-    #: Walrus blob id once Walrus is wired; ``None`` until then.
+    #: What the store holds: a Quilt, or a standalone blob.
     blob_id: str | None = None
+    #: This body within that batch; ``None`` when stored on its own. ADR 0008.
+    patch_id: str | None = None
     byte_len: int
+
+
+class Affect(BaseModel):
+    """The affective facet of an ``Event``: what register its content sits in.
+
+    A facet rather than a node type, for the same reason ``Commitment`` is one:
+    it is a property of something already stored, and a parallel node type would
+    duplicate the provenance and ACL machinery that already governs it.
+
+    Deliberately has no free-text field of any kind.
+    """
+
+    tone: AffectTone
+    #: How strongly, in 0.0..=1.0. Separate from ``tone`` because "mildly
+    #: frustrated" and "furious" are the same register and want different
+    #: ordering; not separate enough to deserve its own axis.
+    intensity: float = 0.5
+    confidence: float = 0.5
+    #: Which extractor decided. Same contract as ``Provenance.derived_by``: an
+    #: affect label is a derived claim about content, and a reader is entitled
+    #: to know what derived it.
+    detected_by: str
 
 
 class Entity(BaseModel):
@@ -85,6 +111,10 @@ class Event(BaseModel):
     entity_ids: list[str] = Field(default_factory=list)
     source: SourceRef
     encrypted_content: EncryptedContentRef | None = None
+    #: Sits next to ``encrypted_content`` because together they answer "what kind
+    #: of thing is in that blob" -- the question the blob store itself must never
+    #: be able to answer. See ADR 0009.
+    affect: Affect | None = None
     provenance: Provenance
     acl: ObjectAcl
 
