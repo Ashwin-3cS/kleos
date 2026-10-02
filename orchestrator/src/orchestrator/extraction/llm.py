@@ -348,9 +348,40 @@ def _to_candidate(owner_id: str, record: RawRecord, parsed: dict, derived_by: st
     event_id = stable_id("evt", owner_id, record.connector, record.external_id)
     sensitivity = Sensitivity.CONFIDENTIAL if record.sensitive else Sensitivity.PERSONAL
 
+    # A record that points at another record -- a reply, a commit that closes an
+    # issue, a note referencing a thread elsewhere. Declared as
+    # "<connector>:<external_id>" because an event id is derived, not something a
+    # source knows.
+    #
+    # These ride on claims as well as on the event, and that is not cosmetic:
+    # `why_did_this_shift` promises "the citations present in the superseder that
+    # were absent from the claim it replaced -- the evidence that moved the
+    # decision". A note that cites a thread and then records a decision has
+    # grounded that decision in the thread. The mock extractor was fixed for this
+    # (ADR 0006); this one shipped without it, and the eval scored "what changed
+    # and why" at 0% as a result.
+    referenced = [
+        Citation(
+            event_id=stable_id("evt", owner_id, *str(ref).split(":", 1)),
+            source=SourceRef(
+                connector=str(ref).split(":", 1)[0],
+                external_id=str(ref).split(":", 1)[-1],
+                url=None,
+                occurred_at_ms=record.occurred_at_ms,
+                ingested_at_ms=ingested_at_ms,
+            ),
+            quote=None,
+        )
+        for ref in record.metadata.get("cites", [])
+        if ":" in str(ref)
+    ]
+
     def provenance(quote: str, confidence: float) -> Provenance:
         return Provenance(
-            citations=[Citation(event_id=event_id, source=source, quote=quote)],
+            citations=[
+                Citation(event_id=event_id, source=source, quote=quote),
+                *referenced,
+            ],
             derived_by=derived_by,
             confidence=confidence,
             created_at_ms=ingested_at_ms,
