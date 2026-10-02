@@ -191,6 +191,14 @@ def build_ingestion_graph(runtime: Runtime):
             if not runtime.store.link(owner_id, from_id, rel, to_id):
                 log.debug("ingestion.write unlinked %s-[:%s]->%s", from_id, rel, to_id)
 
+        # One batched write for every sealed body in this run, before anything
+        # else. Batching is the point rather than an optimisation: a sealed
+        # record body is a few kilobytes, per-blob encoding overhead dominates
+        # at that size, and a Quilt removes it (ADR 0008). A run that seals 400
+        # transcripts writes one container, not 400 blobs.
+        refs_by_external_id, blob_errors = _persist_sealed(runtime, owner_id, sealed)
+        errors += blob_errors
+
         for raw in state.get("candidates", []):
             candidate = Candidate.model_validate(raw)
 
@@ -200,17 +208,16 @@ def build_ingestion_graph(runtime: Runtime):
                 touched["entities"].add(entity.id)
 
             for event in candidate.events:
-                blob = sealed.get(event.source.external_id)
-                if blob is not None:
-                    try:
-                        event.encrypted_content = _store_blob(runtime, owner_id, blob)
-                    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
-                        # Same rule as a failed seal: no fallback that writes
-                        # the plaintext body. A ref whose bytes are not stored
-                        # is worse than no event -- it reads as recoverable.
-                        errors.append(f"skipped {event.id}: sealed body not persisted: {exc}")
+                if event.source.external_id in sealed:
+                    ref = refs_by_external_id.get(event.source.external_id)
+                    if ref is None:
+                        # Same rule as a failed seal: no fallback that writes the
+                        # plaintext body. A ref whose bytes were never stored is
+                        # worse than a missing event -- it reads as recoverable.
+                        errors.append(f"skipped {event.id}: sealed body not persisted")
                         skipped += 1
                         continue
+                    event.encrypted_content = ref
                     event.body = None
                 elif _needs_seal(state, event.source.external_id):
                     errors.append(f"skipped {event.id}: sensitive body was not sealed")
@@ -273,21 +280,41 @@ def _needs_seal(state: IngestionState, external_id: str) -> bool:
     )
 
 
-def _store_blob(runtime: Runtime, owner_id: str, blob: dict):
-    """Persists the sealed ciphertext and returns the ref that points at it.
+def _persist_sealed(
+    runtime: Runtime, owner_id: str, sealed: dict[str, dict]
+) -> tuple[dict[str, Any], list[str]]:
+    """Writes every sealed body in this run as one batch of Quilt patches.
 
-    This is the half that was missing. The enclave returned ciphertext and a
-    ref, the ref was stored with ``blob_id = None``, and the bytes were
-    dropped when the run ended -- so sealing a record destroyed it. Now the
-    bytes go to the blob store first and the ref carries the id they landed
-    under, which is what ``blob_id`` was declared for. See ADR 0002.
+    Returns ``{external_id: EncryptedContentRef}`` and any errors. A caller that
+    finds an external id missing from the mapping must skip that event: the half
+    that was missing before ADR 0002 was storing the bytes at all, and the half
+    that would be worse than missing is a ref pointing at bytes nobody wrote.
+
+    The whole batch succeeds or the whole batch fails. A partial Quilt is not a
+    thing worth building a recovery path for while the only writer is a backfill
+    that can simply be re-run -- and re-running is cheap because patch ids are
+    content addresses, so the second attempt rewrites nothing.
     """
     from ..schema import EncryptedContentRef
 
-    ref = EncryptedContentRef.model_validate(blob["ref"])
-    ciphertext = base64.b64decode(blob["ciphertext_b64"])
-    ref.blob_id = runtime.blobs.put(owner_id, ciphertext)
-    return ref
+    if not sealed:
+        return {}, []
+
+    external_ids = list(sealed)
+    ciphertexts = [base64.b64decode(sealed[eid]["ciphertext_b64"]) for eid in external_ids]
+    try:
+        refs = runtime.blobs.put_batch(owner_id, ciphertexts)
+    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+        return {}, [f"sealed bodies not persisted ({len(ciphertexts)} pending): {exc}"]
+
+    out: dict[str, Any] = {}
+    for external_id, blob_ref in zip(external_ids, refs, strict=True):
+        ref = EncryptedContentRef.model_validate(sealed[external_id]["ref"])
+        ref.blob_id = blob_ref.blob_id
+        ref.patch_id = blob_ref.patch_id
+        out[external_id] = ref
+    log.info("ingestion.write persisted=%d patches", len(out))
+    return out, []
 
 
 def _upsert(runtime: Runtime, node, text: str) -> None:

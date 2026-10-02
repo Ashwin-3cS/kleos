@@ -24,20 +24,28 @@ _VARIANT_RE = re.compile(r"^\s{4}(\w+)", re.M)
 
 
 def _rust_text() -> str:
-    return (RUST_SRC / "memory.rs").read_text() + (RUST_SRC / "permissions.rs").read_text()
+    """Both schema sources, each one's test module stripped before joining.
+
+    Per file, not once over the concatenation. Stripping after the join cuts
+    everything after the *first* ``#[cfg(test)]`` in either file -- so the day
+    ``memory.rs`` grew a test module, every struct in ``permissions.rs``
+    disappeared from this comparison and four parity checks began failing with a
+    KeyError rather than a mismatch.
+    """
+    return "\n".join(
+        (RUST_SRC / name).read_text().split("#[cfg(test)]")[0]
+        for name in ("memory.rs", "permissions.rs")
+    )
 
 
 def _rust_structs() -> dict[str, list[str]]:
-    text = _rust_text()
-    # Strip the Rust test module so its fixtures are not mistaken for schema.
-    text = text.split("#[cfg(test)]")[0]
     return {
-        name: _FIELD_RE.findall(body) for name, body in _STRUCT_RE.findall(text)
+        name: _FIELD_RE.findall(body) for name, body in _STRUCT_RE.findall(_rust_text())
     }
 
 
 def _rust_enums() -> dict[str, list[str]]:
-    text = _rust_text().split("#[cfg(test)]")[0]
+    text = _rust_text()
     out = {}
     for name, body in _ENUM_RE.findall(text):
         variants = [v for v in _VARIANT_RE.findall(body) if v[0].isupper()]
@@ -64,6 +72,7 @@ PY_MODELS = {
         "Citation",
         "Provenance",
         "EncryptedContentRef",
+        "Affect",
         "Entity",
         "Event",
         "Commitment",
@@ -84,6 +93,7 @@ def test_struct_fields_match(name: str):
         ("EntityKind", schema.EntityKind),
         ("ClaimStatus", schema.ClaimStatus),
         ("FulfillmentStatus", schema.FulfillmentStatus),
+        ("AffectTone", schema.AffectTone),
         ("Sensitivity", permissions.Sensitivity),
         ("DenyReason", permissions.DenyReason),
     ],
