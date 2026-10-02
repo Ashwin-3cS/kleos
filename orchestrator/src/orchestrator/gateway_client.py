@@ -116,13 +116,11 @@ class GatewayClient:
         )
         return base64.b64decode(body["plaintext_b64"])
 
-    def grant_scope(self, scope: Scope, ttl_secs: int = 3600) -> str:
-        body = self._post(
-            "/memory/scope/grant",
-            {"scope": scope.model_dump(mode="json"), "ttl_secs": ttl_secs},
-            auth=True,
-        )
-        return body["grant_token"]
+    # There is deliberately no `grant_scope` here any more. Grants are signed by
+    # a key the owner holds, so nothing in this process -- or in the gateway --
+    # can mint one; the owner's client signs a scope and hands the agent the
+    # result. See ADR 0011 and the `kleos-device` command. All this side does is
+    # introspect what it is given, below.
 
     def introspect_session(self, session_token: str) -> str:
         """Resolves an owner session token to its owner id.

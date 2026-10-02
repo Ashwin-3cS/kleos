@@ -9,6 +9,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use gateway::config::Config;
+use gateway::store::device_keys::InMemoryDeviceKeyStore;
 use gateway::store::InMemoryTokenStore;
 use gateway::vsock::client::EnclaveClient;
 use gateway::{build_router, AppState};
@@ -42,6 +43,7 @@ async fn gateway_with_enclave() -> Arc<AppState> {
         enclave,
         pending_auth: Default::default(),
         tokens: Box::new(InMemoryTokenStore::default()),
+        device_keys: Box::new(InMemoryDeviceKeyStore::default()),
     })
 }
 

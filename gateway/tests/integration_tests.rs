@@ -14,6 +14,7 @@ fn test_state() -> Arc<AppState> {
         enclave,
         pending_auth: Default::default(),
         tokens: Box::new(gateway::store::InMemoryTokenStore::default()),
+        device_keys: Box::new(gateway::store::device_keys::InMemoryDeviceKeyStore::default()),
     })
 }
 
