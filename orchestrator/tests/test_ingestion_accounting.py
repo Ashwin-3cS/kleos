@@ -20,6 +20,7 @@ from orchestrator.gateway_client import GatewayError, SealedContent
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.runtime import Runtime
 from orchestrator.schema import EncryptedContentRef, Event
+from orchestrator.storage.blobs import BlobRef
 
 OWNER = "owner-accounting"
 _MARKER = b"FAKE_SEAL_V1:"
@@ -87,6 +88,14 @@ def _sealed_events(runtime: Runtime) -> list[Event]:
     return [e for e in _stored_events(runtime) if e.encrypted_content is not None]
 
 
+def _blob_ref(ref: EncryptedContentRef) -> BlobRef:
+    """The stored pointer, as the blob store wants it. Two ids since ADR 0008:
+    the Quilt, and the patch inside it."""
+    return BlobRef(
+        blob_id=ref.blob_id, patch_id=ref.patch_id, byte_len=ref.byte_len, backend="local-quilt"
+    )
+
+
 def test_a_sealed_body_is_persisted_and_recoverable(runtime: Runtime) -> None:
     gateway = _FakeSealGateway()
     runtime.gateway = gateway
@@ -103,9 +112,10 @@ def test_a_sealed_body_is_persisted_and_recoverable(runtime: Runtime) -> None:
     for event in sealed:
         ref = event.encrypted_content
         assert event.body is None, "a sealed body must not also be stored in the clear"
-        assert ref.blob_id, "the ref must name the blob holding its bytes"
+        assert ref.blob_id, "the ref must name the container holding its bytes"
+        assert ref.patch_id, "and the patch within it"
 
-        stored_bytes = runtime.blobs.get(OWNER, ref.blob_id)
+        stored_bytes = runtime.blobs.get(OWNER, _blob_ref(ref))
         assert stored_bytes is not None, "the bytes the ref points at must exist"
         assert stored_bytes in gateway.sealed, "must be exactly what the enclave returned"
         assert ref.byte_len == len(stored_bytes)
@@ -119,7 +129,7 @@ def test_the_persisted_bytes_are_ciphertext_not_plaintext(runtime: Runtime) -> N
     run_ingestion(runtime, OWNER, source="mock", thread_id="blob-opaque")
 
     for event in _sealed_events(runtime):
-        stored_bytes = runtime.blobs.get(OWNER, event.encrypted_content.blob_id)
+        stored_bytes = runtime.blobs.get(OWNER, _blob_ref(event.encrypted_content))
         plaintext = gateway.sealed[stored_bytes]
         assert stored_bytes.startswith(_MARKER)
         assert plaintext not in stored_bytes
@@ -131,9 +141,9 @@ def test_a_blob_is_not_readable_by_another_owner(runtime: Runtime) -> None:
     run_ingestion(runtime, OWNER, source="mock", thread_id="blob-owner")
 
     for event in _sealed_events(runtime):
-        blob_id = event.encrypted_content.blob_id
-        assert runtime.blobs.get(OWNER, blob_id) is not None
-        assert runtime.blobs.get("owner-someone-else", blob_id) is None
+        ref = _blob_ref(event.encrypted_content)
+        assert runtime.blobs.get(OWNER, ref) is not None
+        assert runtime.blobs.get("owner-someone-else", ref) is None
 
 
 def test_an_unsealed_sensitive_event_is_skipped_and_reported_as_skipped(
@@ -157,10 +167,11 @@ def test_a_blob_store_failure_skips_rather_than_storing_a_dangling_ref(
     written is worse than a missing event: it reads as recoverable."""
     runtime.gateway = _FakeSealGateway()
 
-    def boom(owner_id: str, ciphertext: bytes) -> str:
+    def boom(owner_id: str, ciphertexts: list[bytes]):
         raise OSError("no space left on device")
 
-    monkeypatch.setattr(runtime.blobs, "put", boom)
+    # put_batch, not put: ingestion writes the whole run as one batch (ADR 0008).
+    monkeypatch.setattr(runtime.blobs, "put_batch", boom)
 
     result = run_ingestion(runtime, OWNER, source="mock", thread_id="blob-store-failure")
 
