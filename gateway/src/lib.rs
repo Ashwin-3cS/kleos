@@ -11,6 +11,7 @@ use axum::Router;
 use config::Config;
 use middleware::oauth_state::PendingAuthStore;
 use std::sync::Arc;
+use store::device_keys::DeviceKeyStore;
 use store::SealedTokenStore;
 use tower_http::cors::{Any, CorsLayer};
 use vsock::client::EnclaveClient;
@@ -24,6 +25,10 @@ pub struct AppState {
     pub pending_auth: PendingAuthStore,
     /// Ciphertext only. See store/mod.rs.
     pub tokens: Box<dyn SealedTokenStore>,
+    /// Registered owner device public keys -- what grants are verified against.
+    /// There is no private key anywhere in this process, which is the point:
+    /// the gateway can check a grant and cannot mint one. See ADR 0011.
+    pub device_keys: Box<dyn DeviceKeyStore>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -44,7 +49,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/identity/verify", post(routes::identity::verify))
         .route("/memory/seal/encrypt", post(routes::memory::seal_encrypt))
         .route("/memory/seal/decrypt", post(routes::memory::seal_decrypt))
-        .route("/memory/scope/grant", post(routes::memory::scope_grant))
+        .route("/auth/device/register", post(routes::memory::device_register))
+        .route("/auth/device/keys", get(routes::memory::device_keys))
+        .route("/auth/device/revoke", post(routes::memory::device_revoke))
         .route(
             "/memory/scope/introspect",
             post(routes::memory::scope_introspect),

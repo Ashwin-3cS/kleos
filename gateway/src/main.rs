@@ -1,5 +1,7 @@
 use anyhow::Result;
 use gateway::config::Config;
+use gateway::store::device_keys::postgres::PostgresDeviceKeyStore;
+use gateway::store::device_keys::{DeviceKeyStore, InMemoryDeviceKeyStore};
 use gateway::store::postgres::PostgresTokenStore;
 use gateway::store::{InMemoryTokenStore, SealedTokenStore};
 use gateway::vsock::client::EnclaveClient;
@@ -26,12 +28,23 @@ async fn main() -> Result<()> {
     };
     info!(backend = tokens.backend(), "sealed oauth token store ready");
 
+    let device_keys: Box<dyn DeviceKeyStore> = match &config.sealed_token_store_url {
+        Some(url) => Box::new(
+            PostgresDeviceKeyStore::connect(url)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+        ),
+        None => Box::new(InMemoryDeviceKeyStore::default()),
+    };
+    info!(backend = device_keys.backend(), "device key store ready");
+
     let port = config.gateway_port;
     let state = Arc::new(AppState {
         config,
         enclave,
         pending_auth: Default::default(),
         tokens,
+        device_keys,
     });
 
     let router = build_router(state);
