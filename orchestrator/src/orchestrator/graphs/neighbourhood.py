@@ -178,6 +178,11 @@ def build_neighbourhood_graph(runtime: Runtime):
             }
 
         visible = {nid: node for nid, node in walked.items() if verdicts.get(nid) is None}
+        # Dropped nodes are never unsealed. The walk and the check both ran with
+        # content sealed, so nothing the grant excludes reaches this process in
+        # the clear (ADR 0010).
+        for node in visible.values():
+            runtime.content.unseal_node(node)
         # Both ends checked, from the same verdict map the filter used -- an
         # edge is a fact about its two endpoints, so it cannot outlive either.
         edges = [

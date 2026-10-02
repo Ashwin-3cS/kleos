@@ -18,6 +18,7 @@ from ..gateway_client import GatewayClient
 from ..retrieval.embeddings import Embedder, get_embedder
 from ..retrieval.ranking import RankingWeights
 from ..storage.blobs import BlobStore, get_blob_store
+from ..storage.content import ContentCrypto, NullContentCrypto
 from ..storage.migrations import apply_migrations
 from ..storage.neo4j_store import Neo4jStore
 from ..storage.reads import ReadLog
@@ -38,6 +39,9 @@ class Runtime:
     blobs: BlobStore
     #: What every agent read actually returned. See ADR 0005.
     read_log: ReadLog
+    #: Seals the record's text before it is stored, and unseals only what a read
+    #: is about to disclose. See ADR 0010.
+    content: ContentCrypto | NullContentCrypto
     weights: RankingWeights
 
     @classmethod
@@ -56,15 +60,21 @@ class Runtime:
         )
         if migrate:
             apply_migrations(store.driver, settings.neo4j_database, settings.embedding_dim)
+        gateway = GatewayClient(settings.gateway_url)
         return cls(
             settings=settings,
             store=store,
             embedder=get_embedder(settings),
             extractor=get_extractor(settings),
-            gateway=GatewayClient(settings.gateway_url),
+            gateway=gateway,
             registry=registry or REGISTRY.copy(),
             blobs=get_blob_store(settings),
             read_log=ReadLog(store),
+            content=(
+                ContentCrypto(gateway)
+                if settings.encrypt_content_at_rest
+                else NullContentCrypto()
+            ),
             weights=RankingWeights.from_settings(settings),
         )
 
