@@ -42,7 +42,6 @@ const MIN_ROOT_LEN: usize = 32;
 #[derive(Debug, Clone)]
 pub struct SigningKeys {
     session: String,
-    grant: String,
     oauth_state: String,
 }
 
@@ -59,7 +58,6 @@ impl SigningKeys {
     pub fn derive_from(root: &str) -> Self {
         Self {
             session: derive(root, "session"),
-            grant: derive(root, "grant"),
             oauth_state: derive(root, "oauth_state"),
         }
     }
@@ -113,9 +111,6 @@ impl SigningKeys {
         if let Ok(explicit) = std::env::var("SESSION_SIGNING_KEY") {
             keys.session = explicit;
         }
-        if let Ok(explicit) = std::env::var("GRANT_SIGNING_KEY") {
-            keys.grant = explicit;
-        }
         // Accepts the historical name so an existing deployment that set it
         // keeps working; it is now an override of a derived key rather than a
         // value that silently defaults to the session secret.
@@ -134,10 +129,6 @@ impl SigningKeys {
 
     pub fn session(&self) -> &str {
         &self.session
-    }
-
-    pub fn grant(&self) -> &str {
-        &self.grant
     }
 
     pub fn oauth_state(&self) -> &str {
@@ -170,11 +161,9 @@ mod tests {
     }
 
     #[test]
-    fn the_three_keys_differ() {
+    fn the_keys_differ() {
         let keys = SigningKeys::derive_from("a-root-secret-of-reasonable-length");
-        assert_ne!(keys.session(), keys.grant());
         assert_ne!(keys.session(), keys.oauth_state());
-        assert_ne!(keys.grant(), keys.oauth_state());
     }
 
     #[test]
@@ -182,7 +171,7 @@ mod tests {
         let a = SigningKeys::derive_from("same-root");
         let b = SigningKeys::derive_from("same-root");
         assert_eq!(a.session(), b.session());
-        assert_eq!(a.grant(), b.grant());
+        assert_eq!(a.oauth_state(), b.oauth_state());
     }
 
     #[test]
@@ -190,7 +179,6 @@ mod tests {
         let a = SigningKeys::derive_from("root-one");
         let b = SigningKeys::derive_from("root-two");
         assert_ne!(a.session(), b.session());
-        assert_ne!(a.grant(), b.grant());
         assert_ne!(a.oauth_state(), b.oauth_state());
     }
 
@@ -200,37 +188,25 @@ mod tests {
     fn a_derived_key_does_not_contain_the_root() {
         let root = "a-root-secret-of-reasonable-length";
         let keys = SigningKeys::derive_from(root);
-        for key in [keys.session(), keys.grant(), keys.oauth_state()] {
+        for key in [keys.session(), keys.oauth_state()] {
             assert!(!key.contains(root));
             assert_eq!(key.len(), 64, "32 bytes, hex encoded");
         }
     }
 
-    /// A token signed with one purpose's key must not validate under another's,
-    /// independently of the `typ` claim. `typ` stops confusion by a cooperating
-    /// caller; distinct keys stop it by anyone.
+    /// There is no key here that signs a grant. The property the previous
+    /// version of this test checked -- that a grant does not verify under the
+    /// session key -- is now structural: grant verification takes an Ed25519
+    /// public key belonging to the owner, and nothing derived from this root
+    /// participates. See `shared/src/grants.rs`.
     #[test]
-    fn a_session_signed_key_cannot_verify_a_grant() {
-        use crate::middleware::grant::{issue_grant_token, validate_grant_token};
-        use shared::{Scope, Sensitivity};
-
+    fn no_derived_key_can_sign_a_grant() {
         let keys = SigningKeys::derive_from("a-root-secret-of-reasonable-length");
-        let scope = Scope {
-            agent_id: "agent-1".into(),
-            owner_id: "owner-1".into(),
-            sources: vec![],
-            entity_kinds: vec![],
-            not_before_ms: None,
-            not_after_ms: None,
-            max_sensitivity: Sensitivity::Personal,
-            expires_at_ms: None,
-        };
-        let (grant, _) = issue_grant_token(&scope, 300, keys.grant()).unwrap();
-
-        assert!(validate_grant_token(&grant, keys.grant()).is_ok());
-        assert!(
-            validate_grant_token(&grant, keys.session()).is_err(),
-            "a grant must not verify under the session key"
+        // Session and state are the only purposes left; neither is a grant key.
+        assert_eq!(
+            [keys.session(), keys.oauth_state()].len(),
+            2,
+            "a third purpose here would mean the gateway can mint again"
         );
     }
 }
