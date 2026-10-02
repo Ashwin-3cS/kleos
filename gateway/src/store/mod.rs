@@ -8,6 +8,7 @@
 //! bytes -- unsealing is `POST /seal/decrypt` on the enclave and nothing
 //! else. The Python orchestrator is given no credentials for this database.
 
+pub mod device_keys;
 pub mod postgres;
 
 use crate::error::GatewayError;
