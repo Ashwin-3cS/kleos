@@ -124,6 +124,11 @@ class LLMExtractor:
         # record, and a fresh connection per call would spend more time in TLS
         # handshakes than in inference.
         self._max_attempts = settings.llm_max_attempts
+        # An instance attribute rather than the module constant, so a caller with a
+        # different kind of record can supply a different question. `tools/
+        # extract_page.py` does: a web page and an utterance are different things
+        # and asking the same question of both produces nonsense in one of them.
+        self.system_prompt = SYSTEM_PROMPT
         self._http = httpx.Client(
             timeout=settings.llm_timeout_secs,
             headers={
@@ -155,7 +160,7 @@ class LLMExtractor:
             # it, which is why the parse below is still defensive.
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {
                     "role": "user",
                     "content": json.dumps(

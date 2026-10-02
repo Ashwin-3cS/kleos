@@ -52,6 +52,40 @@ def _obligation(claim: Claim) -> tuple[str | None, str | None, int | None]:
     return (c.owed_by_entity_id, c.owed_to_entity_id, c.due_at_ms)
 
 
+#: Sources whose claims are reference material rather than the person's own account.
+#: Kept here, next to the precedence rule, rather than imported from the tool that
+#: produces them: the rule is about what the resolver will believe, and it should be
+#: readable without following an import into the tool layer.
+_WEAKER_SOURCES = frozenset({"web"})
+
+
+def _is_weaker(claim: Claim) -> bool:
+    """Whether every source this claim draws on is reference material.
+
+    ``all`` rather than ``any``: a claim derived from both a page and the person's own
+    note carries their account too, and demoting it would lose that.
+    """
+    sources = list(claim.acl.sources)
+    return bool(sources) and all(s in _WEAKER_SOURCES for s in sources)
+
+
+def _may_not_supersede(candidate: Claim, stored: Claim) -> bool:
+    """Blocks a weaker-sourced claim from superseding a stronger-sourced one.
+
+    **This is the whole mitigation for prompt injection through a fetched page.** A
+    page that says "the user has decided to use Postgres" extracts as a claim about
+    Postgres, lands in the same subject neighbourhood as the person's real decision,
+    and -- being newer -- would win on timestamp. Timestamps are the right tie-break
+    between two things the person said and exactly the wrong one between something
+    they said and something a stranger wrote.
+
+    Deliberately asymmetric: the person's own later claim *may* supersede a
+    web-derived one, because learning that a page was wrong is a normal thing to
+    happen and the record should follow.
+    """
+    return _is_weaker(candidate) and not _is_weaker(stored)
+
+
 @dataclass(slots=True)
 class Resolution:
     """What the resolver decided for one batch of candidates."""
@@ -118,6 +152,13 @@ class Resolver:
                 if _tokens(other.statement) == tokens and _obligation(other) == obligation:
                     continue
                 if other.status is not ClaimStatus.ACTIVE:
+                    continue
+                if _may_not_supersede(claim, other):
+                    # A page the person read cannot overwrite what the person said.
+                    # Recorded as a contradiction instead, so the disagreement is
+                    # visible without the weaker source winning.
+                    claim.contradicts.append(other.id)
+                    resolution.contradictions.append((claim.id, other.id))
                     continue
 
                 if claim.asserted_at_ms > other.asserted_at_ms:
