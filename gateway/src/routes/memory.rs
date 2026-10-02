@@ -7,7 +7,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 use shared::{
     ScopeGrantRequest, ScopeGrantResponse, ScopeIntrospectRequest, ScopeIntrospectResponse,
-    SealEncryptRequest, SealEncryptResponse,
+    SealDecryptRequest, SealDecryptResponse, SealEncryptRequest, SealEncryptResponse,
 };
 use std::sync::Arc;
 
@@ -35,6 +35,40 @@ pub async fn seal_encrypt(
         plaintext_b64: req.plaintext_b64,
     };
     let response = state.enclave.seal_encrypt(&req).await?;
+    Ok(Json(response))
+}
+
+/// Decrypts content that was sealed inside the enclave, back out to the owner's
+/// own orchestrator.
+///
+/// `store/mod.rs` says there is "deliberately no decrypt here", and that is
+/// still true of the *sealed refresh token store* -- unsealing an OAuth refresh
+/// token would hand the host standing access to a mailbox, which is the whole
+/// thing the connect flow exists to prevent. This route unseals **record
+/// content**, which is a different asset: the orchestrator produced it, from
+/// plaintext it already had, and needs it back to answer a query.
+///
+/// Owner-authenticated, and the owner comes from the session rather than the
+/// request, so a caller cannot ask for another owner's content. The enclave
+/// derives the key from that owner id, so a mismatched key id fails inside the
+/// TEE rather than here.
+///
+/// The thing that makes this safe to expose is *when* the orchestrator calls it:
+/// only for objects that have already passed the permission check. The decrypt
+/// budget is therefore the disclosure budget -- nothing gets unsealed that was
+/// not about to be shown to someone entitled to see it.
+pub async fn seal_decrypt(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SealDecryptRequest>,
+) -> Result<Json<SealDecryptResponse>, GatewayError> {
+    let session = require_session(&headers, state.config.keys.session())?;
+    let req = SealDecryptRequest {
+        owner_id: session.owner_id,
+        ciphertext_b64: req.ciphertext_b64,
+        key_id: req.key_id,
+    };
+    let response = state.enclave.seal_decrypt(&req).await?;
     Ok(Json(response))
 }
 
