@@ -51,6 +51,16 @@ ALLOWED_UNSCOPED = {
         "writer, never to a reader. Anything handing ids to a *reader* uses get_many, "
         "which is owner-scoped."
     ),
+    "_vector_query": (
+        "A Neo4j vector index is global and cannot pre-filter on a property, so the "
+        "owner filter cannot be in the Cypher: queryNodes returns the nearest k "
+        "across every owner and `vector_search` keeps only this owner's rows "
+        "immediately, escalating k until it has enough. This is the weakest "
+        "owner-scoping in the store and the only query that relies on a Python "
+        "filter rather than the database -- which is exactly why `vector_search` is "
+        "its only caller and why it returns `owner_id` so the filter cannot be "
+        "forgotten."
+    ),
     "append_read": (
         "CREATE with no MATCH. The owner_id arrives inside the row being written, so "
         "there is no pattern that could match another owner's node."
