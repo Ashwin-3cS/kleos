@@ -122,10 +122,15 @@ class Neo4jStore:
 
     def upsert(self, node: MemoryNode, embedding: list[float]) -> None:
         label = _label_of(node)
+        # owner_id is in the MERGE *pattern*, not only in the SET. Matching by
+        # id alone would let a node that already exists under another owner be
+        # matched and then have its owner_id overwritten -- a takeover rather
+        # than a leak. With the owner in the pattern, that case instead tries to
+        # create a second node with a duplicate id and trips the uniqueness
+        # constraint, which is the loud failure we want.
         cypher = f"""
-        MERGE (n:{label} {{id: $id}})
+        MERGE (n:{label} {{id: $id, owner_id: $owner_id}})
         SET n:Memory,
-            n.owner_id = $owner_id,
             n.payload = $payload,
             n.text = $text,
             n.occurred_at_ms = $occurred_at_ms,
@@ -183,43 +188,54 @@ class Neo4jStore:
         )
         return bool(rows and rows[0]["n"])
 
-    def _mutate_claim(self, claim_id: str, mutate) -> Claim | None:
-        """Read-modify-write a stored claim.
+    def _mutate_claim(self, owner_id: str, claim_id: str, mutate) -> Claim | None:
+        """Read-modify-write a stored claim, within one owner.
 
         The claim's fields live inside the opaque ``payload`` blob, so they
         cannot be patched in Cypher; the promoted properties are rewritten
         from the mutated model so the blob and the indexed columns can never
         disagree.
+
+        Owner-scoped like every other statement here. It was not, and that was
+        the same latent bug ``link`` had: ``set_claim_status`` is called during
+        ingestion with an id taken from a claim's ``supersedes`` list, so an id
+        that crossed owners would have let one owner's write mark another
+        owner's claim superseded.
         """
-        rows = self._run("MATCH (c:Claim {id: $id}) RETURN c.payload AS payload", id=claim_id)
+        rows = self._run(
+            "MATCH (c:Claim {id: $id, owner_id: $owner_id}) RETURN c.payload AS payload",
+            id=claim_id,
+            owner_id=owner_id,
+        )
         if not rows:
             return None
         claim = Claim.model_validate_json(rows[0]["payload"])
         mutate(claim)
         self._run(
-            "MATCH (c:Claim {id: $id}) SET c.payload = $payload, "
+            "MATCH (c:Claim {id: $id, owner_id: $owner_id}) SET c.payload = $payload, "
             "c.claim_status = $claim_status, "
             "c.commitment_fulfillment = $commitment_fulfillment, "
             "c.commitment_due_at_ms = $commitment_due_at_ms, "
             "c.commitment_owed_by = $commitment_owed_by, "
             "c.commitment_owed_to = $commitment_owed_to",
             id=claim_id,
+            owner_id=owner_id,
             payload=claim.model_dump_json(),
             **_promoted(claim),
         )
         return claim
 
-    def set_claim_status(self, claim_id: str, status: str) -> None:
+    def set_claim_status(self, owner_id: str, claim_id: str, status: str) -> None:
         """Moves the *epistemic* axis only. Fulfillment is untouched: a
         commitment that was reassigned is superseded and still open."""
 
         def mutate(claim: Claim) -> None:
             claim.status = ClaimStatus(status)
 
-        self._mutate_claim(claim_id, mutate)
+        self._mutate_claim(owner_id, claim_id, mutate)
 
     def set_fulfillment(
-        self, claim_id: str, fulfillment: str, settled_at_ms: int | None = None
+        self, owner_id: str, claim_id: str, fulfillment: str, settled_at_ms: int | None = None
     ) -> Claim | None:
         """Moves the *lifecycle* axis only, leaving ``status`` alone.
 
@@ -236,17 +252,20 @@ class Neo4jStore:
                 None if state is FulfillmentStatus.OPEN else settled_at_ms
             )
 
-        return self._mutate_claim(claim_id, mutate)
+        return self._mutate_claim(owner_id, claim_id, mutate)
 
     def replace_payload(self, node: MemoryNode) -> None:
+        """Rewrites one object in place. The owner comes from the node itself,
+        so there is no way to call this without naming one."""
         self._run(
-            "MATCH (n:Memory {id: $id}) SET n.payload = $payload, "
+            "MATCH (n:Memory {id: $id, owner_id: $owner_id}) SET n.payload = $payload, "
             "n.claim_status = $claim_status, "
             "n.commitment_fulfillment = $commitment_fulfillment, "
             "n.commitment_due_at_ms = $commitment_due_at_ms, "
             "n.commitment_owed_by = $commitment_owed_by, "
             "n.commitment_owed_to = $commitment_owed_to",
             id=node.id,
+            owner_id=node.owner_id,
             payload=node.model_dump_json(),
             **_promoted(node),
         )

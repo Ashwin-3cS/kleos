@@ -52,7 +52,7 @@ def test_resolver_supersedes_the_earlier_claim(store):
             for entity_id in claim.subject_entity_ids:
                 store.link(claim.owner_id, claim.id, "ABOUT", entity_id)
             for superseded in claim.supersedes:
-                store.set_claim_status(superseded, ClaimStatus.SUPERSEDED.value)
+                store.set_claim_status(claim.owner_id, superseded, ClaimStatus.SUPERSEDED.value)
 
     assert supersessions, "the Neo4j decision should supersede the Postgres one"
     store.wipe_owner(OWNER)

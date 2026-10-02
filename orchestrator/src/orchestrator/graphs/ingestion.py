@@ -246,7 +246,9 @@ def build_ingestion_graph(runtime: Runtime):
                     link(claim.id, "CITES", citation.event_id)
                 for superseded in claim.supersedes:
                     link(claim.id, "SUPERSEDES", superseded)
-                    runtime.store.set_claim_status(superseded, ClaimStatus.SUPERSEDED.value)
+                    runtime.store.set_claim_status(
+                        owner_id, superseded, ClaimStatus.SUPERSEDED.value
+                    )
                 for conflicting in claim.contradicts:
                     link(claim.id, "CONTRADICTS", conflicting)
 
