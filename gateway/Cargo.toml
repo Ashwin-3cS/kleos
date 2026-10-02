@@ -11,6 +11,13 @@ path = "src/lib.rs"
 name = "gateway"
 path = "src/main.rs"
 
+# The owner's side of grant signing. Grants are signed by a key the owner holds,
+# so something has to hold it; in a finished product that is a browser or a
+# phone, and here it is this command. See ADR 0011.
+[[bin]]
+name = "kleos-device"
+path = "src/bin/kleos-device.rs"
+
 [dependencies]
 shared = { path = "../shared" }
 axum = { workspace = true }
@@ -32,6 +39,8 @@ sha2 = "0.10"
 # Per-purpose signing keys are derived with HMAC-SHA256 rather than a
 # prefix hash, so a derived key reveals nothing about the root. See keys.rs.
 hmac = "0.12"
+# Ed25519 for owner-signed grants, same primitive the enclave already uses.
+fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto" }
 # Chosen over sqlx/diesel deliberately: the gateway needs exactly one table
 # and one idempotent CREATE TABLE IF NOT EXISTS, and tokio-postgres is the
 # thinnest thing in the tokio ecosystem already in this tree that does it.

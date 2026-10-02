@@ -1148,6 +1148,7 @@ dependencies = [
  "base64 0.22.1",
  "dotenvy",
  "enclave",
+ "fastcrypto",
  "hex",
  "hmac 0.12.1",
  "jsonwebtoken",
@@ -2729,6 +2730,9 @@ dependencies = [
 name = "shared"
 version = "0.1.0"
 dependencies = [
+ "fastcrypto",
+ "hex",
+ "rand 0.8.8",
  "serde",
  "serde_json",
 ]
