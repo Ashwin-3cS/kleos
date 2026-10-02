@@ -80,6 +80,73 @@ _SENSITIVITY_RANK = {
 }
 
 
+class AffectTone(StrEnum):
+    """The emotional register of a piece of content -- a **closed** vocabulary.
+
+    Mirrors ``AffectTone`` in ``shared/src/memory.rs``, including the ordering.
+
+    Closed on purpose, and that is the design rather than a limitation. The
+    obvious shape for "what kind of content is this" is free-text tags, and free
+    text is how an extractor eventually writes "anxious about the biopsy results"
+    into a field built for filtering -- putting the most sensitive sentence in the
+    record into the one place that gets indexed, logged and read without opening
+    the body. A fixed vocabulary cannot carry content. See ADR 0009.
+    """
+
+    NEUTRAL = "neutral"
+    JOY = "joy"
+    RELIEF = "relief"
+    AFFECTION = "affection"
+    FRUSTRATION = "frustration"
+    ANGER = "anger"
+    ANXIETY = "anxiety"
+    SADNESS = "sadness"
+    SHAME = "shame"
+    GRIEF = "grief"
+
+    @property
+    def sensitivity_floor(self) -> Sensitivity:
+        """The lowest sensitivity a body in this register may be stored at.
+
+        Affect **raises** the floor and never lowers it, which makes the label
+        self-protecting: tagging a transcript as grief narrows who may read it
+        rather than widening it. A connector declares sensitivity from the source
+        it came from and cannot know that one conversation in an export was about
+        a death; this is where that is corrected.
+        """
+        return _AFFECT_FLOOR[self]
+
+
+_AFFECT_FLOOR = {
+    # Ordinary register. Still PERSONAL -- nothing here is public.
+    AffectTone.NEUTRAL: Sensitivity.PERSONAL,
+    AffectTone.JOY: Sensitivity.PERSONAL,
+    AffectTone.RELIEF: Sensitivity.PERSONAL,
+    AffectTone.FRUSTRATION: Sensitivity.PERSONAL,
+    AffectTone.ANGER: Sensitivity.PERSONAL,
+    # Discloses something about a relationship or a state of mind.
+    AffectTone.AFFECTION: Sensitivity.CONFIDENTIAL,
+    AffectTone.ANXIETY: Sensitivity.CONFIDENTIAL,
+    AffectTone.SADNESS: Sensitivity.CONFIDENTIAL,
+    # The two registers a person is least likely to want an agent in.
+    AffectTone.SHAME: Sensitivity.RESTRICTED,
+    AffectTone.GRIEF: Sensitivity.RESTRICTED,
+}
+
+
+def raise_to_floor(declared: Sensitivity, tone: AffectTone | None) -> Sensitivity:
+    """The stricter of a declared sensitivity and the tone's floor.
+
+    One function so there is one place this rule lives. Called where an ACL is
+    built, not where it is checked: ``permits`` stays pure over ``(scope, acl)``
+    and must not grow a second notion of what an object's sensitivity is.
+    """
+    if tone is None:
+        return declared
+    floor = tone.sensitivity_floor
+    return floor if floor.rank > declared.rank else declared
+
+
 class DenyReason(StrEnum):
     WRONG_OWNER = "wrong_owner"
     GRANT_EXPIRED = "grant_expired"
