@@ -114,11 +114,12 @@ def register(spec: ConnectorSpec) -> ConnectorSpec:
 
 def _register_builtins() -> None:
     from .chatgpt import SPEC as CHATGPT_SPEC
+    from .direct import SPECS as DIRECT_SPECS
     from .github import SPEC as GITHUB_SPEC
     from .google import SPEC as GOOGLE_SPEC
     from .mock import SPEC as MOCK_SPEC
 
-    for spec in (MOCK_SPEC, GOOGLE_SPEC, GITHUB_SPEC, CHATGPT_SPEC):
+    for spec in (MOCK_SPEC, GOOGLE_SPEC, GITHUB_SPEC, CHATGPT_SPEC, *DIRECT_SPECS):
         REGISTRY.register(spec)
 
 
