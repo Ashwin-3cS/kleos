@@ -8,3 +8,13 @@ orchestrator/*.egg-info/
 orchestrator/src/*.egg-info/
 .pytest_cache/
 .ruff_cache/
+
+# Secrets kept beside the checkout. api_key.txt is a live provider key: it was
+# untracked but not ignored, which is one `git add -A` away from a public repo.
+api_key.txt
+*api_key*
+*.key
+secrets/
+.env
+.env.*
+!.env.example
