@@ -91,7 +91,14 @@ def _hydrate(record: dict[str, Any]) -> StoredNode:
 
 
 class Neo4jStore:
-    def __init__(self, uri: str, user: str, password: str, database: str = "neo4j") -> None:
+    def __init__(
+        self,
+        uri: str,
+        user: str,
+        password: str,
+        database: str = "neo4j",
+        embedding_dim: int | None = None,
+    ) -> None:
         # Neo4j warns on every query that references a property or
         # relationship type not yet present in an empty database, which is
         # normal on a fresh store and drowns out real logs.
@@ -99,6 +106,10 @@ class Neo4jStore:
             uri, auth=(user, password), notifications_min_severity="OFF"
         )
         self._database = database
+        # Checked on every upsert when set. Neo4j accepts a vector of the wrong
+        # width as an ordinary list property and simply declines to index it, so
+        # the write succeeds, retrieval never sees the node, and nothing says why.
+        self._embedding_dim = embedding_dim
 
     @property
     def driver(self) -> Driver:
@@ -121,6 +132,12 @@ class Neo4jStore:
     # -- writes ---------------------------------------------------------
 
     def upsert(self, node: MemoryNode, embedding: list[float]) -> None:
+        if self._embedding_dim is not None and len(embedding) != self._embedding_dim:
+            raise ValueError(
+                f"embedding for {node.id} has {len(embedding)} dimensions, index expects "
+                f"{self._embedding_dim}. Neo4j would accept this as a plain list property "
+                f"and leave it unindexed, so the node would be stored and unreachable."
+            )
         label = _label_of(node)
         # owner_id is in the MERGE *pattern*, not only in the SET. Matching by
         # id alone would let a node that already exists under another owner be
