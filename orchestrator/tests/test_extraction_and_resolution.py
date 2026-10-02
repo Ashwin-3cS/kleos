@@ -33,11 +33,11 @@ def test_sensitive_record_body_is_withheld_from_the_event():
     assert candidate.events[0].body is None
 
 
-def test_resolver_supersedes_the_earlier_claim(store):
+def test_resolver_supersedes_the_earlier_claim(store, settings):
     store.wipe_owner(OWNER)
     resolver = Resolver(store)
     extractor = MockExtractor()
-    embedder = HashedTokenEmbedder(256)
+    embedder = HashedTokenEmbedder(settings.embedding_dim)
 
     records = list(MockConnector().fetch(OWNER, 0))
     supersessions = []

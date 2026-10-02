@@ -15,7 +15,7 @@ from ..connectors.registry import REGISTRY, ConnectorRegistry
 from ..extraction import get_extractor
 from ..extraction.base import Extractor
 from ..gateway_client import GatewayClient
-from ..retrieval.embeddings import Embedder, get_embedder
+from ..retrieval.embeddings import Embedder, get_embedder, verify_dim
 from ..retrieval.ranking import RankingWeights
 from ..storage.blobs import BlobStore, get_blob_store
 from ..storage.content import ContentCrypto, NullContentCrypto
@@ -57,14 +57,19 @@ class Runtime:
             settings.neo4j_user,
             settings.neo4j_password,
             settings.neo4j_database,
+            embedding_dim=settings.embedding_dim,
         )
+        # Built before the migration so a width mismatch fails here rather than
+        # after an index has been created at the wrong dimension.
+        embedder = get_embedder(settings)
+        verify_dim(embedder, settings.embedding_dim)
         if migrate:
             apply_migrations(store.driver, settings.neo4j_database, settings.embedding_dim)
         gateway = GatewayClient(settings.gateway_url)
         return cls(
             settings=settings,
             store=store,
-            embedder=get_embedder(settings),
+            embedder=embedder,
             extractor=get_extractor(settings),
             gateway=gateway,
             registry=registry or REGISTRY.copy(),
