@@ -6,7 +6,6 @@ requires-python = ">=3.11"
 dependencies = [
     "langgraph>=0.2",
     "langchain-core>=0.3",
-    "langchain-anthropic>=0.3",
     "llama-index-core>=0.12",
     "llama-index-graph-stores-neo4j>=0.4",
     "neo4j>=5.26",
