@@ -17,8 +17,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .config import get_settings
+from .connectors.direct import SOURCES as DIRECT_SOURCES
+from .connectors.direct import TEXT as DIRECT_TEXT
+from .connectors.direct import build_record, is_push_source
 from .connectors.registry import REGISTRY
 from .graphs.history import context_chain, why_did_this_shift
+from .graphs.ingestion import run_ingestion
 from .graphs.neighbourhood import neighbourhood
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
@@ -80,6 +84,25 @@ class ContextRequest(BaseModel):
     object_id: str
     grant_token: str
     hops: int = Field(default=3, ge=1, le=6)
+
+
+class RememberRequest(BaseModel):
+    """Something the person is telling the system directly."""
+
+    owner_id: str
+    text: str = Field(min_length=1, max_length=100_000)
+    #: `text` or `voice`. Separate sources so a grant can cover one and not the
+    #: other -- "read what I wrote down, not what I said out loud" is a real
+    #: distinction and `permits()` can only express it if the ids differ.
+    source: str = DIRECT_TEXT
+    #: When the thing happened, if it was not now. A note about last Tuesday
+    #: belongs on last Tuesday: `occurred_at_ms` is what every time-windowed scope
+    #: and every "what did I know then" read is written against.
+    occurred_at_ms: int | None = None
+    #: Seals the utterance in the enclave before storage, which needs a session.
+    sensitive: bool = False
+    #: Owner session, required only to seal.
+    session_token: str | None = None
 
 
 class ReadLogRequest(BaseModel):
@@ -176,6 +199,72 @@ def ingest_status(job_id: str) -> dict[str, Any]:
         "result": job.return_value(refresh=True),
         "error": job.exc_info,
     }
+
+
+@app.post("/remember", status_code=201)
+def remember(req: RememberRequest) -> dict[str, Any]:
+    """Tell the system something, and have it become memory now.
+
+    **Synchronous, unlike `/ingest`.** A backfill is enqueued because connecting a
+    source means pulling a large history in bursts, which is the wrong lifetime for
+    an HTTP request. A person who has just said one sentence is in the opposite
+    situation: they want to know it landed, and handing them a job id to poll would
+    be the wrong answer to "did you get that".
+
+    Runs the same ingestion graph as every other source. The record is pushed in
+    rather than pulled, and everything after that -- extraction, resolution,
+    sealing, the write -- is identical, because a thing the person said is a record
+    like any other once it exists. A separate graph would mean two paths that have
+    to be kept resolving the same way.
+    """
+    settings = get_settings()
+    if not is_push_source(req.source):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{req.source!r} is not a push source; expected one of "
+                f"{', '.join(DIRECT_SOURCES)}. Pulled sources go through POST /ingest."
+            ),
+        )
+    if not settings.source_enabled(req.source):
+        raise HTTPException(
+            status_code=400, detail=f"source {req.source!r} is not enabled in this deployment"
+        )
+    if req.sensitive and not req.session_token:
+        # Sealing crosses the trust boundary, and the gateway takes the owner from
+        # the session rather than from us. Refused up front rather than failing
+        # inside the graph, where it would surface as a skipped record.
+        raise HTTPException(
+            status_code=400,
+            detail="sensitive=true needs session_token: sealing happens in the enclave, "
+            "under the owner the session names",
+        )
+
+    record = build_record(
+        owner_id=req.owner_id,
+        text=req.text,
+        source=req.source,
+        occurred_at_ms=req.occurred_at_ms,
+        sensitive=req.sensitive,
+    )
+    result = run_ingestion(
+        runtime(),
+        req.owner_id,
+        source=req.source,
+        session_token=req.session_token,
+        records=[record],
+        # Keyed by the record, not by the owner and source: two utterances must not
+        # share a checkpoint thread, or the second would resume the first's state.
+        thread_id=f"remember:{record.external_id}",
+    )
+    log.info(
+        "remembered owner=%s source=%s external_id=%s claims=%d",
+        req.owner_id,
+        req.source,
+        record.external_id,
+        result.claims,
+    )
+    return {"external_id": record.external_id, **result.as_dict()}
 
 
 @app.post("/query")

@@ -93,9 +93,25 @@ def build_ingestion_graph(runtime: Runtime):
     resolver = Resolver(runtime.store, unseal=runtime.content.unseal_node)
 
     def fetch(state: IngestionState) -> dict:
+        """Pulls from the source, unless records were pushed in with the run.
+
+        A push source (`text`, `voice`) has nothing to fetch: the record exists
+        because a person said something, and it arrives with the invocation. The
+        source id is still validated, because it is what every ACL and grant scope
+        is written against -- a pushed record from a disabled source is as wrong as
+        a pulled one.
+        """
         source = state["source"]
         if not runtime.settings.source_enabled(source):
             raise ValueError(f"source {source!r} is not enabled in this deployment")
+
+        pushed = state.get("records")
+        if pushed:
+            log.info("ingestion.fetch source=%s pushed=%d", source, len(pushed))
+            # Left in state untouched: returning nothing keeps what the caller gave
+            # us, and re-dumping it here would only be a chance to lose a field.
+            return {}
+
         connector = runtime.registry.connector(source, runtime.settings)
         records = list(connector.fetch(state["owner_id"], state.get("since_ms", 0)))
         log.info("ingestion.fetch source=%s records=%d", source, len(records))
@@ -343,7 +359,16 @@ def run_ingestion(
     since_ms: int = 0,
     session_token: str | None = None,
     thread_id: str | None = None,
+    records: list[RawRecord] | None = None,
 ) -> IngestionResult:
+    """Runs the ingestion graph.
+
+    ``records`` is the push path: supply them and the `fetch` node uses them
+    instead of pulling. Everything after that -- extraction, resolution, sealing,
+    the write -- is identical, which is the point. A thing the person said is a
+    record like any other once it exists, and giving it its own graph would mean
+    two paths that have to be kept resolving the same way.
+    """
     graph = build_ingestion_graph(runtime)
     config = {"configurable": {"thread_id": thread_id or f"ingest:{owner_id}:{source}"}}
     final = graph.invoke(
@@ -352,6 +377,7 @@ def run_ingestion(
             "source": source,
             "since_ms": since_ms,
             "session_tokens": {"session_token": session_token} if session_token else {},
+            "records": [r.model_dump(mode="json") for r in records] if records else [],
         },
         config=config,
     )
