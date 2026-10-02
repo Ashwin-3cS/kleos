@@ -1,5 +1,6 @@
 use crate::error::GatewayError;
 use shared::{
+    SealDecryptRequest, SealDecryptResponse,
     IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
     SealEncryptRequest, SealEncryptResponse,
 };
@@ -83,6 +84,13 @@ impl EnclaveClient {
         req: &SealEncryptRequest,
     ) -> Result<SealEncryptResponse, GatewayError> {
         self.post_json("/seal/encrypt", req).await
+    }
+
+    pub async fn seal_decrypt(
+        &self,
+        req: &SealDecryptRequest,
+    ) -> Result<SealDecryptResponse, GatewayError> {
+        self.post_json("/seal/decrypt", req).await
     }
 
     async fn post_json<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
