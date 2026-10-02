@@ -23,7 +23,11 @@ def settings(tmp_path_factory) -> Settings:
 @pytest.fixture
 def store(settings: Settings):
     store = Neo4jStore(
-        settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password, settings.neo4j_database
+        settings.neo4j_uri,
+        settings.neo4j_user,
+        settings.neo4j_password,
+        settings.neo4j_database,
+        embedding_dim=settings.embedding_dim,
     )
     try:
         store.verify()
@@ -33,3 +37,20 @@ def store(settings: Settings):
     apply_migrations(store.driver, settings.neo4j_database, settings.embedding_dim)
     yield store
     store.close()
+
+
+@pytest.fixture
+def vector(settings: Settings):
+    """A usable embedding of the configured width.
+
+    Not all zeros: Neo4j's cosine index rejects a zero vector, and the tests that
+    used `[0.0] * 256` only worked because nothing ever queried them. A fixture so
+    a dimension change does not mean editing every call site.
+    """
+
+    def make(seed: float = 1.0) -> list[float]:
+        values = [0.0] * settings.embedding_dim
+        values[0] = seed
+        return values
+
+    return make

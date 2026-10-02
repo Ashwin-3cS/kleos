@@ -45,22 +45,73 @@ class HashedTokenEmbedder:
         return [v / norm for v in vector]
 
 
-class VoyageEmbedder:
-    """Real embedder for ``ORCHESTRATOR_MODE=live``."""
+class LocalEmbedder:
+    """A real, semantic embedder that runs here.
+
+    ONNX on CPU via ``fastembed``, defaulting to ``BAAI/bge-small-en-v1.5``: 384
+    dimensions, about 67MB of weights, no API key, no torch.
+
+    **Local rather than hosted, for reasons that are not cost.** Embedding text
+    means sending it somewhere, and the text here is the resolved record -- the
+    thing ADR 0010 encrypts at rest. Encrypting a database and then streaming the
+    same sentences to a third party to be vectorised would be theatre. A hosted
+    embedder also makes ``test_content_at_rest`` flaky, since it asserts a stored
+    vector equals a freshly computed one: true of a pinned local model, not of a
+    versioned endpoint. And embeddings are on the ingest path for every object, so
+    a network round trip per object would set the backfill rate.
+
+    Weights download once on first use and are cached, which puts the network
+    dependency at install time rather than at query time.
+    """
 
     def __init__(self, settings: Settings) -> None:
-        self.dim = settings.embedding_dim
-        self._settings = settings
+        from fastembed import TextEmbedding
+
+        self._model_name = settings.embedding_model
+        self._model = TextEmbedding(model_name=self._model_name)
+        # Read from the model, not from configuration. Those two disagreeing is
+        # what silently breaks the Neo4j vector index, so the model is the
+        # authority and `verify_dim` is what makes a mismatch loud.
+        self.dim = len(next(iter(self._model.embed(["dimension probe"]))))
+
+    @property
+    def name(self) -> str:
+        return self._model_name
 
     def embed(self, text: str) -> list[float]:
-        raise NotImplementedError(
-            "live embeddings are not wired: needs a VOYAGE_API_KEY (or another provider) "
-            "and an embedding_dim matching that model, which must also match the Neo4j "
-            "vector index created by storage.migrations"
+        # fastembed is batch-first; one string is a batch of one. Callers with a
+        # list should use `embed_many`, which is several times faster per item.
+        return [float(v) for v in next(iter(self._model.embed([text or " "])))]
+
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        """Batched. Order-preserving, because callers zip the result back against
+        their own list of objects."""
+        if not texts:
+            return []
+        return [
+            [float(v) for v in vector]
+            for vector in self._model.embed([t or " " for t in texts])
+        ]
+
+
+def verify_dim(embedder: Embedder, configured: int) -> None:
+    """Fails loudly when the model's width is not what is configured.
+
+    The Neo4j vector index is built from configuration while vectors come from the
+    model, and nothing downstream notices them disagreeing: writes land as
+    properties the index will not cover, and reads fail much later and elsewhere.
+    Checked once at startup instead.
+    """
+    if embedder.dim != configured:
+        raise ValueError(
+            f"embedder produces {embedder.dim}-dimensional vectors but EMBEDDING_DIM "
+            f"is {configured}. These must agree -- the Neo4j vector index is built from "
+            f"the configured value, so a mismatch makes every write silently unindexed. "
+            f"Set EMBEDDING_DIM={embedder.dim}."
         )
 
 
 def get_embedder(settings: Settings) -> Embedder:
     if not settings.use_real_embedder:
         return HashedTokenEmbedder(settings.embedding_dim)
-    return VoyageEmbedder(settings)
+    return LocalEmbedder(settings)

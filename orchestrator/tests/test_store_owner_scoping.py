@@ -45,14 +45,14 @@ def _entity(owner_id: str, node_id: str) -> Entity:
 
 
 @pytest.fixture
-def two_owners(store):
+def two_owners(store, vector):
     store.wipe_owner(OWNER)
     store.wipe_owner(OTHER)
     mine_a = _entity(OWNER, "scoping-mine-a")
     mine_b = _entity(OWNER, "scoping-mine-b")
     theirs = _entity(OTHER, "scoping-theirs")
     for node in (mine_a, mine_b, theirs):
-        store.upsert(node, [0.0] * 256)
+        store.upsert(node, vector())
     yield store, mine_a, mine_b, theirs
     store.wipe_owner(OWNER)
     store.wipe_owner(OTHER)
@@ -106,7 +106,7 @@ def test_link_is_idempotent(two_owners) -> None:
 # -- the cases a source-text check cannot see ---------------------------
 
 
-def test_upsert_cannot_take_over_another_owners_node(store) -> None:
+def test_upsert_cannot_take_over_another_owners_node(store, vector) -> None:
     """``upsert`` passes the textual check because its SET assigns owner_id, but
     what matters is whether the *pattern* names one.
 
@@ -140,11 +140,11 @@ def test_upsert_cannot_take_over_another_owners_node(store) -> None:
     store.wipe_owner("owner-takeover-a")
     store.wipe_owner("owner-takeover-b")
     try:
-        store.upsert(entity("owner-takeover-a"), [0.0] * 256)
+        store.upsert(entity("owner-takeover-a"), vector())
 
         # Same id, different owner. Must not silently become owner-b's node.
         with pytest.raises(Neo4jError):
-            store.upsert(entity("owner-takeover-b"), [0.0] * 256)
+            store.upsert(entity("owner-takeover-b"), vector())
 
         still_mine = store.get_many("owner-takeover-a", [shared_id])
         assert len(still_mine) == 1
@@ -155,7 +155,7 @@ def test_upsert_cannot_take_over_another_owners_node(store) -> None:
         store.wipe_owner("owner-takeover-b")
 
 
-def test_a_mutation_cannot_cross_owners(store) -> None:
+def test_a_mutation_cannot_cross_owners(store, vector) -> None:
     """``set_claim_status`` is called during ingestion with an id taken from a
     claim's ``supersedes`` list. If that id crossed owners, one owner's ingest
     would mark another owner's claim superseded."""
@@ -176,7 +176,7 @@ def test_a_mutation_cannot_cross_owners(store) -> None:
     )
     store.wipe_owner("owner-mutate-a")
     try:
-        store.upsert(claim, [0.0] * 256)
+        store.upsert(claim, vector())
 
         # Another owner naming the same claim id changes nothing.
         store.set_claim_status("owner-mutate-b", claim.id, ClaimStatus.SUPERSEDED.value)

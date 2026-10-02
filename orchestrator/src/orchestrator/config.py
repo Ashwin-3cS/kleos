@@ -34,7 +34,12 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://127.0.0.1:6380/0", validation_alias="REDIS_URL")
     ingestion_queue: str = Field(default="memorai-ingestion", validation_alias="INGESTION_QUEUE")
 
-    embedding_dim: int = Field(default=256, validation_alias="EMBEDDING_DIM")
+    #: Must match the embedder's actual output width -- the Neo4j vector index is
+    #: built from this value, so a mismatch makes every write silently unindexed.
+    #: `verify_dim` checks it at startup and `apply_migrations` recreates the index
+    #: when it changes. 384 is bge-small-en-v1.5; the hashed-token mock follows
+    #: whatever this says.
+    embedding_dim: int = Field(default=384, validation_alias="EMBEDDING_DIM")
 
     #: Optional allow-list of source ids this deployment will ingest from.
     #: Empty means every registered connector is enabled -- a deployment that
@@ -89,7 +94,11 @@ class Settings(BaseSettings):
     llm_api_key_file: str | None = Field(
         default="api_key.txt", validation_alias="LLM_API_KEY_FILE"
     )
-    embedding_model: str = Field(default="voyage-3", validation_alias="EMBEDDING_MODEL")
+    #: A fastembed model name. Local ONNX on CPU, no key. Changing it almost
+    #: certainly changes EMBEDDING_DIM too.
+    embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5", validation_alias="EMBEDDING_MODEL"
+    )
 
     #: Encrypt the resolved record's text at rest (ADR 0010). Needs a reachable
     #: gateway and an owner session, because the key never leaves the enclave --

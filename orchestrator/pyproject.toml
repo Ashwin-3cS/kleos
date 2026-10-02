@@ -17,6 +17,10 @@ dependencies = [
     "pydantic-settings>=2.6",
     "httpx>=0.27",
     "mcp>=1.2",
+    # Local ONNX embeddings on CPU. Chosen over sentence-transformers deliberately:
+    # the same models without torch, 67MB against roughly 2GB, for an identical
+    # vector. See ADR 0012.
+    "fastembed>=0.8",
 ]
 
 [project.optional-dependencies]
