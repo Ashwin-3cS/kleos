@@ -12,6 +12,7 @@ pydantic model without a lossy column mapping.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -20,6 +21,8 @@ from neo4j import Driver, GraphDatabase
 
 from ..enums import ClaimStatus, FulfillmentStatus
 from ..schema import Claim, Entity, Event, MemoryNode
+
+log = logging.getLogger(__name__)
 
 _LABELS = {"Entity": Entity, "Event": Event, "Claim": Claim}
 
@@ -351,22 +354,72 @@ class Neo4jStore:
         )
         return [_hydrate(row) for row in rows]
 
+    #: Hard ceiling on how far the owner search will escalate. Reaching it means
+    #: returning fewer results than asked for rather than scanning the graph.
+    _VECTOR_FETCH_CEILING = 4096
+
     def vector_search(
         self, owner_id: str, embedding: list[float], top_k: int
     ) -> list[tuple[StoredNode, float]]:
+        """Nearest stored objects belonging to one owner.
+
+        The owner filter is applied **after** the index returns, because a Neo4j
+        vector index cannot pre-filter on a property. That makes the fetch size
+        load-bearing, and a fixed over-fetch is not enough: the index is global, so
+        in a database holding several owners the nearest `k` globally can be entirely
+        somebody else's, and this returns nothing at all while the owner's own
+        matching objects sit one rank below the cutoff.
+
+        That is not hypothetical -- it is how this was found. A dev database with ~100
+        objects across four owners made an owner with 20 objects retrieve zero, which
+        read as an empty memory rather than as a tuning problem.
+
+        So the fetch escalates: ask for more until enough of the answers belong to
+        this owner, the index is exhausted, or the ceiling is hit. Costs one extra
+        round trip in the crowded case and nothing in the common one.
+        """
+        wanted = max(top_k, 1)
+        k = max(wanted * 4, wanted)
+        while True:
+            returned, mine = self._vector_query(owner_id, embedding, k)
+            exhausted = returned < k
+            at_ceiling = k >= self._VECTOR_FETCH_CEILING
+            if len(mine) >= wanted or exhausted or at_ceiling:
+                if len(mine) < wanted and at_ceiling and not exhausted:
+                    log.warning(
+                        "vector search for %s stopped at the fetch ceiling with %d of %d "
+                        "results; this owner's objects are being crowded out of the global "
+                        "index by other owners' vectors",
+                        owner_id,
+                        len(mine),
+                        wanted,
+                    )
+                return mine[:wanted]
+            k = min(k * 4, self._VECTOR_FETCH_CEILING)
+
+    def _vector_query(
+        self, owner_id: str, embedding: list[float], k: int
+    ) -> tuple[int, list[tuple[StoredNode, float]]]:
+        """``(how many the index returned, this owner's among them)``.
+
+        The first number is what tells the caller whether asking for more could help:
+        fewer than `k` means the index had no more to give.
+        """
         rows = self._run(
             "CALL db.index.vector.queryNodes('memorai_memory_embedding', $k, $embedding) "
             "YIELD node, score "
-            "WITH node, score WHERE node.owner_id = $owner_id "
             "RETURN node.id AS id, labels(node) AS labels, node.payload AS payload, "
-            "node.text AS text, node.occurred_at_ms AS occurred_at_ms, score",
-            # Over-fetch: the owner filter is applied after the index returns,
-            # so asking for exactly top_k could come back short.
-            k=max(top_k * 4, top_k),
+            "node.text AS text, node.occurred_at_ms AS occurred_at_ms, score, "
+            "node.owner_id AS owner_id",
+            k=k,
             embedding=embedding,
-            owner_id=owner_id,
         )
-        return [(_hydrate(row), float(row["score"])) for row in rows[:top_k]]
+        mine = [
+            (_hydrate(row), float(row["score"]))
+            for row in rows
+            if row["owner_id"] == owner_id
+        ]
+        return len(rows), mine
 
     def get_many(self, owner_id: str, node_ids: Iterable[str]) -> list[StoredNode]:
         """Bulk ``get``, constrained to one owner.
