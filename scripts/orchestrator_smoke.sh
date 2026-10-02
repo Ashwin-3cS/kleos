@@ -92,19 +92,38 @@ for _ in $(seq 1 60); do
 done
 curl -sf "$ORCH_URL/ingest/$JOB_ID" | jq '{status, result}'
 
+# The owner signs grants with a key only they hold, so the script has to behave
+# like a client: generate a device key once, register the public half, and sign
+# each scope locally. The gateway has no route that mints one (ADR 0011).
+DEVICE_KEY="$ROOT_DIR/.local/device.key"
+SIGNER="$ROOT_DIR/target/debug/kleos-device"
+[ -x "$SIGNER" ] || cargo build -q -p gateway --bin kleos-device
+[ -f "$DEVICE_KEY" ] || "$SIGNER" keygen --key "$DEVICE_KEY" >/dev/null
+
 echo
-echo "== 4. owner grants a scoped capability to agent-demo =="
-GRANT=$(curl -sf -X POST "$GATEWAY_URL/memory/scope/grant" \
+echo "== 4. register the owner's device key, then sign grants locally =="
+PUBKEY=$("$SIGNER" pubkey --key "$DEVICE_KEY")
+curl -sf -X POST "$GATEWAY_URL/auth/device/register" \
   -H 'content-type: application/json' \
   -H "Authorization: Bearer $SESSION_TOKEN" \
-  -d "{\"ttl_secs\": 3600, \"scope\": {
-        \"agent_id\": \"agent-demo\",
-        \"owner_id\": \"$OWNER_ID\",
-        \"sources\": [\"mock\"],
-        \"entity_kinds\": [\"person\", \"project\", \"artifact\", \"organization\", \"topic\"],
-        \"not_before_ms\": null, \"not_after_ms\": null,
-        \"max_sensitivity\": \"confidential\", \"expires_at_ms\": null}}" | jq -r .grant_token)
-echo "grant minted (${#GRANT} chars)"
+  -d "{\"public_key_b64\": \"$PUBKEY\", \"label\": \"smoke-test\"}" \
+  | jq -c '{key_id, label, registered_at_ms}'
+
+# Signs a scope read from stdin. The private key never leaves this machine.
+sign_grant() { "$SIGNER" sign --key "$DEVICE_KEY" --scope - --ttl-secs 3600; }
+
+echo
+echo "== 4b. owner signs a scoped capability for agent-demo =="
+GRANT=$(sign_grant <<JSON
+{"agent_id": "agent-demo",
+ "owner_id": "$OWNER_ID",
+ "sources": ["mock"],
+ "entity_kinds": ["person", "project", "artifact", "organization", "topic"],
+ "not_before_ms": null, "not_after_ms": null,
+ "max_sensitivity": "confidential", "expires_at_ms": null}
+JSON
+)
+echo "grant signed by the owner's device key (${#GRANT} chars)"
 
 echo
 echo "== 5. query through the query graph (in scope) =="
@@ -114,16 +133,15 @@ curl -sf -X POST "$ORCH_URL/query" -H 'content-type: application/json' \
 
 echo
 echo "== 6. same query under a scope that permits nothing (expect a decline) =="
-NARROW=$(curl -sf -X POST "$GATEWAY_URL/memory/scope/grant" \
-  -H 'content-type: application/json' \
-  -H "Authorization: Bearer $SESSION_TOKEN" \
-  -d "{\"ttl_secs\": 3600, \"scope\": {
-        \"agent_id\": \"agent-narrow\",
-        \"owner_id\": \"$OWNER_ID\",
-        \"sources\": [\"github\"],
-        \"entity_kinds\": [\"organization\"],
-        \"not_before_ms\": null, \"not_after_ms\": null,
-        \"max_sensitivity\": \"public\", \"expires_at_ms\": null}}" | jq -r .grant_token)
+NARROW=$(sign_grant <<JSON
+{"agent_id": "agent-narrow",
+ "owner_id": "$OWNER_ID",
+ "sources": ["github"],
+ "entity_kinds": ["organization"],
+ "not_before_ms": null, "not_after_ms": null,
+ "max_sensitivity": "personal", "expires_at_ms": null}
+JSON
+)
 curl -sf -X POST "$ORCH_URL/query" -H 'content-type: application/json' \
   -d "{\"question\": \"What datastore will project Atlas use?\", \"grant_token\": \"$NARROW\"}" \
   | jq '{answered, considered, text, denied: [.denied[] | .reason] | unique}'
@@ -161,23 +179,59 @@ curl -sf -X POST "$ORCH_URL/memory/neighbourhood" -H 'content-type: application/
 echo
 echo "== 9b. the same neighbourhood under a grant that cannot read confidential =="
 echo "       (denied nodes are dropped, not blanked -- only the count comes back)"
-SHALLOW=$(curl -sf -X POST "$GATEWAY_URL/memory/scope/grant" \
-  -H 'content-type: application/json' \
-  -H "Authorization: Bearer $SESSION_TOKEN" \
-  -d "{\"ttl_secs\": 3600, \"scope\": {
-        \"agent_id\": \"agent-shallow\",
-        \"owner_id\": \"$OWNER_ID\",
-        \"sources\": [\"mock\"],
-        \"entity_kinds\": [\"person\", \"project\", \"artifact\", \"organization\", \"topic\"],
-        \"not_before_ms\": null, \"not_after_ms\": null,
-        \"max_sensitivity\": \"personal\", \"expires_at_ms\": null}}" | jq -r .grant_token)
+SHALLOW=$(sign_grant <<JSON
+{"agent_id": "agent-shallow",
+ "owner_id": "$OWNER_ID",
+ "sources": ["mock"],
+ "entity_kinds": ["person", "project", "artifact", "organization", "topic"],
+ "not_before_ms": null, "not_after_ms": null,
+ "max_sensitivity": "personal", "expires_at_ms": null}
+JSON
+)
 curl -sf -X POST "$ORCH_URL/memory/neighbourhood" -H 'content-type: application/json' \
   -d "{\"seed_ids\": [\"$CLAIM_ID\"], \"grant_token\": \"$SHALLOW\", \"hops\": 2}" \
   | jq '{answered, considered, shown: (.nodes | length), withheld, withheld_edges,
          withheld_reasons, text}'
 
 echo
-echo "== 10. the explorer page is served =="
+echo "== 10. revoking a device key invalidates every grant it signed =="
+echo "       (the first lever this system has for withdrawing a live capability)"
+# A throwaway key, because revocation is deliberately terminal: re-registering a
+# revoked key does NOT un-revoke it, or revocation would mean nothing. So the
+# owner's main key stays usable and this demonstrates the lever on a spare.
+SPARE_KEY="$ROOT_DIR/.local/device-spare.key"
+rm -f "$SPARE_KEY"
+"$SIGNER" keygen --key "$SPARE_KEY" >/dev/null
+SPARE_PUB=$("$SIGNER" pubkey --key "$SPARE_KEY")
+curl -sf -X POST "$GATEWAY_URL/auth/device/register" \
+  -H 'content-type: application/json' -H "Authorization: Bearer $SESSION_TOKEN" \
+  -d "{\"public_key_b64\": \"$SPARE_PUB\", \"label\": \"spare\"}" | jq -c '{key_id}'
+
+SPARE_GRANT=$("$SIGNER" sign --key "$SPARE_KEY" --scope - --ttl-secs 3600 <<JSON
+{"agent_id": "agent-spare",
+ "owner_id": "$OWNER_ID",
+ "sources": ["mock"],
+ "entity_kinds": ["person", "project", "artifact", "organization", "topic"],
+ "not_before_ms": null, "not_after_ms": null,
+ "max_sensitivity": "confidential", "expires_at_ms": null}
+JSON
+)
+echo -n "before revoking -> "
+curl -sf -X POST "$GATEWAY_URL/memory/scope/introspect" -H 'content-type: application/json' \
+  -d "{\"grant_token\": \"$SPARE_GRANT\"}" | jq -c '{active, agent: .scope.agent_id}'
+
+SPARE_ID=$("$SIGNER" key-id --key "$SPARE_KEY")
+curl -sf -X POST "$GATEWAY_URL/auth/device/revoke" \
+  -H 'content-type: application/json' -H "Authorization: Bearer $SESSION_TOKEN" \
+  -d "{\"key_id\": \"$SPARE_ID\"}" | jq -c .
+echo -n "after revoking  -> "
+curl -s -o /dev/null -w "HTTP %{http_code} (expect 401)\n" \
+  -X POST "$GATEWAY_URL/memory/scope/introspect" -H 'content-type: application/json' \
+  -d "{\"grant_token\": \"$SPARE_GRANT\"}"
+rm -f "$SPARE_KEY"
+
+echo
+echo "== 11. the explorer page is served =="
 curl -sf -o /dev/null -w "GET /explorer -> %{http_code} (%{size_download} bytes)\n" "$ORCH_URL/explorer"
 echo "Open $ORCH_URL/explorer and paste a grant token to browse the same data."
 
