@@ -118,7 +118,11 @@ def build_record(
     """
     stamp = occurred_at_ms if occurred_at_ms is not None else int(time.time() * 1000)
     external_id = stable_id("utt", owner_id, source, str(stamp), text)
-    title = " ".join(text.split())[:_TITLE_CHARS]
+    # Truncated at a word boundary, so the label never ends in half a URL. Nothing
+    # follows URLs out of a title any more either, but a title that reads as a valid
+    # address is misleading on its own.
+    flat = " ".join(text.split())
+    title = flat if len(flat) <= _TITLE_CHARS else flat[:_TITLE_CHARS].rsplit(" ", 1)[0]
     return RawRecord(
         external_id=external_id,
         connector=source,

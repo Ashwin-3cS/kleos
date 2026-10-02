@@ -21,6 +21,7 @@ from ..enums import ClaimStatus
 from ..resolution.resolver import Resolver
 from ..schema import Candidate, RawRecord
 from ..storage.content import text_for_index
+from .enrich import enrich_records, urls_in_records
 from .runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ class IngestionState(TypedDict, total=False):
     session_tokens: dict[str, str]
     records: list[dict]
     candidates: list[dict]
+    #: One entry per fetch or extract attempt made while enriching, successes and
+    #: failures alike. A dead link in a note is a fact about the note.
+    enrichment: Annotated[list[dict], _extend]
     sealed: dict[str, dict]
     written: Annotated[list[str], _extend]
     #: Counted in the ``write`` node, by label, as rows actually land.
@@ -67,6 +71,8 @@ class IngestionResult:
     sealed: int = 0
     #: Objects dropped before the write, each with a reason in ``errors``.
     skipped: int = 0
+    #: Pages fetched because a record referred to them, successes and failures.
+    enrichment: list[dict] = field(default_factory=list)
     supersessions: list[tuple[str, str]] = field(default_factory=list)
     contradictions: list[tuple[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -80,6 +86,7 @@ class IngestionResult:
             "claims": self.claims,
             "sealed": self.sealed,
             "skipped": self.skipped,
+            "enrichment": self.enrichment,
             "supersessions": [list(p) for p in self.supersessions],
             "contradictions": [list(p) for p in self.contradictions],
             "errors": self.errors,
@@ -126,6 +133,36 @@ def build_ingestion_graph(runtime: Runtime):
             candidates.append(candidate.model_dump(mode="json"))
         log.info("ingestion.extract candidates=%d", len(candidates))
         return {"candidates": candidates}
+
+    def enrich(state: IngestionState) -> dict:
+        """Fetches pages the batch referred to, and extracts each one.
+
+        Runs only when there is a URL to follow -- see `_has_urls` and the
+        conditional edge below. Failures are collected rather than raised: a dead
+        link in a note is an ordinary fact about the note, and must not stop the
+        note from being remembered.
+        """
+        outcome = enrich_records(runtime, state["owner_id"], state.get("records", []))
+        extra = [c.model_dump(mode="json") for c in outcome["candidates"]]
+        if extra:
+            log.info("ingestion.enrich pages=%d", len(extra))
+        return {
+            "candidates": [*state.get("candidates", []), *extra],
+            "enrichment": outcome["attempts"],
+        }
+
+    def _has_urls(state: IngestionState) -> str:
+        """The first conditional edge in this codebase.
+
+        Most records contain no URL, and a node that runs unconditionally to discover
+        it has nothing to do is a node that will eventually be made to do something
+        anyway. Switched off entirely by default: following a link reaches the open
+        web on the person's behalf, which should be a deliberate choice and not
+        something a fresh checkout does.
+        """
+        if not runtime.settings.enrich_from_urls:
+            return "resolve"
+        return "enrich" if urls_in_records(state.get("records", [])) else "resolve"
 
     def resolve(state: IngestionState) -> dict:
         owner_id = state["owner_id"]
@@ -283,12 +320,18 @@ def build_ingestion_graph(runtime: Runtime):
     graph = StateGraph(IngestionState)
     graph.add_node("fetch", fetch)
     graph.add_node("extract", extract)
+    graph.add_node("enrich", enrich)
     graph.add_node("resolve", resolve)
     graph.add_node("encrypt", encrypt)
     graph.add_node("write", write)
     graph.add_edge(START, "fetch")
     graph.add_edge("fetch", "extract")
-    graph.add_edge("extract", "resolve")
+    # Enrichment sits between extraction and resolution on purpose: the page's claims
+    # have to be in the candidate set *before* the resolver runs, so they are compared
+    # against stored memory by the same machinery and under the same precedence rule
+    # as everything else.
+    graph.add_conditional_edges("extract", _has_urls, ["enrich", "resolve"])
+    graph.add_edge("enrich", "resolve")
     graph.add_edge("resolve", "encrypt")
     graph.add_edge("encrypt", "write")
     graph.add_edge("write", END)
@@ -393,6 +436,7 @@ def run_ingestion(
         claims=counts.get("claims", 0),
         sealed=len(final.get("sealed", {})),
         skipped=final.get("skipped", 0),
+        enrichment=final.get("enrichment", []),
         supersessions=[tuple(p) for p in final.get("supersessions", [])],
         contradictions=[tuple(p) for p in final.get("contradictions", [])],
         errors=final.get("errors", []),

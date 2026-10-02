@@ -118,8 +118,9 @@ def _register_builtins() -> None:
     from .github import SPEC as GITHUB_SPEC
     from .google import SPEC as GOOGLE_SPEC
     from .mock import SPEC as MOCK_SPEC
+    from .web import SPEC as WEB_SPEC
 
-    for spec in (MOCK_SPEC, GOOGLE_SPEC, GITHUB_SPEC, CHATGPT_SPEC, *DIRECT_SPECS):
+    for spec in (MOCK_SPEC, GOOGLE_SPEC, GITHUB_SPEC, CHATGPT_SPEC, WEB_SPEC, *DIRECT_SPECS):
         REGISTRY.register(spec)
 
 

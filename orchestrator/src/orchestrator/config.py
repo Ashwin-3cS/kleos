@@ -49,6 +49,40 @@ class Settings(BaseSettings):
         default_factory=list, validation_alias="ENABLED_SOURCES"
     )
 
+    #: Optional allow-list of tool ids this deployment will run. Empty (the default)
+    #: means every registered tool, mirroring ENABLED_SOURCES. Narrowing here is how
+    #: a deployment switches off outbound fetching entirely.
+    enabled_tools: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, validation_alias="ENABLED_TOOLS"
+    )
+
+    #: Limits on fetching a page the person referred to. All three are guards rather
+    #: than tuning: a body cap because Content-Length is a claim and not a fact, a
+    #: redirect limit because the usual SSRF is a public URL that redirects to a
+    #: private one, and a timeout because a hostile endpoint that never finishes is
+    #: free denial of service. See tools/fetch_url.py.
+    fetch_timeout_secs: float = Field(default=15.0, validation_alias="FETCH_TIMEOUT_SECS", gt=0)
+    fetch_max_bytes: int = Field(default=2_000_000, validation_alias="FETCH_MAX_BYTES", gt=0)
+    fetch_max_redirects: int = Field(default=3, validation_alias="FETCH_MAX_REDIRECTS", ge=0)
+    #: Whether an utterance containing a URL causes that URL to be fetched. Off by
+    #: default: it reaches the open web on the person's behalf, which should be an
+    #: explicit choice rather than something a fresh checkout does.
+    enrich_from_urls: bool = Field(default=False, validation_alias="ENRICH_FROM_URLS")
+    #: How many pages one ingestion run may fetch. A note with forty links is a
+    #: reading list, not forty things to go and read, and an unbounded fetch loop
+    #: driven by text someone else may have written is the shape of an amplification
+    #: attack.
+    enrich_max_pages: int = Field(default=3, validation_alias="ENRICH_MAX_PAGES", ge=0)
+    #: How much of a fetched page is read. A full Wikipedia article is ~24k characters
+    #: of text, which exceeded the provider's request limit outright on the first live
+    #: run. Reference pages front-load their definitions, so the opening is where the
+    #: answer to "what is this" lives; the rest is history, criticism and navigation.
+    #: The stored event body is truncated to the same budget, so what is kept is
+    #: exactly what the extractor saw.
+    extract_page_max_chars: int = Field(
+        default=8_000, validation_alias="EXTRACT_PAGE_MAX_CHARS", gt=0
+    )
+
     #: Directory holding ChatGPT data exports, one per owner (see
     #: connectors/chatgpt.py for the layout). There is no conversation-history
     #: API to authorise against, so the file is the only way in.
@@ -164,7 +198,7 @@ class Settings(BaseSettings):
             object.__setattr__(self, "llm_api_key", key)
         return self
 
-    @field_validator("enabled_sources", mode="before")
+    @field_validator("enabled_sources", "enabled_tools", mode="before")
     @classmethod
     def _split_csv(cls, value):
         # pydantic-settings would otherwise demand JSON for a list-typed env var.
@@ -202,6 +236,9 @@ class Settings(BaseSettings):
 
     def source_enabled(self, source: str) -> bool:
         return not self.enabled_sources or source in self.enabled_sources
+
+    def tool_enabled(self, tool: str) -> bool:
+        return not self.enabled_tools or tool in self.enabled_tools
 
 
 @lru_cache(maxsize=1)

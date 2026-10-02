@@ -22,6 +22,8 @@ from ..storage.content import ContentCrypto, NullContentCrypto
 from ..storage.migrations import apply_migrations
 from ..storage.neo4j_store import Neo4jStore
 from ..storage.reads import ReadLog
+from ..tools.registry import REGISTRY as TOOL_REGISTRY
+from ..tools.registry import ToolRegistry
 
 
 @dataclass(slots=True)
@@ -35,6 +37,10 @@ class Runtime:
     #: registry, so a caller can add a connector for one run without
     #: mutating global state.
     registry: ConnectorRegistry
+    #: Which tools this run may invoke. A copy of the process-wide registry, for the
+    #: same reason the connector registry is copied: a caller can withhold a tool for
+    #: one run without mutating global state.
+    tools: ToolRegistry
     #: Where sealed ciphertext lands. See ADR 0002.
     blobs: BlobStore
     #: What every agent read actually returned. See ADR 0005.
@@ -42,6 +48,10 @@ class Runtime:
     #: Seals the record's text before it is stored, and unseals only what a read
     #: is about to disclose. See ADR 0010.
     content: ContentCrypto | NullContentCrypto
+    #: Which tools this run may invoke. A copy of the process-wide registry, for the
+    #: same reason the connector registry is copied: a caller can withhold a tool for
+    #: one run without mutating global state.
+    tools: ToolRegistry
     weights: RankingWeights
 
     @classmethod
@@ -73,6 +83,7 @@ class Runtime:
             extractor=get_extractor(settings),
             gateway=gateway,
             registry=registry or REGISTRY.copy(),
+            tools=TOOL_REGISTRY.copy(),
             blobs=get_blob_store(settings),
             read_log=ReadLog(store),
             content=(
