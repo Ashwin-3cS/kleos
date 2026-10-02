@@ -43,6 +43,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/identity/verify", post(routes::identity::verify))
         .route("/memory/seal/encrypt", post(routes::memory::seal_encrypt))
+        .route("/memory/seal/decrypt", post(routes::memory::seal_decrypt))
         .route("/memory/scope/grant", post(routes::memory::scope_grant))
         .route(
             "/memory/scope/introspect",
