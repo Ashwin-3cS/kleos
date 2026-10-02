@@ -57,10 +57,14 @@ OPTIONS {indexConfig: {
 }}
 """
 
-_FULLTEXT_INDEX = """
-CREATE FULLTEXT INDEX memorai_memory_text IF NOT EXISTS
-FOR (n:Memory) ON EACH [n.text]
-"""
+# There is deliberately no full-text index on `n.text` any more. Since ADR 0010
+# that property holds sealed ciphertext, so an index over it would match nothing
+# and cost writes -- a broken index that still looks like a feature. Text search
+# over sealed content needs either a searchable-encryption scheme or the
+# enclave-side query engine of ADR 0010 stage 2; neither is a Lucene index.
+# Dropped rather than left, because a fresh database would otherwise differ from
+# an upgraded one.
+_DROP_FULLTEXT_INDEX = "DROP INDEX memorai_memory_text IF EXISTS"
 
 
 def apply_migrations(driver: Driver, database: str, embedding_dim: int) -> None:
@@ -68,5 +72,5 @@ def apply_migrations(driver: Driver, database: str, embedding_dim: int) -> None:
         for statement in _CONSTRAINTS + _INDEXES:
             session.run(statement)
         session.run(_VECTOR_INDEX, dim=embedding_dim)
-        session.run(_FULLTEXT_INDEX)
+        session.run(_DROP_FULLTEXT_INDEX)
     log.info("neo4j migrations applied (embedding_dim=%s)", embedding_dim)
