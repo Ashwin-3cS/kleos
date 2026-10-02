@@ -186,6 +186,12 @@ def build_shift_graph(runtime: Runtime):
         denials = state.get("denials", [])
         claims: dict[str, Claim] = _stored(candidates)
         in_chain = state.get("hop_of", {})
+        # Only the permitted ones, and only now: a withheld claim is never
+        # unsealed, so a denial costs no trust-boundary crossing and leaks no
+        # plaintext into this process (ADR 0010).
+        for cid, claim in claims.items():
+            if verdicts.get(cid) is None:
+                runtime.content.unseal_node(claim)
 
         # Logged whatever the outcome, including the "no such claim" case: an
         # agent probing ids it was never given is the signal an audit log is
@@ -391,6 +397,9 @@ def build_context_graph(runtime: Runtime):
         denials = state.get("denials", [])
         hop_of = state.get("hop_of", {})
         nodes = _stored(candidates)
+        for nid, node in nodes.items():
+            if verdicts.get(nid) is None:
+                runtime.content.unseal_node(node)
 
         record_read(
             runtime,

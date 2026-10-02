@@ -62,6 +62,17 @@ class Settings(BaseSettings):
     extraction_model: str = Field(default="claude-sonnet-5", validation_alias="EXTRACTION_MODEL")
     embedding_model: str = Field(default="voyage-3", validation_alias="EMBEDDING_MODEL")
 
+    #: Encrypt the resolved record's text at rest (ADR 0010). Needs a reachable
+    #: gateway and an owner session, because the key never leaves the enclave --
+    #: every seal and unseal is a round trip into the TEE. Default off while the
+    #: smoke script and the eval run without a gateway; a deployment that holds
+    #: real memory turns it on. There is deliberately no automatic fallback: if
+    #: this is on and the gateway is unreachable, ingestion fails rather than
+    #: quietly writing plaintext.
+    encrypt_content_at_rest: bool = Field(
+        default=False, validation_alias="ENCRYPT_CONTENT_AT_REST"
+    )
+
     #: Where sealed ciphertext is written when Walrus is not configured. The
     #: bytes arrive already encrypted by the enclave, so this directory holds
     #: no plaintext -- but it holds the *only* copy of a sensitive body, so it

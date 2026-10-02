@@ -97,6 +97,25 @@ class GatewayClient:
             attestation=body["attestation"],
         )
 
+    def seal_decrypt(self, ciphertext: bytes, key_id: str) -> bytes:
+        """Unseals content inside the enclave, back out to this process.
+
+        The owner comes from the session on the gateway side, not from us, so a
+        caller cannot ask for another owner's content. Called only for objects
+        that already passed the permission check -- the decrypt budget is the
+        disclosure budget (ADR 0010).
+        """
+        body = self._post(
+            "/memory/seal/decrypt",
+            {
+                "owner_id": "",
+                "ciphertext_b64": base64.b64encode(ciphertext).decode(),
+                "key_id": key_id,
+            },
+            auth=True,
+        )
+        return base64.b64decode(body["plaintext_b64"])
+
     def grant_scope(self, scope: Scope, ttl_secs: int = 3600) -> str:
         body = self._post(
             "/memory/scope/grant",

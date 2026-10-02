@@ -20,6 +20,7 @@ from langgraph.graph import END, START, StateGraph
 from ..enums import ClaimStatus
 from ..resolution.resolver import Resolver
 from ..schema import Candidate, RawRecord
+from ..storage.content import text_for_index
 from .runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -86,7 +87,10 @@ class IngestionResult:
 
 
 def build_ingestion_graph(runtime: Runtime):
-    resolver = Resolver(runtime.store)
+    # Stored claims are sealed at rest, so the resolver is handed the means to
+    # read them back -- otherwise it would compare plaintext against ciphertext
+    # and never notice a decision being superseded (ADR 0010).
+    resolver = Resolver(runtime.store, unseal=runtime.content.unseal_node)
 
     def fetch(state: IngestionState) -> dict:
         source = state["source"]
@@ -203,7 +207,7 @@ def build_ingestion_graph(runtime: Runtime):
             candidate = Candidate.model_validate(raw)
 
             for entity in candidate.entities:
-                _upsert(runtime, entity, entity.name + " " + " ".join(entity.aliases))
+                _upsert(runtime, entity)
                 written.append(entity.id)
                 touched["entities"].add(entity.id)
 
@@ -223,7 +227,7 @@ def build_ingestion_graph(runtime: Runtime):
                     errors.append(f"skipped {event.id}: sensitive body was not sealed")
                     skipped += 1
                     continue
-                _upsert(runtime, event, f"{event.summary} {event.body or ''}")
+                _upsert(runtime, event)
                 written.append(event.id)
                 touched["events"].add(event.id)
                 for entity_id in event.entity_ids:
@@ -233,7 +237,7 @@ def build_ingestion_graph(runtime: Runtime):
                         link(event.id, "CITES", citation.event_id)
 
             for claim in candidate.claims:
-                _upsert(runtime, claim, claim.statement)
+                _upsert(runtime, claim)
                 written.append(claim.id)
                 touched["claims"].add(claim.id)
                 for entity_id in claim.subject_entity_ids:
@@ -319,8 +323,17 @@ def _persist_sealed(
     return out, []
 
 
-def _upsert(runtime: Runtime, node, text: str) -> None:
-    runtime.store.upsert(node, runtime.embedder.embed(text))
+def _upsert(runtime: Runtime, node) -> None:
+    """Embeds from plaintext, then seals, then writes.
+
+    The order is the whole correctness condition. An embedding computed after
+    sealing would be an embedding of ciphertext -- noise -- and retrieval would go
+    quietly useless while every test that checks structure kept passing. So the
+    plaintext text is taken first, and the node that reaches the store has its
+    content fields already sealed (ADR 0010).
+    """
+    embedding = runtime.embedder.embed(text_for_index(node))
+    runtime.store.upsert(runtime.content.seal_node(node), embedding)
 
 
 def run_ingestion(

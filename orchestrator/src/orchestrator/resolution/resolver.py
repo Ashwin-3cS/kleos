@@ -65,8 +65,14 @@ class Resolution:
 
 
 class Resolver:
-    def __init__(self, store: Neo4jStore) -> None:
+    def __init__(self, store: Neo4jStore, unseal=None) -> None:
         self._store = store
+        # Stored claims may have their statements sealed at rest (ADR 0010).
+        # Comparing a plaintext candidate against a sealed statement would make
+        # every topic differ and every supersession go unnoticed -- a silent
+        # failure, since the batch would still write successfully. Identity by
+        # default so a caller with nothing to unseal needs no ceremony.
+        self._unseal = unseal or (lambda claim: claim)
 
     def resolve_batch(self, owner_id: str, candidates: list[Candidate]) -> list[Resolution]:
         """Resolves a whole ingestion batch.
@@ -93,7 +99,7 @@ class Resolver:
                 continue
 
             stored = [
-                s.node
+                self._unseal(s.node)
                 for s in self._store.claims_about(owner_id, claim.subject_entity_ids)
                 if isinstance(s.node, Claim)
             ]

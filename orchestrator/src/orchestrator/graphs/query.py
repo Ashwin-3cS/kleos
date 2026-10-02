@@ -148,8 +148,16 @@ def build_query_graph(runtime: Runtime):
                 ).as_dict()
             }
 
-        citations = [_citation_of(c) for c in permitted]
-        lines = [_line_of(c) for c in permitted]
+        # Unsealed here and nowhere earlier: these are exactly the objects that
+        # passed the check and are about to be shown, so the decrypt budget is
+        # the disclosure budget (ADR 0010). Retrieval and the permission check
+        # both ran without any content in the clear.
+        nodes = [
+            (c, runtime.content.unseal_node(_node_of(c)))
+            for c in permitted
+        ]
+        citations = [_citation_of(label=c["label"], node=n) for c, n in nodes]
+        lines = [_line_of(n) for _, n in nodes]
         text = "\n".join(lines)
         return {
             "answer": QueryAnswer(
@@ -192,8 +200,7 @@ def _decline_text(considered: int, reasons: list[str]) -> str:
     )
 
 
-def _line_of(candidate: dict) -> str:
-    node = _node_of(candidate)
+def _line_of(node) -> str:
     if isinstance(node, Claim):
         marker = "" if node.status.value == "active" else f" [{node.status.value}]"
         return f"- {node.statement}{marker} ({node.id})"
@@ -202,12 +209,11 @@ def _line_of(candidate: dict) -> str:
     return f"- {node.kind.value}: {node.name} ({node.id})"
 
 
-def _citation_of(candidate: dict) -> AnswerCitation:
-    node = _node_of(candidate)
+def _citation_of(label: str, node) -> AnswerCitation:
     first = node.provenance.citations[0] if node.provenance.citations else None
     return AnswerCitation(
         object_id=node.id,
-        label=candidate["label"],
+        label=label,
         source=",".join(node.acl.sources),
         url=first.source.url if first else None,
         occurred_at_ms=node.acl.occurred_at_ms,
