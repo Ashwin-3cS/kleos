@@ -68,6 +68,22 @@ class Settings(BaseSettings):
     #: default: it reaches the open web on the person's behalf, which should be an
     #: explicit choice rather than something a fresh checkout does.
     enrich_from_urls: bool = Field(default=False, validation_alias="ENRICH_FROM_URLS")
+    #: Whether a new entity name may be folded into one already stored. On by
+    #: default, unlike enrichment: this changes nothing about what the service
+    #: reaches out to, only whether the graph joins up names that mean the same
+    #: thing, and a record that silently keeps two of every entity is the
+    #: behaviour worth needing a flag to get back. Off is for a deployment that
+    #: would rather audit duplicates than trust a rule.
+    canonicalise_entities: bool = Field(
+        default=True, validation_alias="CANONICALISE_ENTITIES"
+    )
+    #: How many of an owner's entities are considered as merge targets, most
+    #: recently seen first. A real bound: past it an entity nobody has mentioned
+    #: lately stops being a merge target and a duplicate is created instead,
+    #: which is the correct direction to fail in.
+    canonicalise_max_entities: int = Field(
+        default=2_000, validation_alias="CANONICALISE_MAX_ENTITIES", gt=0
+    )
     #: How many pages one ingestion run may fetch. A note with forty links is a
     #: reading list, not forty things to go and read, and an unbounded fetch loop
     #: driven by text someone else may have written is the shape of an amplification
