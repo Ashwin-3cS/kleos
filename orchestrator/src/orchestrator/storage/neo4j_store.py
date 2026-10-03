@@ -322,6 +322,40 @@ class Neo4jStore:
         )
         return [_hydrate(row) for row in rows]
 
+    def recent_entities(self, owner_id: str, limit: int = 2_000) -> list[StoredNode]:
+        """This owner's entities, most recently seen first.
+
+        The read canonicalisation needs: deciding whether a new ``RAG`` is the
+        stored ``retrieval augmented generation`` means comparing names, and there
+        is no index that answers "which stored name is an acronym of this one".
+        So the candidate set is the entity set, and the work is done in Python.
+
+        **The limit is a real bound, not a paper one.** Past it, an entity that
+        has not been mentioned in a long time stops being a merge target and a
+        duplicate gets created instead. That is the right way for this to
+        degrade -- a duplicate is recoverable and a wrong merge is not -- but it
+        does mean canonicalisation is best-effort on a graph larger than the cap.
+        Ordering by last-seen is what makes the truncation sensible: the entities
+        a person is actively talking about are the ones a new mention is likely
+        to be about.
+
+        Kind is *not* filtered here. ``entity_kind`` is not a promoted property,
+        so filtering on it would mean either a schema migration or abusing
+        ``acl_entity_kinds``, which answers a different question. The caller
+        filters by kind after hydrating, which it can do for free because it has
+        to hydrate the payload for the name anyway.
+        """
+        rows = self._run(
+            "MATCH (e:Entity {owner_id: $owner_id}) "
+            "RETURN e.id AS id, labels(e) AS labels, e.payload AS payload, "
+            "e.text AS text, e.occurred_at_ms AS occurred_at_ms "
+            "ORDER BY e.occurred_at_ms DESC "
+            "LIMIT $limit",
+            owner_id=owner_id,
+            limit=limit,
+        )
+        return [_hydrate(row) for row in rows]
+
     def open_commitments(
         self,
         owner_id: str,

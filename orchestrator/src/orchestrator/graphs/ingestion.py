@@ -1,4 +1,5 @@
-"""Ingestion graph: fetch -> extract -> resolve -> encrypt -> write.
+"""Ingestion graph: fetch -> extract -> [enrich] -> canonicalise -> resolve
+-> encrypt -> write.
 
 A StateGraph rather than a straight function because ingestion is bursty
 and long-running: connecting a source means backfilling history in bursts,
@@ -18,6 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from ..enums import ClaimStatus
+from ..resolution.entities import Canonicaliser
 from ..resolution.resolver import Resolver
 from ..schema import Candidate, RawRecord
 from ..storage.content import text_for_index
@@ -46,6 +48,8 @@ class IngestionState(TypedDict, total=False):
     #: Counted in the ``write`` node, by label, as rows actually land.
     written_by_label: dict[str, int]
     skipped: int
+    #: One entry per entity folded into another, with the rule that allowed it.
+    merged_entities: Annotated[list[dict], _extend]
     supersessions: list[list[str]]
     contradictions: list[list[str]]
     errors: Annotated[list[str], _extend]
@@ -73,6 +77,10 @@ class IngestionResult:
     skipped: int = 0
     #: Pages fetched because a record referred to them, successes and failures.
     enrichment: list[dict] = field(default_factory=list)
+    #: Entity names folded into an existing entity, each naming the rule that
+    #: allowed it. Reported because a merge changes what the person's graph says
+    #: two things are, which is not something to do silently.
+    merged_entities: list[dict] = field(default_factory=list)
     supersessions: list[tuple[str, str]] = field(default_factory=list)
     contradictions: list[tuple[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -87,6 +95,7 @@ class IngestionResult:
             "sealed": self.sealed,
             "skipped": self.skipped,
             "enrichment": self.enrichment,
+            "merged_entities": self.merged_entities,
             "supersessions": [list(p) for p in self.supersessions],
             "contradictions": [list(p) for p in self.contradictions],
             "errors": self.errors,
@@ -98,6 +107,11 @@ def build_ingestion_graph(runtime: Runtime):
     # read them back -- otherwise it would compare plaintext against ciphertext
     # and never notice a decision being superseded (ADR 0010).
     resolver = Resolver(runtime.store, unseal=runtime.content.unseal_node)
+    canonicaliser = Canonicaliser(
+        runtime.store,
+        unseal=runtime.content.unseal_node,
+        limit=runtime.settings.canonicalise_max_entities,
+    )
 
     def fetch(state: IngestionState) -> dict:
         """Pulls from the source, unless records were pushed in with the run.
@@ -161,8 +175,32 @@ def build_ingestion_graph(runtime: Runtime):
         something a fresh checkout does.
         """
         if not runtime.settings.enrich_from_urls:
-            return "resolve"
-        return "enrich" if urls_in_records(state.get("records", [])) else "resolve"
+            return "canonicalise"
+        return "enrich" if urls_in_records(state.get("records", [])) else "canonicalise"
+
+    def canonicalise(state: IngestionState) -> dict:
+        """Folds this batch's entity names into the ones already stored.
+
+        **Before ``resolve``, which is the whole reason it is a separate node.**
+        The resolver finds claims to compare against via ``claims_about(owner_id,
+        subject_entity_ids)``. A new claim whose subject is a fresh ``RAG`` node
+        while the stored claim's subject is the old ``retrieval augmented
+        generation`` node makes that lookup return nothing, and no supersession is
+        ever detected. Canonicalising after resolution would leave the graph tidy
+        and the record wrong.
+
+        Unconditional, unlike ``enrich``: every batch has entities, so there is no
+        cheap test that would let it be skipped. Switched off wholesale by
+        ``CANONICALISE_ENTITIES`` instead.
+        """
+        if not runtime.settings.canonicalise_entities:
+            return {}
+        candidates = [Candidate.model_validate(raw) for raw in state.get("candidates", [])]
+        outcome = canonicaliser.canonicalise(state["owner_id"], candidates)
+        return {
+            "candidates": [c.model_dump(mode="json") for c in candidates],
+            "merged_entities": [m.as_dict() for m in outcome.merges],
+        }
 
     def resolve(state: IngestionState) -> dict:
         owner_id = state["owner_id"]
@@ -321,6 +359,7 @@ def build_ingestion_graph(runtime: Runtime):
     graph.add_node("fetch", fetch)
     graph.add_node("extract", extract)
     graph.add_node("enrich", enrich)
+    graph.add_node("canonicalise", canonicalise)
     graph.add_node("resolve", resolve)
     graph.add_node("encrypt", encrypt)
     graph.add_node("write", write)
@@ -330,8 +369,9 @@ def build_ingestion_graph(runtime: Runtime):
     # have to be in the candidate set *before* the resolver runs, so they are compared
     # against stored memory by the same machinery and under the same precedence rule
     # as everything else.
-    graph.add_conditional_edges("extract", _has_urls, ["enrich", "resolve"])
-    graph.add_edge("enrich", "resolve")
+    graph.add_conditional_edges("extract", _has_urls, ["enrich", "canonicalise"])
+    graph.add_edge("enrich", "canonicalise")
+    graph.add_edge("canonicalise", "resolve")
     graph.add_edge("resolve", "encrypt")
     graph.add_edge("encrypt", "write")
     graph.add_edge("write", END)
@@ -437,6 +477,7 @@ def run_ingestion(
         sealed=len(final.get("sealed", {})),
         skipped=final.get("skipped", 0),
         enrichment=final.get("enrichment", []),
+        merged_entities=final.get("merged_entities", []),
         supersessions=[tuple(p) for p in final.get("supersessions", [])],
         contradictions=[tuple(p) for p in final.get("contradictions", [])],
         errors=final.get("errors", []),
