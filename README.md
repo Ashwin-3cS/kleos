@@ -77,7 +77,8 @@ Alongside, and outside the trust boundary:
 
 ```
 orchestrator/ (Python: LangGraph + LlamaIndex)
-  - ingestion graph: fetch -> extract -> resolve -> encrypt -> write
+  - ingestion graph: fetch -> extract -> [enrich] -> canonicalise -> resolve
+                     -> encrypt -> write
   - query graph:     authorize -> retrieve -> permission-check -> assemble/decline
   - history reads:   authorize -> walk -> permission-check -> assemble
   - calls the gateway only to seal raw content, resolve agent grants,
