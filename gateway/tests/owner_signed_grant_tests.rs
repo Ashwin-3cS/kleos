@@ -205,6 +205,94 @@ async fn the_signing_device_is_not_a_field_the_signer_can_choose() {
 }
 
 #[tokio::test]
+async fn unsealing_under_a_grant_needs_the_grant_to_say_so() {
+    // `/memory/seal/decrypt` takes an owner session and an agent has none, so
+    // this route verifies the grant itself. What it must not do is let any valid
+    // grant through: reading a resolved claim and reading the raw body it came
+    // from are different disclosures, and `may_unseal` is the second one.
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+
+    let read_only =
+        shared::sign_grant(&scope("owner-1", "agent-1"), &kp, now_ms(), HOUR_MS, "n1").unwrap();
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/seal/unseal",
+            None,
+            json!({"grant_token": read_only, "ciphertext_b64": "AAAA", "key_id": "k"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a grant that may read must not thereby be able to unseal"
+    );
+}
+
+#[tokio::test]
+async fn unsealing_refuses_a_grant_signed_by_an_unregistered_key() {
+    // The same verification the scope route does, so an unsigned or
+    // foreign-signed grant cannot reach the enclave's decrypt at all.
+    let state = state();
+    let stranger = keypair();
+    let mut unsealing = scope("owner-1", "agent-1");
+    unsealing.may_unseal = true;
+    let token = shared::sign_grant(&unsealing, &stranger, now_ms(), HOUR_MS, "n1").unwrap();
+
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/seal/unseal",
+            None,
+            json!({"grant_token": token, "ciphertext_b64": "AAAA", "key_id": "k"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn unsealing_takes_the_owner_from_the_verified_scope() {
+    // There is no owner field on the request, and that is the point: a caller
+    // that could name the owner could name somebody else's. Asserted
+    // structurally -- an owner in the body changes nothing, because nothing
+    // reads it.
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+    let mut unsealing = scope("owner-1", "agent-1");
+    unsealing.may_unseal = true;
+    let token = shared::sign_grant(&unsealing, &kp, now_ms(), HOUR_MS, "n1").unwrap();
+
+    let (status, body) = call(
+        &state,
+        post(
+            "/memory/seal/unseal",
+            None,
+            json!({
+                "grant_token": token,
+                "ciphertext_b64": "AAAA",
+                "key_id": "k",
+                "owner_id": "owner-2",
+            }),
+        ),
+    )
+    .await;
+
+    // No enclave is reachable in this test, so the call fails downstream rather
+    // than at authorisation. What matters is that it got past authorisation at
+    // all, and did not do so as owner-2.
+    assert_ne!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a grant that says may_unseal should authorise: {body}"
+    );
+}
+
+#[tokio::test]
 async fn a_grant_signed_by_an_unregistered_key_is_refused() {
     let state = state();
     let kp = keypair();

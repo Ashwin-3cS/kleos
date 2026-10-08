@@ -8,7 +8,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use shared::{
-    ScopeIntrospectRequest, ScopeIntrospectResponse, SealDecryptRequest, SealDecryptResponse,
+    GrantUnsealRequest, ScopeIntrospectRequest, ScopeIntrospectResponse, SealDecryptRequest,
+    SealDecryptResponse,
     SealEncryptRequest, SealEncryptResponse,
 };
 use std::sync::Arc;
@@ -67,6 +68,76 @@ pub async fn seal_decrypt(
     let session = require_session(&headers, state.config.keys.session())?;
     let req = SealDecryptRequest {
         owner_id: session.owner_id,
+        ciphertext_b64: req.ciphertext_b64,
+        key_id: req.key_id,
+    };
+    let response = state.enclave.seal_decrypt(&req).await?;
+    Ok(Json(response))
+}
+
+/// Unseals record content for an **agent**, authorised by the grant it holds.
+///
+/// `seal_decrypt` above takes an owner session, and an agent has none -- it holds
+/// a grant. Three ways to close that, and two are worse:
+///
+/// - *Let the orchestrator hold a standing owner session.* Rejected. That is a
+///   store-wide decrypt capability held by a process outside the trust boundary
+///   and under the operator's control, which undoes the entire grant design to
+///   save a route.
+/// - *Have the agent supply an owner session.* Impossible by construction:
+///   handing an agent one collapses the grant model into a login.
+/// - *Verify the grant here.* This. `verify_grant` already binds
+///   `scope.owner_id` to the signing device key, so the owner is at least as
+///   unspoofable as it is behind a session -- more so, since owner sessions are
+///   host-signed and grants are not.
+///
+/// The added logic is **one boolean on an already-verified struct**, not a
+/// second `permits()`. That matters, because "no second implementation of
+/// retrieval or ranking in Rust" is a rule this repo keeps: `scope.may_unseal`
+/// is a capability check of the kind this file already does for every route,
+/// and the per-object permission check stays in the orchestrator where the graph
+/// is.
+///
+/// What this route cannot do is decide *which* body an agent may unseal. That is
+/// the orchestrator's job and it runs first: `evaluate_unseal` per object, after
+/// the ordinary read check, for objects already about to be disclosed. The
+/// decrypt budget is the disclosure budget (ADR 0010).
+///
+/// Deliberately **not** a path to a sealed OAuth refresh token. Those live in a
+/// different store with no decrypt at all, for the reason `store/mod.rs` gives:
+/// unsealing one would hand the holder standing access to a mailbox.
+pub async fn seal_unseal_for_grant(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GrantUnsealRequest>,
+) -> Result<Json<SealDecryptResponse>, GatewayError> {
+    let (claims, _, _) = shared::grants::parse_unverified(&req.grant_token)
+        .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+    let registered = state.device_keys.get(&claims.key_id).await?;
+
+    let scope = shared::verify_grant(
+        &req.grant_token,
+        |_| {
+            registered.map(|key| shared::RegisteredKey {
+                owner_id: key.owner_id.clone(),
+                public_key: key.public_key.clone(),
+                revoked: key.is_revoked(),
+            })
+        },
+        now_ms(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+
+    if !scope.may_unseal {
+        return Err(GatewayError::Unauthorized(
+            "this grant does not permit unsealing: seeing a resolved claim and \
+             reading the raw body it came from are different disclosures"
+                .into(),
+        ));
+    }
+
+    // The owner comes from the verified scope, never from the request.
+    let req = SealDecryptRequest {
+        owner_id: scope.owner_id,
         ciphertext_b64: req.ciphertext_b64,
         key_id: req.key_id,
     };

@@ -10,15 +10,17 @@ pub use grants::{
 };
 pub use identity::{OAuthSignal, OwnerIdentity, TrustTier};
 pub use memory::{
-    Citation, Claim, ClaimStatus, Commitment, EncryptedContentRef, Entity, EntityKind, Event,
-    FulfillmentStatus, MemoryNode, Provenance, SourceId, SourceRef,
+    Authority, Citation, Claim, ClaimStatus, Commitment, EncryptedContentRef, Entity, EntityKind,
+    Event, FulfillmentStatus, MemoryKind, MemoryNode, Provenance, SourceId, SourceRef,
 };
 pub use oauth::Provider;
 pub use permissions::{
-    evaluate, permits, DenyReason, ObjectAcl, PermissionDecision, Scope, Sensitivity,
+    evaluate, evaluate_action, evaluate_unseal, evaluate_write, permits, permits_write, DenyReason,
+    ObjectAcl, PermissionDecision, Scope, Sensitivity, WriteIntent,
 };
 pub use protocol::{
     IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
-    ScopeGrantRequest, ScopeGrantResponse, ScopeIntrospectRequest, ScopeIntrospectResponse,
+    GrantUnsealRequest, ScopeGrantRequest, ScopeGrantResponse, ScopeIntrospectRequest,
+    ScopeIntrospectResponse,
     SealDecryptRequest, SealDecryptResponse, SealEncryptRequest, SealEncryptResponse,
 };

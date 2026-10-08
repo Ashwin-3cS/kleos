@@ -76,7 +76,7 @@ with the reason rather than failing silently.
 | Stub | What is missing |
 | --- | --- |
 | **Walrus reads/writes** | `WalrusQuiltStore` has `LocalQuiltStore`'s interface and raises. It does **not** fall back to local disk: a deployment that believes it writes to Walrus and actually writes to the orchestrator's disk has a confidentiality bug, not a performance one. |
-| **The blob read path** | The gateway *does* expose `POST /memory/seal/decrypt`, and `LocalQuiltStore.get` is implemented and owner-partitioned. What is missing is the middle: nothing converts a stored `EncryptedContentRef` into a `BlobRef`, so `get` has no callers. |
+| **Walrus as a read path** | The blob read path is assembled and proven against `BLOB_STORE_DIR`. A Walrus-configured deployment has none, and reports `backend_not_wired` rather than "no body". |
 | **Google and GitHub connectors** | Consent, code exchange and the sealed per-owner refresh-token store exist. Nothing yet *uses* a stored token to fetch. The missing half is a design question: how Python obtains usable credentials without the host ever holding the refresh token. |
 | **Real Seal** | Needs a key-server committee and an on-chain owner policy object. |
 | **`VoyageEmbedder`** | Needs an API key and an `EMBEDDING_DIM` matching that model, which must also match the Neo4j vector index. |
