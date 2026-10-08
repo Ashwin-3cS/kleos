@@ -1,4 +1,4 @@
-"""memorai orchestration service.
+"""Kleos orchestration service.
 
 Everything agentic -- ingestion, resolution, retrieval, summarization --
 runs here, outside the enclave. This package is never part of the trust

@@ -12,7 +12,18 @@ use tokio_postgres::NoTls;
 /// alone. Making that impossible at the schema level is cheaper than deciding
 /// which of the two rows to believe.
 const MIGRATION: &str = "
-CREATE TABLE IF NOT EXISTS memorai_device_keys (
+-- The rename, as a migration, for the reason given in `store/postgres.rs`. Worse
+-- here if missed: an empty `kleos_device_keys` means every registered device key
+-- disappears, so every grant the owner ever signed fails verification as though
+-- signed by an unregistered key -- and the owner cannot re-register without the
+-- device, which is the one thing they may not have to hand.
+ALTER TABLE IF EXISTS memorai_device_keys RENAME TO kleos_device_keys;
+ALTER INDEX IF EXISTS memorai_device_keys_owner RENAME TO kleos_device_keys_owner;
+-- And the primary key's own index, which `RENAME TO` also leaves behind. Same
+-- reason: an upgraded database should be indistinguishable from a fresh one.
+ALTER INDEX IF EXISTS memorai_device_keys_pkey RENAME TO kleos_device_keys_pkey;
+
+CREATE TABLE IF NOT EXISTS kleos_device_keys (
     key_id            TEXT   PRIMARY KEY,
     owner_id          TEXT   NOT NULL,
     public_key        BYTEA  NOT NULL,
@@ -20,8 +31,8 @@ CREATE TABLE IF NOT EXISTS memorai_device_keys (
     registered_at_ms  BIGINT NOT NULL,
     revoked_at_ms     BIGINT
 );
-CREATE INDEX IF NOT EXISTS memorai_device_keys_owner
-    ON memorai_device_keys (owner_id, registered_at_ms DESC)
+CREATE INDEX IF NOT EXISTS kleos_device_keys_owner
+    ON kleos_device_keys (owner_id, registered_at_ms DESC)
 ";
 
 /// A connection per operation rather than a pool, for the same reason as the
@@ -81,7 +92,7 @@ impl DeviceKeyStore for PostgresDeviceKeyStore {
         // return the row that is actually stored rather than the one proposed.
         client
             .execute(
-                "INSERT INTO memorai_device_keys \
+                "INSERT INTO kleos_device_keys \
                  (key_id, owner_id, public_key, label, registered_at_ms, revoked_at_ms) \
                  VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (key_id) DO NOTHING",
                 &[
@@ -106,7 +117,7 @@ impl DeviceKeyStore for PostgresDeviceKeyStore {
         let rows = client
             .query(
                 "SELECT key_id, owner_id, public_key, label, registered_at_ms, revoked_at_ms \
-                 FROM memorai_device_keys WHERE key_id = $1",
+                 FROM kleos_device_keys WHERE key_id = $1",
                 &[&key_id],
             )
             .await
@@ -119,7 +130,7 @@ impl DeviceKeyStore for PostgresDeviceKeyStore {
         let rows = client
             .query(
                 "SELECT key_id, owner_id, public_key, label, registered_at_ms, revoked_at_ms \
-                 FROM memorai_device_keys WHERE owner_id = $1 ORDER BY registered_at_ms DESC",
+                 FROM kleos_device_keys WHERE owner_id = $1 ORDER BY registered_at_ms DESC",
                 &[&owner_id],
             )
             .await
@@ -139,7 +150,7 @@ impl DeviceKeyStore for PostgresDeviceKeyStore {
         // silently moving the timestamp.
         let changed = client
             .execute(
-                "UPDATE memorai_device_keys SET revoked_at_ms = $1 \
+                "UPDATE kleos_device_keys SET revoked_at_ms = $1 \
                  WHERE key_id = $2 AND owner_id = $3 AND revoked_at_ms IS NULL",
                 &[&revoked_at_ms, &key_id, &owner_id],
             )

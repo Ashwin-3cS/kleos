@@ -35,13 +35,38 @@ has never run on real Nitro hardware. Real Seal and Walrus are stubs. See
 "Still stubs" for the full list, and "The confidentiality model" for what the
 encryption claim does and does not cover.
 
-> **On the name.** The product is Kleos. Identifiers inside the code still say
-> `memorai`, the earlier placeholder: binary names, the `.eif`, the Neo4j index
-> names, the Postgres table, the local container names. Renaming those is a
-> migration (a Neo4j index and a Postgres table have to be recreated), not a
-> search and replace, so it is deliberately not bundled into a documentation
-> change. Prose says Kleos; `memorai_*` in a Cypher query or a container name is
-> the same system.
+> **On the name.** The product is Kleos, and so are the identifiers now. It was
+> `memorai` -- binary names, the `.eif`, the Neo4j constraint and index names, two
+> Postgres tables, the local container names, the RQ queue, the Postgres role.
+> That rename was a migration rather than a search and replace, and it is one:
+>
+> - **Neo4j** identifies a constraint or index by name, so creating the new name
+>   does not retire the old one -- it builds a second index over the same property
+>   and keeps maintaining it on every write. `storage/migrations.py` creates the
+>   new names, then drops the old ones explicitly, in that order, so an
+>   interrupted upgrade leaves a duplicate rather than nothing. The vector index
+>   goes last, because it is the one every read goes through.
+> - **Postgres** would have been worse. `CREATE TABLE IF NOT EXISTS` under the new
+>   name against a database holding the old one creates an *empty* table, and
+>   every sealed refresh token and registered device key stays in the original,
+>   unreferenced -- the gateway would behave as though nobody had ever consented
+>   and no device had ever been registered. So the migration renames in place
+>   first, including the implicit indexes behind the primary key and the unique
+>   constraint, which `ALTER TABLE ... RENAME` leaves behind and which would
+>   otherwise make an upgraded database differ from a fresh one. Verified both
+>   ways against real Postgres, twice over for idempotence, with the rows counted
+>   before and after.
+> - **One identifier deliberately still says `memorai`:** the domain separator in
+>   the mock seal's key derivation (`enclave/src/services/seal.rs`). It is an
+>   input to a key, not a name. Changing it is a key rotation wearing a rename's
+>   clothes -- existing ciphertext would stay on disk with a `key_id` that no
+>   longer matches, and every unseal would fail as though the blob belonged to
+>   another owner. A real rotation gets a v2 and a path that reads both.
+> - **Local containers** cannot be renamed by this repo at all: the Neo4j password
+>   lives inside its own data directory and the Postgres role was fixed when the
+>   volume was initialised. `scripts/services.sh` detects a pre-rename set and
+>   prints the in-place migration -- `docker rename` plus two credential changes,
+>   losing no data -- with deleting the volumes offered second.
 
 The only asset carried over from the abandoned prior product
 (`suiverify`, a decentralized KYC platform) is the Nitro Enclave build/deploy
@@ -355,9 +380,9 @@ cargo build --release --no-default-features --features nitro -p enclave
 ./scripts/build_enclave.sh      # stagex/docker build -> enclave/out/*.eif
 ./scripts/deploy.sh             # ships .eif + gateway binary to DEPLOY_HOST
 # on the parent instance:
-nitro-cli run-enclave --cpu-count 2 --memory 4096 --eif-path memorai-enclave.eif --enclave-cid 16
+nitro-cli run-enclave --cpu-count 2 --memory 4096 --eif-path kleos-enclave.eif --enclave-cid 16
 ./parent_forwarder.sh &
-ENCLAVE_MODE=nitro ./memorai-gateway
+ENCLAVE_MODE=nitro ./kleos-gateway
 ```
 
 `enclave/Dockerfile` is a stagex-based multi-stage build (adapted from

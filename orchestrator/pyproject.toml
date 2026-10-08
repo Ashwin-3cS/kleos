@@ -1,7 +1,7 @@
 [project]
-name = "memorai-orchestrator"
+name = "kleos-orchestrator"
 version = "0.1.0"
-description = "Python orchestration service for memorai: ingestion and query graphs over a Neo4j-backed memory layer."
+description = "Python orchestration service for Kleos: ingestion and query graphs over a Neo4j-backed memory layer."
 requires-python = ">=3.11"
 dependencies = [
     "langgraph>=0.2",
@@ -29,8 +29,8 @@ dependencies = [
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8"]
 
 [project.scripts]
-memorai-worker = "orchestrator.jobs.worker:main"
-memorai-api = "orchestrator.api:main"
+kleos-worker = "orchestrator.jobs.worker:main"
+kleos-api = "orchestrator.api:main"
 
 [build-system]
 requires = ["setuptools>=68"]

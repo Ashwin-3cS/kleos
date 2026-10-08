@@ -73,6 +73,15 @@ pub async fn decrypt(owner_id: &str, blob: SealEncrypted) -> Result<Vec<u8>, Enc
 fn derive_seed(owner_id: &str) -> [u8; 32] {
     use fastcrypto::hash::{Blake2b256, HashFunction};
     let mut hasher = Blake2b256::default();
+    // **Deliberately still says `memorai`, and must keep saying it.** This is a
+    // domain separator inside a key derivation, not a name: every body sealed so
+    // far was sealed under the key this string produces. Renaming it is a key
+    // rotation wearing a rename's clothes -- the ciphertext would stay on disk,
+    // the stored `key_id` would stop matching, and `mock_unseal` would reject
+    // every existing blob as belonging to another owner. Mock mode only, and
+    // obfuscation rather than encryption either way, but the failure would be
+    // silent data loss rather than an error. A real rotation gets a v2 and a
+    // path that can read both.
     hasher.update(b"memorai-mock-seal-v1");
     hasher.update(owner_id.as_bytes());
     hasher.finalize().digest

@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let config = Config::from_env()?;
-    info!(port = config.gateway_port, "starting memorai gateway");
+    info!(port = config.gateway_port, "starting Kleos gateway");
 
     let enclave = EnclaveClient::new(&config.enclave_host, config.enclave_port);
     let tokens: Box<dyn SealedTokenStore> = match &config.sealed_token_store_url {

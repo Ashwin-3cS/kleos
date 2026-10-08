@@ -2,7 +2,7 @@
 
 The retriever is a real ``BaseRetriever``, so anything in LlamaIndex that
 consumes one (query engines, response synthesizers, re-rankers) works over
-memorai memory unchanged. What it is *not* is a plain vector retriever: the
+Kleos memory unchanged. What it is *not* is a plain vector retriever: the
 hybrid scoring in ``ranking.py`` runs inside ``_retrieve``, because
 graph proximity needs the store, not just the vector index.
 
@@ -108,7 +108,7 @@ class MemoryRetriever(BaseRetriever):
 def property_graph_store(settings: Settings):
     """LlamaIndex's native property-graph store over the same database.
 
-    Not on the retrieval path: memorai writes its own node shape (payload
+    Not on the retrieval path: Kleos writes its own node shape (payload
     blobs plus flattened ACL columns) rather than LlamaIndex's triplet
     schema, so this is here for LlamaIndex-native graph queries and index
     construction against the same Neo4j instance.

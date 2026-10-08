@@ -15,15 +15,15 @@ echo "2/4: Building gateway release binary..."
 cargo build --release -p gateway
 
 echo "3/4: Shipping artifacts to $DEPLOY_HOST..."
-scp "$ROOT_DIR/enclave/out/memorai-enclave.eif" "$DEPLOY_HOST:~/memorai-enclave.eif"
-scp "$ROOT_DIR/target/release/gateway" "$DEPLOY_HOST:~/memorai-gateway"
+scp "$ROOT_DIR/enclave/out/kleos-enclave.eif" "$DEPLOY_HOST:~/kleos-enclave.eif"
+scp "$ROOT_DIR/target/release/gateway" "$DEPLOY_HOST:~/kleos-gateway"
 scp "$ROOT_DIR/scripts/parent_forwarder.sh" "$DEPLOY_HOST:~/parent_forwarder.sh"
 scp "$ROOT_DIR/.env.example" "$DEPLOY_HOST:~/.env"
 
 echo "4/4: On $DEPLOY_HOST, run:"
 cat <<'EOF'
   nitro-cli run-enclave --cpu-count 2 --memory 4096 \
-    --eif-path ~/memorai-enclave.eif --enclave-cid 16
+    --eif-path ~/kleos-enclave.eif --enclave-cid 16
   ./parent_forwarder.sh &
-  ENCLAVE_MODE=nitro ./memorai-gateway
+  ENCLAVE_MODE=nitro ./kleos-gateway
 EOF
