@@ -1,39 +1,115 @@
 # Kleos
 
-A personal memory layer for humans and AI agents. A person's sources are
-resolved into a structured, timestamped record -- who decided what, when it
-changed, why, what it links to, who owes whom -- rather than a pile of
-searchable documents. The sensitive parts are encrypted inside a TEE (AWS Nitro
-Enclave) attested via NSM, so the operator holds ciphertext. Authorized agents
-query it over MCP under scoped grants, and every read is logged. Identity comes
-from stacked OAuth signals verified **inside the enclave**, not from a
-government ID.
+**A memory harness that several AI agents share.**
 
-The bet is that the value is the **resolved record**. That bet is now measured
-rather than assumed: `python -m orchestrator.eval` compares this design against
-a plain RAG baseline over a labelled corpus, and plain RAG answers "which
-database did we pick" with all three past decisions and nothing to say which one
-holds. See "Step 0" below for the numbers, including the two places the resolved
-path does *worse*.
+Claude Code on your laptop, ChatGPT on your phone, whatever you add next --
+each holds its own context window, makes its own decisions, and forgets them
+when the session ends. Kleos is the layer underneath all of them: one record of
+what was decided, **who decided it, and why**, that any of them can read before
+acting and write to afterwards.
 
-What is here is the memory and permissions core of something larger: a
-voice-first personal assistant, with Kleos as the layer that remembers and
-decides who may read what. "Where this is going" is the target architecture and
-the order it has to be built in. `docs/adr/` carries the decisions -- one per
-file, immutable once accepted, a reversal getting its own ADR rather than an
-edit.
+The problem it exists for is not storage. It is that the second agent does not
+know there is a question to ask. So before acting, an agent states an intent --
+"I am about to pick a database for this project" -- and is told:
 
-**What exists:** the enclave and gateway, the resolved memory schema, the
-Python orchestration service (ingestion and query graphs, Neo4j-backed hybrid
-retrieval, query-time permissions), the history and neighbourhood reads, a
-read-only graph explorer, an agent read log, an MCP server, and one real
-connector (ChatGPT, via the user's own data export).
+```
+device 3f9adead1c (labelled 'claude-code', device-authenticated) recorded
+"project Lantern will use Neo4j." because "graph proximity is a hard
+requirement and Postgres cannot do it" [rule: agent_delegate_supersedes].
+Be aware of this before acting.
+```
 
-**What does not:** no web app, no SDK, no smart contracts. Google and GitHub
-have consent and a sealed refresh-token store but no `fetch` yet. `nitro` mode
-has never run on real Nitro hardware. Real Seal and Walrus are stubs. See
-"Still stubs" for the full list, and "The confidentiality model" for what the
-encryption claim does and does not cover.
+Three things in that line are the product. **Which device** -- authenticated by
+an Ed25519 key the owner registered, not by a name an agent chose for itself.
+**Why** -- the reason the deciding agent gave, stored with the decision rather
+than inferred later. And **the rule** -- why the *record* moved, which is a
+different question from why the agent decided.
+
+## What it is built on
+
+The record is **resolved, not retrieved**. A pile of searchable documents can
+answer "what did we say about the database"; it cannot answer "which decision
+holds", because nothing in the text of a superseded decision says it was
+superseded. So a later claim supersedes an earlier one and the earlier one stays
+stored and linked; unresolved disagreements stay open as contradictions; a
+decision that settles one points at what it settled. Every claim carries a
+citation chain back to the source events it came from.
+
+Memory is a **hierarchy of kinds**, because an agent can reasonably be granted
+one and not another -- "you may read how I do things, not what I did":
+
+| | |
+| --- | --- |
+| **short-term** | one session's working context: turns, tool results, scratchpads, file contents. Stored sealed, and deliberately *not* searchable |
+| **episodic** | what was decided or established |
+| **procedural** | how a task is done |
+| **tacit** | a heuristic drawn from experience -- an inference *about* a person, so labelling one narrows who may read it |
+
+Short-term is a different **state**, not a fourth kind. Stored, searchable and
+loaded are three states, and consolidation is the only thing that moves a
+session's notes into the second. Almost nothing should move.
+
+Permissions are **capabilities in a grant the owner's own device signs** -- the
+gateway can verify one and cannot mint one. A grant says which sources, entity
+kinds, time window, sensitivity and memory kinds it covers, and separately
+whether the agent may write, may unseal a raw body, may supersede the person's
+own decisions, and may ask for an action to be performed. All deny-by-default,
+so a grant issued before any of those existed is read-only.
+
+And the sensitive parts are **sealed inside a TEE** (AWS Nitro Enclave, attested
+via NSM): raw source content and OAuth refresh tokens exist in plaintext only
+inside the enclave, so the operator holds ciphertext. Identity comes from
+stacked OAuth signals verified *inside* the enclave, not from a government ID.
+Where that claim stops being true is stated plainly in "The confidentiality
+model" -- derived memory is readable by the operator, and that is a deliberate
+trade rather than an oversight.
+
+Every read is permission-checked in its own graph node after a permission-blind
+walk, every read is logged with the grant and the device that made it, and every
+state change is logged with who made it and which rule decided. Those three are
+the product: what an agent can see, what it did see, and what it changed.
+
+## The bet, measured
+
+Everything here follows from one claim -- that a resolved, timestamped record
+beats a pile of retrievable documents. It is measured rather than assumed.
+`python -m orchestrator.eval` compares this design against a plain-RAG baseline
+over a labelled corpus, held equal on everything except resolution, and exits
+non-zero if the bet does not pay. Plain RAG answers "which database did we pick"
+with all three past decisions and nothing to say which one holds.
+
+See "Step 0" below for the numbers, **including the two places the resolved path
+does worse** -- the query graph alone retrieves less than the baseline, and graph
+proximity costs precision across projects.
+
+## Where it sits
+
+This is the memory and permissions core of something larger: a voice-first
+personal assistant, with Kleos as the layer that remembers and decides who may
+read what. "Where this is going" is the target architecture and the order it has
+to be built in. `docs/` is a Mintlify site covering all of it; `docs/adr/`
+carries the decisions -- one per file, immutable once accepted, a reversal
+getting its own ADR rather than an edit.
+
+**What exists.** The enclave and gateway; owner-signed grants and a device key
+registry; the resolved memory schema with memory kinds and write attribution;
+the Python orchestration service (ingestion, query, history and neighbourhood
+graphs, Neo4j-backed hybrid retrieval, query-time permissions); agent sessions
+as short-term memory; consolidation into kinded claims; the agent read log and
+the mutation log; the blob read path for sealed bodies; a read-only graph
+explorer; an MCP server with eight tools including one write and the briefing;
+and one real connector -- ChatGPT, via the person's own data export.
+
+**What does not.** No web app, no SDK, no smart contracts. **The TEE action
+broker is not built**: `Scope.may_act` and `evaluate_action` exist and are
+tested, and nothing calls them yet -- so an agent cannot yet have the enclave
+*do* something on the owner's behalf and return only an acknowledgement. Google
+and GitHub have consent and a sealed refresh-token store but no `fetch`.
+`nitro` mode has never run on real Nitro hardware. Real Seal and Walrus are
+stubs. `POST /ingest` and `POST /remember` are unauthenticated and rely on
+binding to localhost. There is no grant revocation list, only short TTLs and
+device-key revocation. See "Still stubs" for the full list and `docs/status.mdx`
+for the single authoritative version of it.
 
 > **On the name.** The product is Kleos, and so are the identifiers now. It was
 > `memorai` -- binary names, the `.eif`, the Neo4j constraint and index names, two
@@ -128,24 +204,39 @@ storage: Postgres (sealed refresh tokens), blob store (sealed bodies)
 Alongside, and outside the trust boundary:
 
 ```
+agents (Claude Code, ChatGPT, ...)   each with its own context window
+  - open_session / append_context         short-term memory, not searchable
+  - brief_before_acting                   what another agent already decided
+  - record_decision                       under a grant that says may_write
+  - close_session(consolidate)            what the session concluded, if any
+        |  MCP over stdio; the grant token is an argument on every call
+        v
 orchestrator/ (Python: LangGraph + LlamaIndex)
   - ingestion graph: fetch -> extract -> [enrich] -> canonicalise -> resolve
                      -> encrypt -> write
   - query graph:     authorize -> retrieve -> permission-check -> assemble/decline
   - history reads:   authorize -> walk -> permission-check -> assemble
-  - calls the gateway only to seal raw content, resolve agent grants,
-    and resolve an owner session for the read log
+  - the briefing:    composes the three above; adds no retrieval of its own
+  - calls the gateway to seal raw content, to unseal a body under an agent's
+    own grant, to resolve grants, and to resolve an owner session for the logs
         |
         v
 Neo4j: entities, events, claims, their edges, one vector index over all
-       three (:Memory), and the agent read log (:AgentRead -- deliberately
-       NOT :Memory, so it can never be retrieved as memory)
+       three (:Memory) -- and four kinds of node that deliberately carry NO
+       :Memory label, so the harness's record of itself can never be
+       retrieved as memory:
+         :AgentRead       what each grant was shown
+         :AgentSession    an agent's working context
+         :SessionBlock    where its blocks are (the bytes are sealed blobs)
+         :Mutation        every state change, with who and which rule
 Redis: RQ ingestion jobs
 ```
 
 Every read is permission-checked in its own graph node *after* a
-permission-blind walk, and every read is logged with the grant that made it.
-Those two are the product: what an agent can see, and what it did see.
+permission-blind walk; every read is logged with the grant **and the device**
+that made it; and every state change is logged with who made it and which rule
+decided. Those three are the product: what an agent can see, what it did see,
+and what it changed.
 
 ### Where this is going
 
@@ -219,11 +310,30 @@ These hold across every step above. A change that weakens one is a change to
 the architecture, not an implementation detail:
 
 - `permits()` stays pure, total and deny-by-default; a multi-source ACL
-  requires *all* its sources in scope.
+  requires *all* its sources in scope. Writing, unsealing and acting are
+  separate capabilities with the same properties, and every one of them
+  defaults off -- so a grant signed before a capability existed cannot have it.
+  There is exactly **one** exception, on the object side only: an *unkinded*
+  claim passes any memory-kind scope, because every claim stored before memory
+  kinds existed has none and the strict reading would retroactively hide the
+  whole graph behind a field nothing set. It is an exception for *absence*, never
+  for mismatch, and it has its own named test in both languages.
 - Retrieval stays permission-blind, and the permission check stays its own
-  graph node between retrieval and assembly.
+  graph node between retrieval and assembly. Reads that compose other reads
+  compose them rather than retrieving for themselves, so no read path has a
+  disclosure that is recorded differently from the others.
 - Traversals stay owner-constrained at every node on the path, not just at the
   endpoints.
+- **Nothing that records the harness's own activity carries `:Memory`.**
+  `:AgentRead`, `:AgentSession`, `:SessionBlock` and `:Mutation` stay off that
+  label, which is what makes them unretrievable rather than merely unindexed.
+  The one edge that crosses out of the memory graph --
+  `(:Claim)-[:CONSOLIDATED_FROM]->(:AgentSession)` -- goes one way only, for the
+  same reason.
+- **Precedence is a property of the grant, not of the source.** An agent's claim
+  may supersede the person's own only under `may_supersede_owner`; otherwise it
+  contradicts. Authority is stamped where input becomes a candidate and never
+  read from an extractor.
 - The withhold-vs-drop asymmetry between the history reads and the
   neighbourhood read stays intact (see "Seeing the record" below).
 - Raw audio is never stored by default, and no real personal data goes into
@@ -457,14 +567,51 @@ VSOCK-over-socat, the mock/nitro split, and a trust boundary that grew by
 exactly two routes (`/seal/{encrypt,decrypt}` and `/oauth/exchange`) since the
 scaffold. Everything in this section is additive to it and runs outside it.
 
-**Product shape.** A user connects sources; their activity is resolved into a
-structured, timestamped memory, sealed inside the TEE at the points where it
-touches sensitive raw content, and stored under keys the host does not have.
-Authorized agents query it with scoped permissions over MCP, and the owner can
-see both what a grant *can* read and what it *has* read. The bet is that the
-value is a **resolved, timestamped record** -- who said what, when it changed,
-why, what it links to -- not a pile of retrievable raw documents. "Step 0" below
-has the measurement.
+**Product shape.** A person connects sources and plugs agents in. Their activity
+and the agents' conclusions are resolved into one structured, timestamped
+memory, sealed inside the TEE at the points where it touches sensitive raw
+content, and stored under keys the host does not have.
+
+What an agent does with it, in order: **open a session**, which is short-term
+memory and is stored without being searchable; **brief before acting**, which is
+how it learns what another agent already decided and why; **record a decision**,
+under a grant that says it may, attributed to the device that signed that grant;
+and **close**, consolidating whatever the session concluded that outlives it --
+usually nothing, which is the correct outcome.
+
+The owner sees three things an agent cannot: what a grant *can* read, what it
+*has* read, and what it *changed*. The bet is that the value is a **resolved,
+timestamped record** -- who decided what, when it changed, why, what it links to
+-- not a pile of retrievable raw documents. "Step 0" below has the measurement.
+
+### The harness
+
+Several agents sharing one mutable record needs three things the memory layer
+did not originally have, and each is a section of its own below:
+
+- **Instance identity.** A decision is attributed to `(agent_id, device_id,
+  session_id)`. Only the middle one is authenticated -- it is the registered
+  Ed25519 key whose signature the gateway verified -- so anything Kleos renders
+  about an agent's identity carries an `identity_basis` of `device_key` or
+  `label`, and a reader is never left assuming a name means something.
+- **Short-term memory, kept out of retrieval.** `:AgentSession` and
+  `:SessionBlock` carry no `:Memory` label, and the vector index and every
+  traversal key on that label -- so "a scratchpad is stored and not searchable"
+  is a property rather than a convention. `:AgentRead` and `:Mutation` are off
+  it for the same reason: the system's record of its own activity must never be
+  retrievable as memory, or a briefing about agent A's decision becomes memory
+  that agent C is briefed on, and the graph grows as a function of how often it
+  is read. One parametrised test covers all four labels, because the way this
+  breaks is a convenient `SET n:Memory` added by someone who wanted a node to
+  show up in the explorer.
+- **Precedence that belongs to the grant, not the source.** An agent's claim
+  *contradicts* the person's conflicting decision rather than replacing it,
+  unless the owner's grant says `may_supersede_owner`. ADR 0014 established that
+  a fetched page may never supersede the person; an agent the owner explicitly
+  authorised is a delegate rather than a stranger, and `Provenance.authority`
+  carries which -- stamped at the one point input becomes a candidate, never read
+  from an extractor, because a claim that could nominate itself a delegate could
+  overwrite the person's own decision.
 
 ### Decisions made
 
@@ -902,11 +1049,14 @@ Typed, with real signatures, failing explicitly rather than silently:
 - **Wallet/domain identity signals** -- unchanged since the scaffold. (OAuth
   code exchange is no longer one: see "The confidentiality model".)
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
-  seven tools over stdio: three reads (`query_memory`, `why_this_shifted`,
+  eight tools over stdio: three reads (`query_memory`, `why_this_shifted`,
   `memory_context_chain`), three for session state (`open_session`,
-  `append_context`, `close_session`) and **one write** (`record_decision`).
+  `append_context`, `close_session`), the briefing (`brief_before_acting`) and
+  **one write** (`record_decision`).
   Still never driven from a real MCP client, which is the first thing roadmap
-  step 2 fixes.
+  step 2 fixes -- and the gap worth naming here, because `test_mcp_server.py`
+  asserts the tool surface in-process and a transport that nothing has spoken to
+  is a transport nothing has tested.
 
   The write is new, and the three absences around it are still deliberate: no
   tool reads without a grant token, there is no neighbourhood tool (see "Seeing
