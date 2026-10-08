@@ -27,6 +27,8 @@ def record_read(
     denied: list[dict],
     considered: int,
     subject: str | None = None,
+    device_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Appends one entry for a read that is about to be returned.
 
@@ -40,6 +42,11 @@ def record_read(
         ReadEntry(
             owner_id=scope.owner_id,
             agent_id=scope.agent_id,
+            # Taken from the introspection that authorised this read, not from
+            # anything the caller sent. `scope.agent_id` is a label the owner
+            # chose; this is the key the gateway checked a signature against.
+            device_id=device_id,
+            session_id=session_id,
             grant_fp=grant_fingerprint(grant_token),
             kind=kind,
             disclosed_ids=list(disclosed_ids),

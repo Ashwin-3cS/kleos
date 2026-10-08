@@ -58,11 +58,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from ..enums import EntityKind, Sensitivity
+from ..gateway_client import ResolvedGrant
 from ..graphs.history import why_did_this_shift
 from ..graphs.ingestion import run_ingestion
 from ..graphs.query import run_query
 from ..graphs.runtime import Runtime
 from ..permissions import Scope
+from ..storage.reads import grant_fingerprint
 from . import corpus as c
 from .baseline import PlainRag
 from .questions import QUESTIONS, Question
@@ -142,6 +144,19 @@ class _LocalScopeGateway:
     def introspect_scope(self, grant_token: str) -> Scope:
         self.calls += 1
         return Scope.model_validate(json.loads(grant_token))
+
+    def introspect_grant(self, grant_token: str) -> ResolvedGrant:
+        """The eval has no devices: there is one measurer, not a fleet of agents.
+
+        A fixed device id rather than an empty one, so a report's read-log rows
+        are attributable to something, and so the field being populated is on the
+        same path the product uses.
+        """
+        return ResolvedGrant(
+            scope=self.introspect_scope(grant_token),
+            device_id="eval-harness",
+            grant_fp=grant_fingerprint(grant_token),
+        )
 
     def adopt_session(self, token: str) -> None:
         pass
