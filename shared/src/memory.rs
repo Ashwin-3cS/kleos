@@ -203,6 +203,61 @@ pub enum EntityKind {
     Topic,
 }
 
+/// What kind of long-term memory a claim is.
+///
+/// A hierarchy rather than one pile, because the three answer different
+/// questions and an agent can reasonably be granted one and not another:
+/// "you may read how I do things, not what I did" is a sentence a person would
+/// say, and [`crate::permissions::Scope`] can only express it if the kinds are
+/// named.
+///
+/// A **field on `Claim` rather than three node types.** A procedure is a claim
+/// in every respect that matters -- it can be superseded ("we deploy with X
+/// now, not Y"), contradicted, and reconciled -- and the resolver already
+/// implements exactly that machinery. Three parallel node types would duplicate
+/// the resolver, the promoted columns, the ACL flattening, `:Memory`
+/// membership, four read paths and the permission node: four things to keep in
+/// step with one. The same argument [`Commitment`] is a facet for.
+///
+/// A **closed vocabulary rather than a string**, for the reason [`AffectTone`]
+/// is one: a free-text field built for filtering is where an extractor
+/// eventually writes a sentence, and this one is promoted to an indexed column
+/// and read by a grant filter.
+///
+/// Short-term memory is deliberately **not** a variant. It is a different
+/// *state*, not a kind of long-term memory -- stored, and not searchable until
+/// consolidated -- and a fourth value here would put session scratchpads in the
+/// same vector index as consolidated facts, which is precisely the distinction
+/// that split exists to draw. See `storage/sessions.py`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryKind {
+    /// A distilled decision, fact or insight: a preference, a convention, what
+    /// was chosen and when.
+    Episodic,
+    /// A reusable workflow -- *how* a task is done.
+    Procedural,
+    /// A consolidated heuristic the person never stated outright.
+    Tacit,
+}
+
+impl MemoryKind {
+    /// The lowest sensitivity a claim of this kind may carry.
+    ///
+    /// Same self-protecting property as [`AffectTone::sensitivity_floor`]:
+    /// labelling content can only ever *narrow* who may read it, never widen
+    /// it. A `Tacit` claim is an inference *about* a person rather than
+    /// something they said, assembled by watching them -- so naming it has to
+    /// cost reach.
+    pub fn sensitivity_floor(&self) -> crate::permissions::Sensitivity {
+        use crate::permissions::Sensitivity;
+        match self {
+            MemoryKind::Episodic | MemoryKind::Procedural => Sensitivity::Personal,
+            MemoryKind::Tacit => Sensitivity::Confidential,
+        }
+    }
+}
+
 /// A person, project, artifact or organization referenced across sources.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
