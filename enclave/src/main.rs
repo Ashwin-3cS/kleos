@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let config = Config::from_env();
-    info!(mode = %config.enclave_mode, port = config.enclave_port, "starting memorai enclave");
+    info!(mode = %config.enclave_mode, port = config.enclave_port, "starting Kleos enclave");
 
     let signing_key = generate_ephemeral_key();
     let port = config.enclave_port;

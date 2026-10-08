@@ -1,4 +1,4 @@
-//! The OAuth scopes memorai asks for, in one place, so the authorize URL the
+//! The OAuth scopes Kleos asks for, in one place, so the authorize URL the
 //! gateway builds and the consent the user actually sees can be audited
 //! against a single list.
 
@@ -28,7 +28,7 @@ impl Provider {
         }
     }
 
-    /// Data scopes requested at consent time. Read-only throughout: memorai
+    /// Data scopes requested at consent time. Read-only throughout: Kleos
     /// ingests, it never writes back to a source.
     pub fn scopes(&self) -> &'static [&'static str] {
         match self {

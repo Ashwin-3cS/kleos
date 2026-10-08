@@ -39,10 +39,9 @@ from .graphs.runtime import Runtime
 log = logging.getLogger(__name__)
 
 #: The server object. `MCPServer` is what `FastMCP` was renamed to in the SDK's
-#: 2.0; the decorator and `run()` surface is the same. Named `memorai` because
-#: that is the identifier the rest of the deployment still uses -- renaming it is
-#: a migration (see the root README's note on the name), not a string change.
-mcp = MCPServer("memorai")
+#: 2.0; the decorator and `run()` surface is the same. The name is what a client
+#: lists the server under, so it is the one an owner reads in their MCP config.
+mcp = MCPServer("kleos")
 
 _runtime: Runtime | None = None
 

@@ -28,11 +28,11 @@ class Settings(BaseSettings):
 
     neo4j_uri: str = Field(default="bolt://127.0.0.1:7688", validation_alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", validation_alias="NEO4J_USER")
-    neo4j_password: str = Field(default="memoraidev", validation_alias="NEO4J_PASSWORD")
+    neo4j_password: str = Field(default="kleosdev", validation_alias="NEO4J_PASSWORD")
     neo4j_database: str = Field(default="neo4j", validation_alias="NEO4J_DATABASE")
 
     redis_url: str = Field(default="redis://127.0.0.1:6380/0", validation_alias="REDIS_URL")
-    ingestion_queue: str = Field(default="memorai-ingestion", validation_alias="INGESTION_QUEUE")
+    ingestion_queue: str = Field(default="kleos-ingestion", validation_alias="INGESTION_QUEUE")
 
     #: Must match the embedder's actual output width -- the Neo4j vector index is
     #: built from this value, so a mismatch makes every write silently unindexed.
