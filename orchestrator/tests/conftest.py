@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from neo4j.exceptions import Neo4jError
 
 os.environ.setdefault("ORCHESTRATOR_MODE", "mock")
 
@@ -31,6 +32,36 @@ def store(settings: Settings):
     )
     try:
         store.verify()
+    except Neo4jError as exc:
+        if not str(getattr(exc, "code", "") or "").startswith("Neo.ClientError.Security."):
+            raise
+        # **Fails rather than skips.** Skipping on "not reachable" is correct --
+        # a developer without the containers up should not see a wall of red --
+        # but an authentication failure is not unreachability. It means the
+        # database is answering and the credentials are wrong, and skipping
+        # there turns the entire suite into a silent no-op: the run that found
+        # this reported 248 passed and 128 skipped, which reads like a partial
+        # environment rather than like every database-backed test having been
+        # quietly dropped.
+        #
+        # Matched on the `Neo.ClientError.Security.*` code rather than on an
+        # exception class, because the two cases that matter are different
+        # classes: a wrong password is `AuthError`, while the lockout Neo4j
+        # applies after a few failed attempts is `AuthenticationRateLimit` -- an
+        # ordinary `ClientError`. Catching only the first left the second
+        # skipping, which is how this was found twice.
+        #
+        # The lockout matters because it outlives the mistake: after a password
+        # change, attempts with the old one leave a window that looks exactly
+        # like a wrong password and lasts long enough to span a whole run.
+        # `docker restart` clears it; see `scripts/services.sh`.
+        store.close()
+        pytest.fail(
+            f"neo4j rejected the configured credentials at {settings.neo4j_uri} "
+            f"(user={settings.neo4j_user!r}): {exc}\n"
+            "This is a wrong password or a lockout window, not an absent "
+            "database -- skipping here would hide every database-backed test."
+        )
     except Exception as exc:  # noqa: BLE001
         store.close()
         pytest.skip(f"neo4j not reachable at {settings.neo4j_uri}: {exc}")
