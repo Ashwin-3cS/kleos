@@ -52,6 +52,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from ..extraction.ids import stable_id
+from .blobs import BlobRef
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +132,15 @@ class StoredBlock:
     byte_len: int
     backend: str
     at_ms: int
+    #: The sealing key, when the block was sealed. ``None`` means stored as it
+    #: was -- which happens where there is no gateway to seal with, the same
+    #: bargain `ENCRYPT_CONTENT_AT_REST` strikes.
+    #:
+    #: Recorded because a block that cannot be unsealed cannot be consolidated,
+    #: and the key id is the one thing the enclave needs that is not derivable
+    #: from the bytes. Forgetting it would have made every sealed block a write
+    #: with no read, which is the defect ADR 0002 was about.
+    key_id: str | None = None
 
 
 class SessionStore:
@@ -240,7 +250,7 @@ class SessionStore:
                 f"the cap is {max_blocks}; close it and open another"
             )
 
-        sealed = self._seal(raw)
+        sealed, key_id = self._seal(raw)
         ref = self._blobs.put(owner_id, sealed)
         index = session.block_count
         now = now_ms if now_ms is not None else int(time.time() * 1000)
@@ -252,6 +262,7 @@ class SessionStore:
             byte_len=ref.byte_len,
             backend=ref.backend,
             at_ms=now,
+            key_id=key_id,
         )
         self._store.append_session_block(owner_id, stored)
         self._store.bump_session_counters(owner_id, session_id, blocks=1, bytes_=ref.byte_len)
@@ -261,9 +272,60 @@ class SessionStore:
         """Where this session's blocks are, in order. Not what they say."""
         return self._store.session_blocks(owner_id, session_id)
 
+    def block_texts(
+        self, owner_id: str, session_id: str, *, grant_token: str | None = None
+    ) -> list[str]:
+        """What this session's blocks say, in order.
+
+        The read side of `append_block`, and the only thing that reads a
+        scratchpad back. Consolidation is its single caller: a session's blocks
+        exist to be turned into memory or to be left alone, and nothing else has
+        a reason to see them.
+
+        A block whose bytes are gone is **skipped with a log line rather than
+        raising**, because a consolidation that failed entirely on one missing
+        patch would lose the conclusions in every other block. A block that
+        cannot be *unsealed* is a different matter and does raise: that is a
+        reachability problem with the enclave, not a fact about this session, and
+        silently consolidating the half that happened to be readable would
+        produce memory that misrepresents what the agent concluded.
+        """
+        texts: list[str] = []
+        for block in self.blocks(owner_id, session_id):
+            ciphertext = self._blobs.get(
+                owner_id,
+                BlobRef(
+                    blob_id=block.blob_id,
+                    patch_id=block.patch_id,
+                    byte_len=block.byte_len,
+                    backend=block.backend,
+                ),
+            )
+            if ciphertext is None:
+                log.warning(
+                    "session.block missing session=%s index=%d", session_id, block.index
+                )
+                continue
+            if block.key_id is None:
+                texts.append(ciphertext.decode())
+                continue
+            if self._gateway is None:
+                raise SessionError(
+                    f"block {block.index} of {session_id} is sealed and there is no "
+                    "gateway to unseal it with"
+                )
+            if grant_token is not None:
+                plaintext = self._gateway.unseal_for_grant(
+                    ciphertext, block.key_id, grant_token
+                )
+            else:
+                plaintext = self._gateway.seal_decrypt(ciphertext, block.key_id)
+            texts.append(plaintext.decode())
+        return texts
+
     # -- internals -----------------------------------------------------
 
-    def _seal(self, raw: bytes) -> bytes:
+    def _seal(self, raw: bytes) -> tuple[bytes, str | None]:
         """Seals a block in the enclave when there is one to seal with.
 
         A session block is working material -- file contents, tool output, what
@@ -274,8 +336,9 @@ class SessionStore:
         and the eval run without a gateway.
         """
         if self._gateway is None:
-            return raw
-        return self._gateway.seal_encrypt(raw).ciphertext
+            return raw, None
+        sealed = self._gateway.seal_encrypt(raw)
+        return sealed.ciphertext, sealed.ref.key_id
 
     def _require_live(
         self,

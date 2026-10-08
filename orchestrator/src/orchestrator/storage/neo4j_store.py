@@ -994,6 +994,7 @@ class Neo4jStore:
                 "byte_len": int(block.byte_len),
                 "backend": block.backend,
                 "at_ms": int(block.at_ms),
+                "key_id": block.key_id,
             },
         )
 
@@ -1004,7 +1005,7 @@ class Neo4jStore:
             "MATCH (b:SessionBlock {owner_id: $owner_id, session_id: $session_id}) "
             "RETURN b.session_id AS session_id, b.index AS index, b.blob_id AS blob_id, "
             "b.patch_id AS patch_id, b.byte_len AS byte_len, b.backend AS backend, "
-            "b.at_ms AS at_ms ORDER BY b.index ASC",
+            "b.at_ms AS at_ms, b.key_id AS key_id ORDER BY b.index ASC",
             owner_id=owner_id,
             session_id=session_id,
         )
@@ -1017,6 +1018,7 @@ class Neo4jStore:
                 byte_len=int(row["byte_len"]),
                 backend=row["backend"],
                 at_ms=int(row["at_ms"]),
+                key_id=row.get("key_id"),
             )
             for row in rows
         ]
