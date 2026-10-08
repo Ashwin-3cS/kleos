@@ -51,6 +51,8 @@ class HistoryState(TypedDict, total=False):
     object_id: str
     grant_token: str
     scope: dict
+    #: Resolved alongside the scope, carried so the assembler can log it.
+    device_id: str
     hops: int
     candidates: list[dict]
     verdicts: dict[str, str | None]
@@ -108,8 +110,11 @@ def _authorize(runtime: Runtime):
     def authorize(state: HistoryState) -> dict:
         if state.get("scope") and not state.get("grant_token"):
             raise ValueError("a grant_token is required; a caller-supplied scope is not trusted")
-        scope = runtime.gateway.introspect_scope(state["grant_token"])
-        return {"scope": scope.model_dump(mode="json")}
+        # The grant, not just the scope: the signing device is what makes the
+        # read log able to say *which* agent instance read this. ADR 0016.
+        resolved = runtime.gateway.introspect_grant(state["grant_token"])
+        scope = resolved.scope
+        return {"scope": scope.model_dump(mode="json"), "device_id": resolved.device_id}
 
     return authorize
 
@@ -200,6 +205,7 @@ def build_shift_graph(runtime: Runtime):
             runtime,
             Scope.model_validate(state["scope"]),
             state["grant_token"],
+            device_id=state.get("device_id"),
             kind="shift",
             disclosed_ids=[cid for cid in claims if verdicts.get(cid) is None],
             denied=denials,
@@ -405,6 +411,7 @@ def build_context_graph(runtime: Runtime):
             runtime,
             Scope.model_validate(state["scope"]),
             state["grant_token"],
+            device_id=state.get("device_id"),
             kind="context",
             disclosed_ids=[nid for nid in nodes if verdicts.get(nid) is None],
             denied=denials,

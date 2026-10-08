@@ -30,6 +30,8 @@ class QueryState(TypedDict, total=False):
     question: str
     grant_token: str
     scope: dict
+    #: Resolved alongside the scope, carried so the assembler can log it.
+    device_id: str
     top_k: int
     candidates: list[dict]
     permitted: list[dict]
@@ -77,8 +79,11 @@ def build_query_graph(runtime: Runtime):
         """
         if state.get("scope") and not state.get("grant_token"):
             raise ValueError("a grant_token is required; a caller-supplied scope is not trusted")
-        scope = runtime.gateway.introspect_scope(state["grant_token"])
-        return {"scope": scope.model_dump(mode="json")}
+        # The grant, not just the scope: the signing device is what makes the
+        # read log able to say *which* agent instance read this. ADR 0016.
+        resolved = runtime.gateway.introspect_grant(state["grant_token"])
+        scope = resolved.scope
+        return {"scope": scope.model_dump(mode="json"), "device_id": resolved.device_id}
 
     def retrieve(state: QueryState) -> dict:
         scope = Scope.model_validate(state["scope"])
@@ -128,6 +133,7 @@ def build_query_graph(runtime: Runtime):
             runtime,
             Scope.model_validate(state["scope"]),
             state["grant_token"],
+            device_id=state.get("device_id"),
             kind="query",
             disclosed_ids=[c["id"] for c in permitted],
             denied=denials,

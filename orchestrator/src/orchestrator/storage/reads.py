@@ -19,6 +19,13 @@ that returns nothing is a misconfigured grant. Two hundred of them walking
 the id space is an agent mapping a memory it cannot read. Only the second is
 visible, and only if denials are recorded.
 
+**The agent is named twice, and only once credibly.** ``agent_id`` is the label
+the owner typed into the scope they signed; ``device_id`` is the registered device
+key whose signature the gateway verified. Both are stored because an owner reads
+the first and relies on the second: two agents can be handed the same label, and
+only the key tells them apart. Entries written before ADR 0016 have no device at
+all, which reads back as ``None`` rather than as a guess.
+
 **The grant is fingerprinted, never stored.** A grant token is a bearer
 credential; an audit log that holds live credentials is a vulnerability
 wearing an accountability costume. The fingerprint is enough to group every
@@ -70,6 +77,13 @@ class ReadEntry:
     grant_fp: str
     #: ``query`` | ``shift`` | ``context`` | ``neighbourhood``
     kind: str
+    #: The registered device key that signed the grant behind this read. The only
+    #: authenticated identity in the request; ``agent_id`` above is a label.
+    #: ``None`` for an entry written before ADR 0016.
+    device_id: str | None = None
+    #: The agent session this read was made inside, when there was one. ``None``
+    #: for a read that arrived with a grant and nothing else.
+    session_id: str | None = None
     #: Ids assembled into the response. Empty on a decline.
     disclosed_ids: list[str] = field(default_factory=list)
     #: ``{"id": ..., "reason": ...}`` per object the grant did not cover.
@@ -156,6 +170,9 @@ class ReadLog:
                 {
                     "grant_fp": entry.grant_fp,
                     "agent_id": entry.agent_id,
+                    # Per grant, not per entry: one grant is signed by one device,
+                    # so this is a property of the capability and not of the read.
+                    "device_id": entry.device_id,
                     "reads": 0,
                     "disclosed": 0,
                     "declined": 0,
@@ -194,6 +211,8 @@ def entry_to_row(entry: ReadEntry) -> dict[str, Any]:
         "id": entry.id,
         "owner_id": entry.owner_id,
         "agent_id": entry.agent_id,
+        "device_id": entry.device_id,
+        "session_id": entry.session_id,
         "grant_fp": entry.grant_fp,
         "kind": entry.kind,
         "disclosed_ids": list(entry.disclosed_ids),
@@ -209,6 +228,11 @@ def row_to_entry(row: dict[str, Any]) -> ReadEntry:
         id=row["id"],
         owner_id=row["owner_id"],
         agent_id=row["agent_id"],
+        # ``get``, not ``[]``: rows written before these columns existed come back
+        # without them, and an audit log that cannot read its own history is worse
+        # than one with gaps in it.
+        device_id=row.get("device_id"),
+        session_id=row.get("session_id"),
         grant_fp=row["grant_fp"],
         kind=row["kind"],
         disclosed_ids=list(row["disclosed_ids"] or []),
