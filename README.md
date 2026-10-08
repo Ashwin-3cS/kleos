@@ -305,7 +305,7 @@ early looked exactly like everything passing.
 cd orchestrator
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
-.venv/bin/pytest                         # 146 tests
+.venv/bin/pytest                         # the suite; prints its own count
 .venv/bin/python -m orchestrator.eval    # the step 0 exit test
 cd ..
 
@@ -327,8 +327,8 @@ see the memory layer work against the real Rust stack:
    to the blob store so the ref it stores actually points at something, and
    everything else goes to Neo4j with provenance and ACL fields. The reported
    counts are what landed, not what was considered.
-4. `POST /memory/scope/grant` on the gateway mints a scoped grant for
-   `agent-demo`.
+4. `kleos-device sign` on the owner's device signs a scoped grant for
+   `agent-demo`; the gateway verifies it and cannot have produced it (ADR 0011).
 5. `POST /query` runs the query graph, which introspects the grant, retrieves
    with hybrid ranking, permission-checks each candidate, and answers with
    citations -- including marking the two superseded claims as superseded.
@@ -636,9 +636,10 @@ ingestion graph carried it in memory, wrote a reference with
 `blob_id = None`, and dropped the bytes when the run ended -- so sealing a
 record destroyed it, behind a stored ref that advertised a `key_id` and a
 `byte_len` and read as recoverable. Sealed bodies go to a content-addressed,
-owner-partitioned blob store and `blob_id` is populated (ADR 0002). There is
-still no *read* path: unsealing is `POST /seal/decrypt` on the enclave, which
-the gateway does not expose, so sealed bodies are durable and not yet
+owner-partitioned blob store and `blob_id` is populated (ADR 0002). The
+*route* back exists -- the gateway proxies `POST /memory/seal/decrypt` to the
+enclave under an owner session -- but nothing assembles the path from a stored
+`EncryptedContentRef` to those bytes, so sealed bodies are durable and not yet
 retrievable.
 
 *Caveat, stated plainly:* in mock mode "sealed" means `MOCK_SEAL_V1:`, a
@@ -748,8 +749,14 @@ reach the enclave).
 | `POST /auth/session` | verify identity via the enclave, issue an owner session JWT |
 | `POST /auth/session/introspect` | resolve an owner session to its owner id |
 | `POST /memory/seal/encrypt` | seal raw content in the enclave, under the session's owner |
-| `POST /memory/scope/grant` | owner mints a scoped, expiring grant for a named agent |
+| `POST /memory/seal/decrypt` | unseal **record content** (never a refresh token) for an owner about to be shown it |
+| `POST /auth/device/register` | register a device public key for the authenticated owner |
+| `GET /auth/device/keys` | list the owner's registered device keys, including revoked ones |
+| `POST /auth/device/revoke` | revoke one device key, and with it every grant it signed |
 | `POST /memory/scope/introspect` | resolve a grant token to the authoritative scope |
+
+There is no mint route. ADR 0011 moved grant signing to the owner's own device
+(`kleos-device sign`), so the gateway can verify a grant and cannot produce one.
 
 `/auth/session/introspect` is the mirror of `/memory/scope/introspect` and
 exists for the same reason: the orchestrator holds no signing key, so anything
@@ -779,13 +786,15 @@ Typed, with real signatures, failing explicitly rather than silently:
 
 - **Walrus** reads/writes. Sealed ciphertext now goes to a local
   content-addressed blob store and `EncryptedContentRef.blob_id` is populated
-  (ADR 0002); `WalrusBlobStore` has the same interface and raises. It does not
+  (ADR 0002); `WalrusQuiltStore` has the same interface and raises. It does not
   fall back to local disk when configured, because a deployment that believes it
   writes to Walrus and actually writes to the orchestrator's disk has a
   confidentiality bug rather than a performance one.
-  **There is still no read path**: unsealing is `POST /seal/decrypt` on the
-  enclave, which the gateway does not expose, so sealed bodies are durable and
-  not yet retrievable.
+  **There is still no read path.** Not for want of a route: the gateway proxies
+  `POST /memory/seal/decrypt` to the enclave under an owner session, and
+  `LocalQuiltStore.get` is implemented and owner-partitioned. What is missing is
+  the middle -- nothing converts a stored `EncryptedContentRef` into a `BlobRef`,
+  and nothing calls `get`.
 - **Real Seal encryption.** `enclave/src/services/seal.rs` has a working
   mock implementation -- a deliberately fake, reversible keystream XOR whose
   output is prefixed `MOCK_SEAL_V1:` and whose scheme id says so, exactly
@@ -804,9 +813,11 @@ Typed, with real signatures, failing explicitly rather than silently:
   real metadata (display name, OAuth scopes, chunking), so what is missing
   is the `fetch` body and a way to get credentials.
 
-  That second half is an open design question, not plumbing. `/seal/decrypt`
-  exists on the enclave and the gateway deliberately does not expose it, so
-  there is no path by which Python can obtain a usable token. Handing the
+  That second half is an open design question, not plumbing. The gateway's
+  `POST /memory/seal/decrypt` unseals **record content** and deliberately not a
+  **sealed refresh token** -- a different asset, and the one whose plaintext
+  would hand the host standing access to a mailbox -- so there is still no path
+  by which Python can obtain a usable token. Handing the
   orchestrator the unsealed refresh token would break the invariant the whole
   connect flow is built around; fetching inside the enclave would put Gmail
   pagination in the TCB. The likely answer is the third: the enclave unseals
