@@ -3,14 +3,36 @@ title: "Kleos"
 description: "A personal memory layer for humans and AI agents: a resolved, timestamped record rather than a pile of searchable documents."
 ---
 
-Kleos turns a person's sources into a **resolved record** — who decided what,
-when it changed, why, what it links to, who owes whom — instead of a pile of
-retrievable documents. The sensitive parts are encrypted inside a TEE (AWS Nitro
-Enclave) attested via NSM, so the operator holds ciphertext. Authorized agents
-query it over MCP under scoped grants, and every read is logged.
+**A memory harness that several AI agents share.**
 
-Identity comes from stacked OAuth signals verified **inside the enclave**, not
-from a government ID.
+Claude Code on your laptop, ChatGPT on your phone, whatever you add next — each
+holds its own context window, makes its own decisions, and forgets them when the
+session ends. Kleos is the layer underneath all of them: one record of what was
+decided, **who decided it, and why**, that any of them can read before acting and
+write to afterwards.
+
+The problem it exists for is not storage. It is that the second agent does not
+know there is a question to ask. So before acting, an agent states an intent and
+is told:
+
+```
+device 3f9adead1c (labelled 'claude-code', device-authenticated) recorded
+"project Lantern will use Neo4j." because "graph proximity is a hard
+requirement and Postgres cannot do it" [rule: agent_delegate_supersedes].
+Be aware of this before acting.
+```
+
+Three things in that line are the product. **Which device** — authenticated by an
+Ed25519 key the owner registered, not by a name an agent chose for itself.
+**Why** — the reason the deciding agent gave, stored with the decision. And **the
+rule** — why the *record* moved, which is a different question from why the agent
+decided.
+
+Underneath: a **resolved record** rather than retrievable documents; memory as a
+hierarchy of kinds; capabilities in a grant the owner's own device signs; and the
+sensitive parts sealed inside a TEE (AWS Nitro Enclave, attested via NSM) so the
+operator holds ciphertext. Identity comes from stacked OAuth signals verified
+**inside the enclave**, not from a government ID.
 
 <Note>
 This documentation states what is built, what is mocked, and what has never run
@@ -57,6 +79,9 @@ Privacy as a structural property rather than a promise — which means the
 boundaries are where the design lives.
 
 <CardGroup cols={3}>
+<Card title="The agent harness" icon="users" href="/concepts/agent-harness">
+Instance identity, short-term sessions, memory kinds, and the three states.
+</Card>
 <Card title="Architecture" icon="sitemap" href="/architecture/overview">
 Enclave, gateway, orchestrator, and the trust boundary between them.
 </Card>
