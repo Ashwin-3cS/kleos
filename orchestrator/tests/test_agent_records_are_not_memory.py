@@ -25,6 +25,7 @@ import pytest
 
 from orchestrator.config import Settings
 from orchestrator.graphs.runtime import Runtime
+from orchestrator.storage.actions import ActionEntry
 from orchestrator.storage.mutations import (
     KIND_STATUS,
     RULE_NEWER_ASSERTED_AT,
@@ -37,7 +38,7 @@ OWNER = "owner-not-memory"
 
 #: Every label that records the harness's own activity. A new one gets added
 #: here, which is the point: the list is the invariant.
-HARNESS_LABELS = ["AgentRead", "AgentSession", "SessionBlock", "Mutation"]
+HARNESS_LABELS = ["AgentRead", "AgentSession", "SessionBlock", "Mutation", "AgentAction"]
 
 
 @pytest.fixture
@@ -71,6 +72,18 @@ def runtime(settings: Settings, store) -> Runtime:
         max_blocks=10,
         max_bytes=10_000,
     )
+    rt.store.append_action(
+        ActionEntry(
+            owner_id=OWNER,
+            action_id="attest.digest",
+            agent_id="claude-code",
+            device_id="device-1",
+            ok=True,
+            digest="3f9adead",
+            summary="attested a digest about Postgres",
+            args_fp="deadbeef",
+        )
+    )
     rt.store.append_mutation(
         MutationEntry.for_actor(
             Actor(agent_id="claude-code", device_id="device-1"),
@@ -94,6 +107,7 @@ def _wipe(rt: Runtime) -> None:
     rt.store.wipe_read_log(OWNER)
     rt.store.wipe_sessions(OWNER)
     rt.store.wipe_mutations(OWNER)
+    rt.store.wipe_actions(OWNER)
 
 
 @pytest.mark.parametrize("label", HARNESS_LABELS)

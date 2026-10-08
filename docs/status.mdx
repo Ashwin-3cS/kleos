@@ -80,6 +80,7 @@ with the reason rather than failing silently.
 | **Google and GitHub connectors** | Consent, code exchange and the sealed per-owner refresh-token store exist. Nothing yet *uses* a stored token to fetch. The missing half is a design question: how Python obtains usable credentials without the host ever holding the refresh token. |
 | **Real Seal** | Needs a key-server committee and an on-chain owner policy object. |
 | **`VoyageEmbedder`** | Needs an API key and an `EMBEDDING_DIM` matching that model, which must also match the Neo4j vector index. |
+| **Credential-bearing actions** | The action broker is built and `attest.digest` works. `google.gmail.send` and `github.issue.comment` are declared and refuse: the enclave has no path from a sealed refresh token to a short-lived access token. |
 | **Wallet and domain identity signals** | Reject explicitly rather than pretending to work. Trust tiers 3 and 4 are unreachable. |
 | **Anything on-chain** | Grants are signed JWTs. `Scope` is shaped to become an on-chain grant object verbatim. |
 

@@ -892,6 +892,46 @@ class Neo4jStore:
         )
         return [row_to_entry(row) for row in rows]
 
+    # -- the action log ---------------------------------------------------
+    #
+    # The fourth append-only record, and the only one about something that
+    # happened *outside* this system. A read discloses and a mutation changes the
+    # record; an action sends mail. It cannot be undone by rewriting a row, which
+    # is why the record of it has to be complete. See `storage/actions.py`.
+
+    _ACTION_COLUMNS = (
+        "a.id AS id, a.owner_id AS owner_id, a.action_id AS action_id, "
+        "a.agent_id AS agent_id, a.device_id AS device_id, "
+        "a.session_id AS session_id, a.grant_fp AS grant_fp, a.ok AS ok, "
+        "a.digest AS digest, a.summary AS summary, a.error AS error, "
+        "a.args_fp AS args_fp, a.at_ms AS at_ms"
+    )
+
+    def append_action(self, entry) -> None:
+        """Appends one action record. Raises if it cannot be written."""
+        from .actions import entry_to_row
+
+        self._run("CREATE (a:AgentAction) SET a = $row", row=entry_to_row(entry))
+
+    def recent_actions(self, owner_id: str, limit: int = 50) -> list:
+        from .actions import row_to_entry
+
+        rows = self._run(
+            "MATCH (a:AgentAction {owner_id: $owner_id}) "
+            f"RETURN {self._ACTION_COLUMNS} "
+            "ORDER BY a.at_ms DESC, a.id DESC LIMIT $limit",
+            owner_id=owner_id,
+            limit=int(limit),
+        )
+        return [row_to_entry(row) for row in rows]
+
+    def wipe_actions(self, owner_id: str) -> None:
+        """For tests and an explicit owner request. Never a side effect: nothing
+        a re-ingest does un-sends a message."""
+        self._run(
+            "MATCH (a:AgentAction {owner_id: $owner_id}) DELETE a", owner_id=owner_id
+        )
+
     # -- the mutation log -----------------------------------------------
     #
     # Beside the read log, off `:Memory` for the same reason, and the second

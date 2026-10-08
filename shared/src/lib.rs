@@ -20,7 +20,8 @@ pub use permissions::{
 };
 pub use protocol::{
     IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
-    GrantUnsealRequest, ScopeGrantRequest, ScopeGrantResponse, ScopeIntrospectRequest,
+    ActionAck, ActionIntent, GrantUnsealRequest, ScopeGrantRequest, ScopeGrantResponse,
+    ScopeIntrospectRequest,
     ScopeIntrospectResponse,
     SealDecryptRequest, SealDecryptResponse, SealEncryptRequest, SealEncryptResponse,
 };

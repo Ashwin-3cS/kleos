@@ -8,8 +8,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use shared::{
-    GrantUnsealRequest, ScopeIntrospectRequest, ScopeIntrospectResponse, SealDecryptRequest,
-    SealDecryptResponse,
+    ActionAck, ActionIntent, GrantUnsealRequest, ScopeIntrospectRequest,
+    ScopeIntrospectResponse, SealDecryptRequest, SealDecryptResponse,
     SealEncryptRequest, SealEncryptResponse,
 };
 use std::sync::Arc;
@@ -145,6 +145,64 @@ pub async fn seal_unseal_for_grant(
     Ok(Json(response))
 }
 
+/// Asks the enclave to perform a sensitive action on the owner's behalf.
+///
+/// The gateway's whole job here is **who is asking**: verify the grant, check
+/// that it names this action, and forward with the owner taken from the verified
+/// scope. What may be done in the TEE is the enclave's decision, and the action
+/// registry is compiled in there rather than configured here -- the gateway runs
+/// on the host, and an action list the host could edit would be an action list
+/// the operator chooses.
+///
+/// Two capability checks, not one. `may_act` says this agent may ask for actions
+/// at all; `act_actions` says which. A grant that said only the first would be a
+/// grant to do anything the build knows how to do, which is not a capability
+/// anybody would knowingly sign.
+///
+/// The ack is forwarded unmodified. A host that rewrote it would be the operator
+/// editing the record of what was done on the owner's behalf.
+pub async fn memory_act(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ActRequest>,
+) -> Result<Json<ActionAck>, GatewayError> {
+    let (claims, _, _) = shared::grants::parse_unverified(&req.grant_token)
+        .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+    let registered = state.device_keys.get(&claims.key_id).await?;
+
+    let scope = shared::verify_grant(
+        &req.grant_token,
+        |_| {
+            registered.map(|key| shared::RegisteredKey {
+                owner_id: key.owner_id.clone(),
+                public_key: key.public_key.clone(),
+                revoked: key.is_revoked(),
+            })
+        },
+        now_ms(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+
+    let now = now_ms();
+    if !shared::evaluate_action(&scope, &req.action_id, now).is_allowed() {
+        // The same message whether the grant may not act at all or may not act
+        // *this* way. An agent probing which actions a grant covers learns
+        // nothing from the refusal that the owner did not already tell it.
+        return Err(GatewayError::Unauthorized(format!(
+            "this grant does not permit the action {:?}",
+            req.action_id
+        )));
+    }
+
+    let intent = ActionIntent {
+        owner_id: scope.owner_id,
+        action_id: req.action_id,
+        args: req.args,
+        at_ms: now,
+    };
+    let ack = state.enclave.act(&intent).await?;
+    Ok(Json(ack))
+}
+
 /// Registers a device public key for the authenticated owner.
 ///
 /// This is the owner's side of the authorization root: the device keeps the
@@ -156,6 +214,19 @@ pub async fn seal_unseal_for_grant(
 /// it. A host that forges a session can register a key of its own; what it cannot
 /// do is that invisibly, because the row is timestamped and `GET
 /// /auth/device/keys` shows it to the owner.
+/// What an agent sends to ask for an action.
+///
+/// No `owner_id`: it comes from the verified grant, like every other
+/// grant-authorised route here. A caller that could name the owner could name
+/// somebody else's.
+#[derive(Debug, Deserialize)]
+pub struct ActRequest {
+    pub grant_token: String,
+    pub action_id: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DeviceRegisterRequest {
     /// Raw Ed25519 public key, base64.

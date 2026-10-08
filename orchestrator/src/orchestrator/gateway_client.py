@@ -158,6 +158,24 @@ class GatewayClient:
         )
         return base64.b64decode(body["plaintext_b64"])
 
+    def request_action(
+        self, grant_token: str, action_id: str, args: dict
+    ) -> dict:
+        """Asks the enclave, through the gateway, to perform one action.
+
+        What comes back is an **acknowledgement**: whether it happened, a digest
+        over what it did, and one line of summary. Not the credential it needed,
+        and not the material that credential unlocks.
+
+        A refusal arrives as a successful response with ``ok: false``, which is
+        the shape rather than an accident -- an attempt made and failed is a
+        different fact from an attempt never made, and both are recorded.
+        """
+        return self._post(
+            "/memory/act",
+            {"grant_token": grant_token, "action_id": action_id, "args": args},
+        )
+
     # There is deliberately no `grant_scope` here any more. Grants are signed by
     # a key the owner holds, so nothing in this process -- or in the gateway --
     # can mint one; the owner's client signs a scope and hands the agent the

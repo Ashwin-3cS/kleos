@@ -163,6 +163,40 @@ success.
 </Accordion>
 </AccordionGroup>
 
+## Acting
+
+<AccordionGroup>
+<Accordion title="request_action(action_id, grant_token, args=None, session_id=None)">
+Ask for something sensitive to be **done** on the owner's behalf.
+
+You submit an intent and receive an **acknowledgement**: whether it happened, a
+digest over what it did, and one line of summary. You do not receive the
+credential the action needed, and you do not receive the material that
+credential unlocks — the work happens inside the enclave, which resolves the
+credential itself and drops it before replying.
+
+Needs a grant that says `may_act` **and** names this `action_id`. Both, because
+a grant saying only the first would be a grant to do anything the build knows
+how to do, which is not a capability anybody would knowingly sign.
+
+<Note>
+The action list is compiled into the enclave, so an unknown id is refused and
+the refusal says what *is* known. A refusal comes back as `ok: false` rather
+than as an error, because an attempt made and failed is a different fact from an
+attempt never made — and both are recorded against your device.
+
+A result too large to summarise comes back as a sealed reference, and reading it
+needs a grant that also says `may_unseal`.
+</Note>
+
+<Warning>
+**Only `attest.digest` is wired today.** The actions that need a provider
+credential are declared and refuse explicitly. See
+[the enclave](/architecture/enclave#the-action-broker).
+</Warning>
+</Accordion>
+</AccordionGroup>
+
 ## What deliberately does not exist
 
 | Absent tool | Why |
@@ -171,6 +205,7 @@ success.
 | a read-log tool | An agent that could read the log would see which objects *other* agents were shown, which is a disclosure channel around the permission check rather than a record of it. It needs an owner session. |
 | a mutation-log tool | Sharper version of the same: read wholesale it would tell one agent what every other agent has been writing. A briefing surfaces mutations only for objects the asking agent was just permitted to see. |
 | a second write tool | One write, so the gate, the precedence class and the `agent` source are enforced in one place. A test asserts no other tool looks like a write path. |
+| an action-log tool | Same reason as the read and mutation logs: read across agents it would tell one agent what every other has been *doing*. |
 
 <Note>
 A test asserts the exact tool set **and** that these names stay absent. An

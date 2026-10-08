@@ -100,11 +100,15 @@ the mutation log; the blob read path for sealed bodies; a read-only graph
 explorer; an MCP server with eight tools including one write and the briefing;
 and one real connector -- ChatGPT, via the person's own data export.
 
-**What does not.** No web app, no SDK, no smart contracts. **The TEE action
-broker is not built**: `Scope.may_act` and `evaluate_action` exist and are
-tested, and nothing calls them yet -- so an agent cannot yet have the enclave
-*do* something on the owner's behalf and return only an acknowledgement. Google
-and GitHub have consent and a sealed refresh-token store but no `fetch`.
+**What does not.** No web app, no SDK, no smart contracts. The TEE action
+broker exists -- an agent submits an intent and receives an acknowledgement,
+never a credential -- but **only one action is wired**: `attest.digest`, which
+needs no provider credential and is there to prove the shape. The two that
+matter, sending mail and commenting as the owner, are declared with real
+metadata and refuse explicitly, because the enclave still has no path from a
+sealed refresh token to a short-lived access token. Google and GitHub have
+consent and a sealed refresh-token store but no `fetch`, which is the same
+missing piece from the other side.
 `nitro` mode has never run on real Nitro hardware. Real Seal and Walrus are
 stubs. `POST /ingest` and `POST /remember` are unauthenticated and rely on
 binding to localhost. There is no grant revocation list, only short TTLs and
@@ -604,6 +608,17 @@ did not originally have, and each is a section of its own below:
   is read. One parametrised test covers all four labels, because the way this
   breaks is a convenient `SET n:Memory` added by someone who wanted a node to
   show up in the explorer.
+- **Sensitive actions that return an acknowledgement, not a credential.** An
+  agent submits an intent -- which action, which arguments -- and the enclave
+  resolves the credential itself, performs the work, and replies with a digest
+  and one line of summary. This is the generalisation of the one thing the
+  enclave already did right: `/oauth/exchange` is in there because a refresh
+  token is standing access to a mailbox and the host must never hold one, and if
+  the *action* runs in there too then nothing outside holds even a short-lived
+  token. The action registry is **compiled in**, for the same reason the upstream
+  hostnames are constants: the enclave's environment comes from the host, so a
+  host-settable action is an operator-repointable one. Adding one is a rebuild, a
+  new measurement and a new attestation, which is the point rather than the cost.
 - **Precedence that belongs to the grant, not the source.** An agent's claim
   *contradicts* the person's conflicting decision rather than replacing it,
   unless the owner's grant says `may_supersede_owner`. ADR 0014 established that
@@ -946,8 +961,8 @@ does the same against real Postgres.
 
 ### The Rust/Python split
 
-The enclave's surface grew by two things: `POST /seal/{encrypt,decrypt}`
-and `POST /oauth/exchange`. The attestation is only meaningful if what it
+The enclave's surface grew by three things: `POST /seal/{encrypt,decrypt}`,
+`POST /oauth/exchange`, and `POST /act`. The attestation is only meaningful if what it
 measures is small enough to audit, so nothing agentic -- no LLM calls, no
 retrieval, no ingestion logic -- went in there. Code exchange qualifies on
 the same test as sealing: it is small, it is the point at which a
@@ -965,6 +980,7 @@ reach the enclave).
 | `GET /auth/callback` | validate state, have the enclave exchange the code, persist the sealed refresh token, issue the owner session |
 | `POST /auth/session` | verify identity via the enclave, issue an owner session JWT |
 | `POST /auth/session/introspect` | resolve an owner session to its owner id |
+| `POST /memory/act` | verify a grant, check it names this action, and have the enclave perform it |
 | `POST /memory/seal/encrypt` | seal raw content in the enclave, under the session's owner |
 | `POST /memory/seal/decrypt` | unseal **record content** (never a refresh token) for an owner about to be shown it |
 | `POST /auth/device/register` | register a device public key for the authenticated owner |

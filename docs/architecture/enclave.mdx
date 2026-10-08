@@ -14,16 +14,73 @@ because the attestation is only worth what its measurement is worth.
 | `POST /oauth/exchange` | exchange an authorization code and seal the refresh token before it leaves |
 | `POST /seal/encrypt` | seal raw content under the owner's key |
 | `POST /seal/decrypt` | unseal **record content** — never a refresh token |
+| `POST /act` | perform one sensitive action and return an acknowledgement |
 | `POST /attest` | an NSM attestation document |
 | `GET /health` | liveness |
 
 <Note>
-Two of those — the seal pair and the code exchange — are the only additions
-since the scaffold. Code exchange qualifies on the same test as sealing: it is
-small, it is the point at which a long-lived credential comes into existence,
-and there is nowhere else it can happen without breaking the confidentiality
-claim.
+Three of those — the seal pair, the code exchange and `/act` — are the only
+additions since the scaffold. Code exchange qualifies on the same test as
+sealing: it is small, it is the point at which a long-lived credential comes
+into existence, and there is nowhere else it can happen without breaking the
+confidentiality claim.
 </Note>
+
+## The action broker
+
+An agent submits an **intent** and receives an **acknowledgement**. It never
+receives the credential the action needed, or the material that credential
+unlocks.
+
+This is the generalisation of the one thing the enclave already did right.
+`/oauth/exchange` is in here because a refresh token is standing, renewable
+access to a person's mailbox and the host must never hold one. If the *action*
+runs in here too, nothing outside holds even a short-lived token.
+
+<AccordionGroup>
+<Accordion title="A closed registry, compiled in">
+`action_id` resolves against a table in `services/actions.rs`, and an unknown id
+is refused rather than forwarded — with the refusal naming what *is* known, so
+an operator learns the registry from an error rather than from the source.
+
+Same reason the upstream hostnames are compile-time constants: the enclave's
+environment is supplied by the host, so a host-settable action is an
+operator-repointable one. Adding an action is a rebuild, a new measurement and a
+new attestation — the point rather than the cost, because the measurement is
+what the attestation is worth.
+</Accordion>
+<Accordion title="What keeps it small enough to belong in here">
+Growing the TCB is the risk, and the attestation is only meaningful if what it
+measures is small enough to audit. So an action is small and auditable by
+construction: **no LLM, no ingestion, no retrieval, no pagination** inside the
+enclave. Something needing any of those is not an action — it is the
+orchestrator's job, operating on what an ack gave it.
+
+A result too large to summarise comes back as a **sealed blob reference** rather
+than as bytes, so the agent must then pass the `may_unseal` gate to read any of
+it. Acknowledgement by default; disclosure as a second, separately granted step.
+</Accordion>
+<Accordion title="A refusal is still an acknowledgement">
+A refused action returns `200` with `ok: false`. An attempt that was made and
+failed is a different fact from one that was never made, and both are recorded
+against the asking device. Collapsing them into an HTTP error would lose the
+distinction a trace needs most — the same reason every tool in the Python layer
+returns a result instead of raising.
+
+A provider error never becomes ack text: it can carry request URLs and token
+prefixes, so it propagates as an error and the orchestrator records the attempt
+without the provider's words in it.
+</Accordion>
+</AccordionGroup>
+
+<Warning>
+**Only one action is wired.** `attest.digest` needs no provider credential and
+exists to prove the shape. `google.gmail.send` and `github.issue.comment` are
+declared with real metadata and refuse explicitly, because the enclave has no
+path yet from a sealed refresh token to a short-lived access token — roadmap
+step 5, and it gets an ADR first. An action that silently did nothing, or that
+asked the host for a token, would be worse than one that says so.
+</Warning>
 
 ## The identity path
 

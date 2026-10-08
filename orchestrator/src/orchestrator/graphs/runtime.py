@@ -17,6 +17,7 @@ from ..extraction.base import Extractor
 from ..gateway_client import GatewayClient
 from ..retrieval.embeddings import Embedder, get_embedder, verify_dim
 from ..retrieval.ranking import RankingWeights
+from ..storage.actions import ActionLog
 from ..storage.blobs import BlobStore, get_blob_store
 from ..storage.content import ContentCrypto, NullContentCrypto
 from ..storage.migrations import apply_migrations
@@ -53,6 +54,9 @@ class Runtime:
     #: Every state change, with who made it and which rule decided. The second
     #: thing in this database that cannot be regenerated from source.
     mutations: MutationLog
+    #: Every action an agent asked the enclave to perform. The only record here
+    #: of something that happened outside this system.
+    actions: ActionLog
     #: Seals the record's text before it is stored, and unseals only what a read
     #: is about to disclose. See ADR 0010.
     content: ContentCrypto | NullContentCrypto
@@ -95,6 +99,7 @@ class Runtime:
             blobs=blobs,
             read_log=ReadLog(store),
             mutations=MutationLog(store),
+            actions=ActionLog(store),
             sessions=SessionStore(
                 store,
                 blobs,
