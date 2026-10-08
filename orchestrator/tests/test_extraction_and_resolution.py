@@ -5,6 +5,7 @@ from orchestrator.enums import ClaimStatus, EntityKind
 from orchestrator.extraction.mock import MockExtractor
 from orchestrator.resolution.resolver import Resolver
 from orchestrator.retrieval.embeddings import HashedTokenEmbedder
+from orchestrator.storage.mutations import RULE_NEWER_ASSERTED_AT, Actor
 
 OWNER = "owner-test"
 
@@ -52,7 +53,14 @@ def test_resolver_supersedes_the_earlier_claim(store, settings):
             for entity_id in claim.subject_entity_ids:
                 store.link(claim.owner_id, claim.id, "ABOUT", entity_id)
             for superseded in claim.supersedes:
-                store.set_claim_status(claim.owner_id, superseded, ClaimStatus.SUPERSEDED.value)
+                store.set_claim_status(
+                    claim.owner_id,
+                    superseded,
+                    ClaimStatus.SUPERSEDED.value,
+                    actor=Actor.pipeline(),
+                    reason="a later assertion replaced it",
+                    rule=RULE_NEWER_ASSERTED_AT,
+                )
 
     assert supersessions, "the Neo4j decision should supersede the Postgres one"
     store.wipe_owner(OWNER)

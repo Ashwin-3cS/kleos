@@ -20,6 +20,7 @@ from ..retrieval.ranking import RankingWeights
 from ..storage.blobs import BlobStore, get_blob_store
 from ..storage.content import ContentCrypto, NullContentCrypto
 from ..storage.migrations import apply_migrations
+from ..storage.mutations import MutationLog
 from ..storage.neo4j_store import Neo4jStore
 from ..storage.reads import ReadLog
 from ..storage.sessions import SessionStore
@@ -49,6 +50,9 @@ class Runtime:
     #: Each agent's working context while it is still working. Short-term memory:
     #: stored, and deliberately not searchable until consolidated. See ADR 0016.
     sessions: SessionStore
+    #: Every state change, with who made it and which rule decided. The second
+    #: thing in this database that cannot be regenerated from source.
+    mutations: MutationLog
     #: Seals the record's text before it is stored, and unseals only what a read
     #: is about to disclose. See ADR 0010.
     content: ContentCrypto | NullContentCrypto
@@ -90,6 +94,7 @@ class Runtime:
             tools=TOOL_REGISTRY.copy(),
             blobs=blobs,
             read_log=ReadLog(store),
+            mutations=MutationLog(store),
             sessions=SessionStore(
                 store,
                 blobs,
