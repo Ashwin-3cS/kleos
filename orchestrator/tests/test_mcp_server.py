@@ -28,6 +28,7 @@ EXPECTED = {
     "close_session",
     "record_decision",
     "brief_before_acting",
+    "request_action",
 }
 
 #: Names that must never appear. Each is a decision with its reason recorded in

@@ -19,6 +19,7 @@ minted.
 | `POST /memory/seal/encrypt` | owner session | seal raw content; the owner comes from the session, not the request |
 | `POST /memory/seal/decrypt` | owner session | unseal **record content**, never a refresh token |
 | `POST /memory/seal/unseal` | **agent grant** | the same, authorised by a grant whose scope says `may_unseal`; the owner comes from the verified scope |
+| `POST /memory/act` | **agent grant** | verify the grant, check it names this action, and have the enclave perform it. Returns an acknowledgement, never a credential |
 | `POST /auth/device/register` | owner session | register a device public key |
 | `GET /auth/device/keys` | owner session | list device keys, including revoked |
 | `POST /auth/device/revoke` | owner session | revoke a key, and every grant it signed |

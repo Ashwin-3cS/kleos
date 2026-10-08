@@ -24,6 +24,8 @@ _CONSTRAINTS = [
     "FOR (n:AgentSession) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT kleos_mutation_id IF NOT EXISTS "
     "FOR (n:Mutation) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT kleos_agent_action_id IF NOT EXISTS "
+    "FOR (n:AgentAction) REQUIRE n.id IS UNIQUE",
 ]
 
 _INDEXES = [
@@ -75,6 +77,11 @@ _INDEXES = [
     "FOR (n:Mutation) ON (n.owner_id, n.at_ms)",
     "CREATE INDEX kleos_mutation_object IF NOT EXISTS "
     "FOR (n:Mutation) ON (n.owner_id, n.object_id)",
+    # What agents asked the enclave to *do*. Off `:Memory` like the other three
+    # append-only records, and read the one way it is read: an owner's actions,
+    # newest first.
+    "CREATE INDEX kleos_agent_action_owner_at IF NOT EXISTS "
+    "FOR (n:AgentAction) ON (n.owner_id, n.at_ms)",
 ]
 
 # Every stored node also carries the :Memory label so one vector index covers
