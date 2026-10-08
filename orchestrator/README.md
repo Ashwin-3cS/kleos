@@ -229,6 +229,38 @@ commits to. The registry is the host-side list of sources this build knows
 how to *fetch*, which is a different question and deliberately lives
 outside the trust boundary.
 
+### Agent decisions (`agent`)
+
+What an agent concluded while working for the owner, written through
+`record_decision` over MCP. Push-only like `text` and `voice`: an agent has no
+mailbox to poll.
+
+**One source id for the class, not one per agent.** The universe of agents is
+open, so per-agent ids would put agent naming inside `SourceId` validation, make
+every grant scope need rewriting when a new agent appears, and turn
+`ObjectAcl.sources` -- which the resolver's precedence rule reads -- into a
+cardinality problem. Instance identity lives on provenance, where
+`actor_agent_id`, `actor_device_id` and `actor_session_id` carry it and the
+device half is actually authenticated.
+
+Separate from `text` for the same reason `text` and `voice` are separate from
+each other: "read what I wrote down, not what my coding assistant concluded" is
+a real distinction, and `permits()` can express it for free only if the ids
+differ. It is also the write side of that rule -- `Scope.write_sources` is
+distinct from `Scope.sources` so an agent permitted to read the person's notes
+cannot write a claim that claims to be one.
+
+A declared decision is **not re-discovered by extraction**. An agent calling
+`record_decision` has already said the sentence is a decision; asking the
+extractor to notice would make the one path with an explicit declaration the
+least reliable in the service -- the rule-based extractor matches a fixture
+grammar and finds nothing in "project Lantern will use Neo4j", so in mock mode
+the decision would be stored as an event with no claim. So the statement is taken
+as given and everything else is not: subjects come from the entities extraction
+found, citations from the event it built, and resolution, canonicalisation,
+sealing and the write are the ordinary path -- which is what keeps a declared
+claim resolvable against the person's own decisions.
+
 Mock mode is per source, not global: a connector gets fixture data only if
 its spec declares a `mock_factory`. `mock` is itself a fixture source; the
 Google and GitHub stubs raise `NotImplementedError` in both modes. This

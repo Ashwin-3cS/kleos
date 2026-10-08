@@ -884,12 +884,30 @@ Typed, with real signatures, failing explicitly rather than silently:
 - **Wallet/domain identity signals** -- unchanged since the scaffold. (OAuth
   code exchange is no longer one: see "The confidentiality model".)
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
-  three read tools over stdio -- `query_memory`, `why_this_shifted`,
-  `memory_context_chain`. Implemented, and still never driven from a real MCP
-  client, which is the first thing roadmap step 2 fixes. There is deliberately
-  no tool that writes memory, none that reads without a grant token, no
-  neighbourhood tool (see "Seeing the record") and no read-log tool (see
-  "Permissions").
+  seven tools over stdio: three reads (`query_memory`, `why_this_shifted`,
+  `memory_context_chain`), three for session state (`open_session`,
+  `append_context`, `close_session`) and **one write** (`record_decision`).
+  Still never driven from a real MCP client, which is the first thing roadmap
+  step 2 fixes.
+
+  The write is new, and the three absences around it are still deliberate: no
+  tool reads without a grant token, there is no neighbourhood tool (see "Seeing
+  the record") and no read-log or mutation-log tool (see "Permissions"). What
+  makes the write safe to add is not the tool but the three things it cannot
+  choose. It needs a grant whose scope says `may_write`, which every grant
+  issued before that field existed does not. It writes as the `agent` source
+  whatever it asks for, because `Scope.write_sources` is a separate set from
+  `Scope.sources` precisely so an agent permitted to *read* the person's typed
+  notes cannot write a claim that claims to be one. And its precedence class
+  comes from the grant rather than from the agent: without
+  `may_supersede_owner` its claim **contradicts** the person's rather than
+  replacing it, both sides kept and neither overwritten -- which extends
+  ADR 0014's rule for fetched pages rather than contradicting it, since a page
+  is a stranger and an agent the owner granted this is a delegate.
+
+  One thing it cannot do at all: record a *sensitive* decision. Sealing needs an
+  owner session and an agent holds a grant, so that is refused up front rather
+  than skipped inside the graph where it would read as a partial success.
 
 ## Step 0: hardening, and testing the central bet
 
