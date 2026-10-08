@@ -49,6 +49,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/identity/verify", post(routes::identity::verify))
         .route("/memory/seal/encrypt", post(routes::memory::seal_encrypt))
         .route("/memory/seal/decrypt", post(routes::memory::seal_decrypt))
+        .route(
+            "/memory/seal/unseal",
+            post(routes::memory::seal_unseal_for_grant),
+        )
         .route("/auth/device/register", post(routes::memory::device_register))
         .route("/auth/device/keys", get(routes::memory::device_keys))
         .route("/auth/device/revoke", post(routes::memory::device_revoke))

@@ -188,7 +188,7 @@ def build_neighbourhood_graph(runtime: Runtime):
         # content sealed, so nothing the grant excludes reaches this process in
         # the clear (ADR 0010).
         for node in visible.values():
-            runtime.content.unseal_node(node)
+            runtime.content.for_grant(state['grant_token']).unseal_node(node)
         # Both ends checked, from the same verdict map the filter used -- an
         # edge is a fact about its two endpoints, so it cannot outlive either.
         edges = [

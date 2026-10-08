@@ -22,6 +22,7 @@ Its surface is deliberately three things:
 | `POST /identity/verify` | the direct identity path |
 | `POST /memory/seal/encrypt` | seal raw content in the enclave, under the session's owner |
 | `POST /memory/seal/decrypt` | unseal record content for an owner about to be shown it |
+| `POST /memory/seal/unseal` | the same for an **agent**, authorised by the grant it holds: `verify_grant`, then one boolean (`may_unseal`), then the enclave. The owner comes from the verified scope, never from the request |
 | `POST /auth/device/register` | register a device public key for the authenticated owner |
 | `GET /auth/device/keys` | list the owner's device keys, including revoked ones |
 | `POST /auth/device/revoke` | revoke one device key, and with it every grant it signed |

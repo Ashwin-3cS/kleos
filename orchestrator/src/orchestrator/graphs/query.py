@@ -123,6 +123,9 @@ def build_query_graph(runtime: Runtime):
         return {"permitted": permitted, "denials": denials}
 
     def assemble(state: QueryState) -> dict:
+        # Unsealing goes through the gateway under *this* grant, not under an
+        # owner session the read does not have. See `ContentCrypto.for_grant`.
+        content = runtime.content.for_grant(state["grant_token"])
         permitted = state.get("permitted", [])
         denials = state.get("denials", [])
         considered = len(state.get("candidates", []))
@@ -159,7 +162,7 @@ def build_query_graph(runtime: Runtime):
         # the disclosure budget (ADR 0010). Retrieval and the permission check
         # both ran without any content in the clear.
         nodes = [
-            (c, runtime.content.unseal_node(_node_of(c)))
+            (c, content.unseal_node(_node_of(c)))
             for c in permitted
         ]
         citations = [_citation_of(label=c["label"], node=n) for c, n in nodes]

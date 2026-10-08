@@ -196,7 +196,7 @@ def build_shift_graph(runtime: Runtime):
         # plaintext into this process (ADR 0010).
         for cid, claim in claims.items():
             if verdicts.get(cid) is None:
-                runtime.content.unseal_node(claim)
+                runtime.content.for_grant(state['grant_token']).unseal_node(claim)
 
         # Logged whatever the outcome, including the "no such claim" case: an
         # agent probing ids it was never given is the signal an audit log is
@@ -405,7 +405,7 @@ def build_context_graph(runtime: Runtime):
         nodes = _stored(candidates)
         for nid, node in nodes.items():
             if verdicts.get(nid) is None:
-                runtime.content.unseal_node(node)
+                runtime.content.for_grant(state['grant_token']).unseal_node(node)
 
         record_read(
             runtime,

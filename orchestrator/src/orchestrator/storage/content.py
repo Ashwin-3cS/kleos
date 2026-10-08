@@ -113,8 +113,26 @@ class ContentCrypto:
     side of the boundary to take.
     """
 
-    def __init__(self, gateway) -> None:
+    def __init__(self, gateway, grant_token: str | None = None) -> None:
         self._gateway = gateway
+        self._grant_token = grant_token
+
+    def for_grant(self, grant_token: str) -> ContentCrypto:
+        """This, but unsealing under an agent's grant instead of an owner session.
+
+        **This closes a live defect rather than adding a feature.** Sealing
+        happens during ingestion, which holds an owner session. Unsealing happens
+        during a *read*, which holds a grant and nothing else -- so with
+        `ENCRYPT_CONTENT_AT_REST` on, every query against sealed content failed
+        inside the gateway client with "no owner session", and the setting was
+        unusable. The only reason it had never been seen is that it defaults off,
+        because the smoke script and the eval run without a gateway.
+
+        A new instance rather than a mutable field, because one `Runtime` serves
+        concurrent reads and a token parked on the shared object would be read by
+        whichever request got there next.
+        """
+        return ContentCrypto(self._gateway, grant_token)
 
     # -- sealing ---------------------------------------------------------
 
@@ -189,6 +207,10 @@ class ContentCrypto:
 
     def _unseal_text(self, value: str) -> str:
         key_id, ciphertext = unpack(value)
+        if self._grant_token is not None:
+            return self._gateway.unseal_for_grant(
+                ciphertext, key_id, self._grant_token
+            ).decode()
         return self._gateway.seal_decrypt(ciphertext, key_id).decode()
 
 
@@ -201,6 +223,11 @@ class NullContentCrypto:
     explicitly, so a run never silently degrades from sealed to plaintext the way
     it would if this were a rescue path for a failed call.
     """
+
+    def for_grant(self, grant_token: str) -> NullContentCrypto:
+        """Nothing is sealed, so there is nothing to authorise. Returns itself so
+        a read path can call this unconditionally."""
+        return self
 
     def seal_node(self, node: MemoryNode) -> MemoryNode:
         return node

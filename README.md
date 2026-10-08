@@ -688,11 +688,19 @@ ingestion graph carried it in memory, wrote a reference with
 `blob_id = None`, and dropped the bytes when the run ended -- so sealing a
 record destroyed it, behind a stored ref that advertised a `key_id` and a
 `byte_len` and read as recoverable. Sealed bodies go to a content-addressed,
-owner-partitioned blob store and `blob_id` is populated (ADR 0002). The
-*route* back exists -- the gateway proxies `POST /memory/seal/decrypt` to the
-enclave under an owner session -- but nothing assembles the path from a stored
-`EncryptedContentRef` to those bytes, so sealed bodies are durable and not yet
-retrievable.
+owner-partitioned blob store and `blob_id` is populated (ADR 0002). **A sealed
+body can now be read back**, which it could not until recently: the path is
+`EncryptedContentRef` -> `BlobRef` -> `blobs.get` -> the enclave's decrypt, and
+the only piece missing was the first arrow. Both ends existed and nothing
+converted between them.
+
+A read unseals under the **agent's own grant**, not under an owner session it
+does not have: `POST /memory/seal/unseal` verifies the grant, checks
+`scope.may_unseal`, and takes the owner from the verified scope. That capability
+is a separate axis from reading, because seeing a resolved claim and reading the
+raw transcript it came from are different disclosures -- and it is checked after
+the ordinary permission check, for objects already about to be disclosed, so the
+decrypt budget stays the disclosure budget.
 
 *Caveat, stated plainly:* in mock mode "sealed" means `MOCK_SEAL_V1:`, a
 reversible keystream XOR (`enclave/src/services/seal.rs`). It is
@@ -842,11 +850,11 @@ Typed, with real signatures, failing explicitly rather than silently:
   fall back to local disk when configured, because a deployment that believes it
   writes to Walrus and actually writes to the orchestrator's disk has a
   confidentiality bug rather than a performance one.
-  **There is still no read path.** Not for want of a route: the gateway proxies
-  `POST /memory/seal/decrypt` to the enclave under an owner session, and
-  `LocalQuiltStore.get` is implemented and owner-partitioned. What is missing is
-  the middle -- nothing converts a stored `EncryptedContentRef` into a `BlobRef`,
-  and nothing calls `get`.
+  **The read path is assembled and proven against `BLOB_STORE_DIR` only.** A
+  deployment with Walrus configured has no read path at all, and
+  `storage/bodies.py` reports that as `backend_not_wired` rather than as "no
+  body" -- a distinction with its own test, because collapsing the two would make
+  a confidentiality design look like an empty record.
 - **Real Seal encryption.** `enclave/src/services/seal.rs` has a working
   mock implementation -- a deliberately fake, reversible keystream XOR whose
   output is prefixed `MOCK_SEAL_V1:` and whose scheme id says so, exactly

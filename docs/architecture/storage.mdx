@@ -99,12 +99,37 @@ class BlobStore(Protocol):
 when handed correct ids. The permission layer governs *objects*; this governs
 *bytes*, and collapsing them would mean one bug reaches both.
 
+## Reading a body back
+
+`storage/bodies.py` joins the two halves that existed and never met:
+
+```
+EncryptedContentRef  ->  BlobRef  ->  blobs.get  ->  the enclave's decrypt
+                    ^
+          the only piece that was missing
+```
+
+A read unseals under the **agent's own grant**. `POST /memory/seal/unseal`
+verifies the grant, checks `scope.may_unseal`, and takes the owner from the
+verified scope — an agent holds no owner session, and the alternative (the
+orchestrator holding a standing one) would be a store-wide decrypt capability in
+a process outside the trust boundary.
+
+It runs **after** the ordinary permission check, for objects already about to be
+disclosed, so the decrypt budget stays the disclosure budget.
+
 <Warning>
-**There is no assembled read path.** The gateway exposes
-`POST /memory/seal/decrypt`, and `LocalQuiltStore.get` is implemented and
-guarded against path traversal — but nothing converts a stored
-`EncryptedContentRef` into a `BlobRef`, so `get` has no callers. Sealed bodies
-are durable and not yet retrievable.
+`load_body` returns rather than raises, and keeps two failures apart on purpose:
+
+| | |
+| --- | --- |
+| `not_stored` | the bytes are genuinely absent — an old ref, or a Quilt never written |
+| `backend_not_wired` | the bytes exist and **this** deployment cannot reach them |
+
+The second is a Walrus-configured deployment reading a body sealed to local
+disk. Reporting it as "no body" would make a confidentiality design — no silent
+fall back to the orchestrator's disk — look like an empty record. There is a test
+asserting the two can never be conflated.
 </Warning>
 
 `WalrusQuiltStore` has the same interface and raises. It does **not** fall back
