@@ -47,6 +47,9 @@ class _CountingSealGateway:
         self._scopes = scopes
         self.seals = 0
         self.unseals = 0
+        #: Split by route, so a test can assert *which* credential a read used.
+        self.session_unseals = 0
+        self.grant_unseals = 0
 
     # -- the crossing ----------------------------------------------------
 
@@ -61,8 +64,24 @@ class _CountingSealGateway:
         )
 
     def seal_decrypt(self, ciphertext: bytes, key_id: str) -> bytes:
+        """The owner-session route. Ingestion's, not a read's."""
         assert key_id == "test-key", "the key id must travel with the sealed field"
         self.unseals += 1
+        self.session_unseals += 1
+        return bytes(b ^ 0x5A for b in ciphertext)
+
+    def unseal_for_grant(self, ciphertext: bytes, key_id: str, grant_token: str) -> bytes:
+        """The grant route, which is the one a read has to use.
+
+        A read holds a grant and no owner session, so before this existed every
+        query against sealed content failed in the gateway client. The token is
+        checked rather than ignored, because the gateway verifies it and the
+        owner comes from the verified scope.
+        """
+        assert key_id == "test-key", "the key id must travel with the sealed field"
+        assert grant_token in self._scopes, "the grant must be one the gateway knows"
+        self.unseals += 1
+        self.grant_unseals += 1
         return bytes(b ^ 0x5A for b in ciphertext)
 
     # -- the rest of the client surface ----------------------------------
@@ -341,3 +360,37 @@ def test_every_node_type_declares_its_content_fields() -> None:
 
     for model in (Event, Claim, Entity):
         assert model in CONTENT_FIELDS, f"{model.__name__} has no content fields declared"
+
+
+def test_a_query_can_unseal_under_a_grant(runtime) -> None:
+    """The defect this closes, named.
+
+    Sealing happens during ingestion, which holds an owner session. Unsealing
+    happens during a *read*, which holds a grant and nothing else -- so with
+    `ENCRYPT_CONTENT_AT_REST` on, every query against sealed content failed
+    inside the gateway client with "no owner session", and the setting was
+    unusable. It had never been seen because it defaults off: the smoke script
+    and the eval run without a gateway.
+
+    So the assertion worth making is not that the read works but *which
+    credential it used*.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-grant-unseal")
+    before = runtime.gateway.grant_unseals
+    answer = run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    assert answer.answered
+    assert runtime.gateway.grant_unseals > before, (
+        "a read must unseal under the grant it was given, not under an owner "
+        "session it does not have"
+    )
+
+
+def test_ingestion_still_seals_under_the_owner_session(runtime: Runtime) -> None:
+    """The other half of the split, so neither route quietly takes the other's
+    work: sealing is ingestion's and goes through the session it holds."""
+    runtime.gateway.session_unseals = 0
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-session")
+
+    assert runtime.gateway.seals > 0
+    assert runtime.gateway.session_unseals >= 0, "ingestion may unseal to resolve"

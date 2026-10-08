@@ -45,11 +45,12 @@ Two properties the interface still enforces, unchanged from ADR 0002:
   reaches both.
 
 Nothing here can read what it stores *as plaintext*: ``get`` returns the sealed
-bytes, and turning those back into a body means ``POST /memory/seal/decrypt`` on
-the gateway, which proxies the enclave. That route exists. What does not exist is
-a caller: nothing converts a stored ``EncryptedContentRef`` into a ``BlobRef``,
-so ``get`` has no call sites and sealed bodies are durable and not yet
-retrievable.
+bytes, and turning those back into a body goes through the enclave. That path is
+now assembled -- ``ref_from_encrypted_content`` below converts what a stored
+event carries into what ``get`` takes, and ``storage/bodies.py`` joins it to the
+gateway's unseal route. It was missing for a while, and only this one function
+was missing: both ends existed and nothing converted between them, so a sealed
+body was durable and unreadable behind a ref that read as recoverable.
 """
 
 from __future__ import annotations
@@ -113,6 +114,40 @@ class BlobStore(Protocol):
     def get(self, owner_id: str, ref: BlobRef) -> bytes | None:
         """The stored ciphertext, or ``None``. Never crosses owners."""
         ...
+
+
+def ref_from_encrypted_content(ref, backend: str) -> BlobRef:
+    """Addresses the stored patch an ``EncryptedContentRef`` points at.
+
+    The missing piece, and it was only ever this small: both ends existed --
+    ``EncryptedContentRef`` is what a stored event carries, ``BlobRef`` is what
+    ``get`` takes -- and nothing converted between them, so ``get`` had no
+    callers and a sealed body was durable and unreadable.
+
+    ``backend`` comes from the configured store rather than from the ref.
+    Deliberately not a field on ``EncryptedContentRef``: that would trip the
+    schema parity test, change the enclave's measurement, and alter the shape
+    `Scope` is being kept in for an on-chain grant object -- all for a
+    *deployment* fact. Where this deployment put the bytes is not a property of
+    the body.
+
+    The consequence, stated rather than hidden: a body written to local disk and
+    later read with Walrus configured is unreadable, because the configured store
+    is the one that will be asked. That is the right direction -- ADR 0002 and
+    0008 refuse a silent fall back to local disk -- but it has to surface as
+    "this backend is not wired" and never as "there is no body".
+    """
+    if ref.blob_id is None:
+        raise ValueError(
+            "this ref has no blob id: it predates ADR 0002, when sealing a record "
+            "destroyed it. There is nothing stored to read."
+        )
+    return BlobRef(
+        blob_id=ref.blob_id,
+        patch_id=ref.patch_id,
+        byte_len=ref.byte_len,
+        backend=backend,
+    )
 
 
 def _quilt_id_for(owner_id: str, patch_ids: list[str]) -> str:

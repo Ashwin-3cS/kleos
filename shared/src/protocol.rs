@@ -62,6 +62,19 @@ pub struct SealDecryptResponse {
     pub plaintext_b64: String,
 }
 
+/// Unseal a body for an *agent*, authorised by the grant it already holds.
+///
+/// The owner is **not** a field. It comes from the verified grant, exactly as
+/// [`SealDecryptRequest`]'s comes from the owner session: a caller that could
+/// name the owner could name somebody else's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct GrantUnsealRequest {
+    pub grant_token: String,
+    pub ciphertext_b64: String,
+    pub key_id: String,
+}
+
 /// Owner-authorised grant of a query scope to a named agent. Minted by the
 /// gateway against an authenticated owner session; the resulting token is
 /// what the orchestrator's query graph presents back for introspection.

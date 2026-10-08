@@ -135,6 +135,29 @@ class GatewayClient:
         )
         return base64.b64decode(body["plaintext_b64"])
 
+    def unseal_for_grant(self, ciphertext: bytes, key_id: str, grant_token: str) -> bytes:
+        """Unseals content under an agent's own grant, with no owner session.
+
+        `seal_decrypt` above needs one, and an agent has none -- which is why
+        every read against sealed content failed before this existed. The gateway
+        verifies the grant itself and takes the owner from the verified scope, so
+        the owner is at least as unspoofable as it is behind a session.
+
+        Called only for objects that have already passed the ordinary permission
+        check *and* `evaluate_unseal`: seeing a resolved claim and reading the raw
+        body it came from are different disclosures. The decrypt budget is the
+        disclosure budget (ADR 0010).
+        """
+        body = self._post(
+            "/memory/seal/unseal",
+            {
+                "grant_token": grant_token,
+                "ciphertext_b64": base64.b64encode(ciphertext).decode(),
+                "key_id": key_id,
+            },
+        )
+        return base64.b64decode(body["plaintext_b64"])
+
     # There is deliberately no `grant_scope` here any more. Grants are signed by
     # a key the owner holds, so nothing in this process -- or in the gateway --
     # can mint one; the owner's client signs a scope and hands the agent the

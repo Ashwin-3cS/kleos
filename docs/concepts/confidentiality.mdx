@@ -22,10 +22,12 @@ enclave, so when real Seal lands the invariant already holds and nothing outside
 the TEE has to change.
 </Warning>
 
-Sealed bodies are durable but **not yet retrievable**: the gateway exposes
-`POST /memory/seal/decrypt` and `LocalQuiltStore.get` is implemented, but nothing
-converts a stored `EncryptedContentRef` into a `BlobRef`, so the read path has no
-callers. See [Storage](/architecture/storage).
+A sealed body **can be read back**, and a read unseals under the agent's own
+grant rather than an owner session it does not have — `POST /memory/seal/unseal`
+verifies the grant, checks `scope.may_unseal`, and takes the owner from the
+verified scope. That is a separate capability from reading, because seeing a
+resolved claim and reading the raw transcript it came from are different
+disclosures. See [Storage](/architecture/storage).
 
 ## 2. Confidential from other users and other agents — delivered
 
