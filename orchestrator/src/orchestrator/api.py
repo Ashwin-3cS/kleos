@@ -21,6 +21,7 @@ from .connectors.direct import SOURCES as DIRECT_SOURCES
 from .connectors.direct import TEXT as DIRECT_TEXT
 from .connectors.direct import build_record, is_push_source
 from .connectors.registry import REGISTRY
+from .graphs.brief import brief_before_acting
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.ingestion import run_ingestion
 from .graphs.neighbourhood import neighbourhood
@@ -109,6 +110,15 @@ class ReadLogRequest(BaseModel):
     #: An **owner** session, not a grant. See ADR 0005.
     session_token: str
     limit: int = Field(default=50, ge=1, le=500)
+
+
+class BriefRequest(BaseModel):
+    #: What the agent is about to do, not what it is asking.
+    intent: str = Field(min_length=1, max_length=2000)
+    grant_token: str
+    session_id: str | None = None
+    top_k: int = Field(default=8, ge=1, le=50)
+    include_body: bool = False
 
 
 class MutationLogRequest(BaseModel):
@@ -328,6 +338,26 @@ def memory_reads(req: ReadLogRequest) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
     return runtime().read_log.summary(owner_id, limit=req.limit)
+
+
+@app.post("/memory/brief")
+def memory_brief(req: BriefRequest) -> dict[str, Any]:
+    """What an agent should know before acting: who decided what, and why.
+
+    Grant-authenticated like every other agent read. Composes the query graph and
+    the supersession read rather than retrieving for itself, so each keeps its own
+    permission check and writes its own log entry -- plus one entry for the
+    composite, which is what lets an owner see *what the agent was about to do*
+    rather than only which objects it was shown.
+    """
+    return brief_before_acting(
+        runtime(),
+        req.intent,
+        req.grant_token,
+        session_id=req.session_id,
+        top_k=req.top_k,
+        include_body=req.include_body,
+    ).as_dict()
 
 
 @app.post("/memory/mutations")
