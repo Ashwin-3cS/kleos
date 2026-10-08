@@ -29,6 +29,7 @@ from ..storage.content import text_for_index
 from ..storage.mutations import (
     KIND_CREATE,
     RULE_OWNER_EXPLICIT,
+    RULE_SUPERSESSION_SETTLES_CONFLICT,
     Actor,
     MutationEntry,
 )
@@ -59,6 +60,8 @@ class IngestionState(TypedDict, total=False):
     skipped: int
     #: One entry per entity folded into another, with the rule that allowed it.
     merged_entities: Annotated[list[dict], _extend]
+    #: ``[reconciled claim id, the claim that settled it]`` pairs.
+    reconciliations: Annotated[list[list[str]], _extend]
     #: Why the resolver decided what it did, carried from `resolve` to `write`.
     #: The resolver knows the rule and knows nothing about who asked; the actor
     #: arrives here, which is where the grant is.
@@ -105,6 +108,10 @@ class IngestionResult:
     merged_entities: list[dict] = field(default_factory=list)
     supersessions: list[tuple[str, str]] = field(default_factory=list)
     contradictions: list[tuple[str, str]] = field(default_factory=list)
+    #: ``(reconciled claim id, the claim that settled it)``. Reported because a
+    #: disagreement being closed is a change to what the record believes, not
+    #: bookkeeping.
+    reconciliations: list[tuple[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     #: Ids of everything this run actually wrote, in write order. The counts
     #: above are its length by label; this is here because a caller that has to
@@ -126,6 +133,7 @@ class IngestionResult:
             "merged_entities": self.merged_entities,
             "supersessions": [list(p) for p in self.supersessions],
             "contradictions": [list(p) for p in self.contradictions],
+            "reconciliations": [list(p) for p in self.reconciliations],
             "errors": self.errors,
         }
 
@@ -252,6 +260,7 @@ def build_ingestion_graph(runtime: Runtime):
         merged: list[dict] = []
         supersessions: list[list[str]] = []
         contradictions: list[list[str]] = []
+        reconciliations: list[list[str]] = []
         decisions: list[dict] = []
         candidates = [Candidate.model_validate(raw) for raw in state.get("candidates", [])]
         for candidate, resolution in zip(
@@ -261,6 +270,7 @@ def build_ingestion_graph(runtime: Runtime):
             merged.append(candidate.model_dump(mode="json"))
             supersessions += [list(p) for p in resolution.supersessions]
             contradictions += [list(p) for p in resolution.contradictions]
+            reconciliations += [list(p) for p in resolution.reconciliations]
             decisions += [asdict(d) for d in resolution.decisions]
         log.info(
             "ingestion.resolve supersedes=%d contradicts=%d",
@@ -271,6 +281,7 @@ def build_ingestion_graph(runtime: Runtime):
             "candidates": merged,
             "supersessions": supersessions,
             "contradictions": contradictions,
+            "reconciliations": reconciliations,
             "decisions": decisions,
         }
 
@@ -455,6 +466,22 @@ def build_ingestion_graph(runtime: Runtime):
                         actor=actor,
                         rule=conflict.rule if conflict else None,
                     )
+
+        # After every claim is written, because a reconciliation points one claim
+        # at another and the target has to exist for the pointer to mean
+        # anything.
+        for reconciled, into in state.get("reconciliations", []):
+            decided = decisions_by_object.get(reconciled)
+            runtime.store.set_reconciled_into(
+                owner_id,
+                reconciled,
+                into,
+                actor=actor,
+                reason=(
+                    decided.reason if decided else f"settled by {into}"
+                ),
+                rule=RULE_SUPERSESSION_SETTLES_CONFLICT,
+            )
 
         log.info("ingestion.write nodes=%d skipped=%d", len(written), skipped)
         return {
@@ -691,6 +718,7 @@ def run_ingestion(
         merged_entities=final.get("merged_entities", []),
         supersessions=[tuple(p) for p in final.get("supersessions", [])],
         contradictions=[tuple(p) for p in final.get("contradictions", [])],
+        reconciliations=[tuple(p) for p in final.get("reconciliations", [])],
         errors=final.get("errors", []),
         written=final.get("written", []),
     )

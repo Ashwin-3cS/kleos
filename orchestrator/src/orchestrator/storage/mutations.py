@@ -96,6 +96,11 @@ RULE_DUPLICATE_ID = "duplicate_id"
 RULE_AGENT_DELEGATE_SUPERSEDES = "agent_delegate_supersedes"
 RULE_OWNER_EXPLICIT = "owner_explicit"
 RULE_ENTITY_MERGE = "entity_merge"
+#: A later decision on the same subject superseded one side of a standing
+#: disagreement, which settles it. The rule that finally writes
+#: `reconciled_into`, declared in the schema since the beginning and never set by
+#: anything until now.
+RULE_SUPERSESSION_SETTLES_CONFLICT = "supersession_settles_conflict"
 
 RULES = frozenset(
     {
@@ -107,6 +112,7 @@ RULES = frozenset(
         RULE_AGENT_DELEGATE_SUPERSEDES,
         RULE_OWNER_EXPLICIT,
         RULE_ENTITY_MERGE,
+        RULE_SUPERSESSION_SETTLES_CONFLICT,
     }
 )
 

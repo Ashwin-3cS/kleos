@@ -503,6 +503,16 @@ Three questions were open once the scaffold existed. They are now settled:
   linked, rather than being overwritten; unresolved conflicts are linked via
   `contradicts`, and `reconciled_into` points at the claim that eventually
   resolves them.
+
+  That last one is written now, which it was not for a long time: it was
+  declared in both schemas, read by `why_did_this_shift`, and produced by
+  nothing -- so `ShiftHistory.reconciliations` was populated-but-always-empty and
+  "what settled this disagreement" had no answer the record could give. A later
+  decision that supersedes one side of a standing `CONTRADICTS` pair now settles
+  both sides into itself, conservatively: only conflicts touching the claim
+  actually superseded, never every conflict about the subject. An unresolved
+  disagreement with nothing newer stays open, which is the common case and part
+  of the record rather than a defect in it.
 - **Commitment** -- an optional *facet* on `Claim`, present when the claim
   asserts that someone owes something: `owed_by_entity_id`,
   `owed_to_entity_id` (optional -- plenty of commitments are to oneself),
