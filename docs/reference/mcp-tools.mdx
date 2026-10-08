@@ -65,13 +65,52 @@ nothing — so "keep my work" cannot look like it succeeded when nothing is wire
 </Accordion>
 </AccordionGroup>
 
+## Writing
+
+<AccordionGroup>
+<Accordion title="record_decision(grant_token, statement, reason, session_id=None, memory_kind='episodic', sensitive=False)">
+Records a decision the agent has just made, and why.
+
+`statement` is the decision as a durable assertion — "Lantern uses Neo4j", not
+"I think we should probably use Neo4j". **`reason` is required**: the next
+agent's briefing is built out of it, and a stored decision with no stated basis
+tells that agent nothing it can act on.
+
+Three things the agent **cannot** choose, and they are what make the write safe:
+
+| | |
+| --- | --- |
+| **Whether it may write** | Needs `may_write` in the grant. Deny-by-default, so every grant issued before that field existed is read-only. The refusal names the reason. |
+| **What source it writes as** | Always `agent`. `Scope.write_sources` is a separate set from `Scope.sources` so an agent permitted to *read* the person's typed notes cannot write a claim that claims to be one. |
+| **Its own precedence** | Taken from the grant. Without `may_supersede_owner` the claim is `reference` and **contradicts** the owner's conflicting decision rather than replacing it — both sides kept. With it, the agent is a `delegate` and may supersede. Nothing in the statement can change this; it is stamped at the one point input becomes a candidate. |
+
+`memory_kind` is `episodic`, `procedural` or `tacit`. A tacit claim is an
+inference *about* the person rather than something they said, so labelling one
+raises its sensitivity — on the stored object as well as at the gate.
+
+The declaration is taken as given rather than rediscovered by extraction: an
+agent calling this has already said the sentence is a decision, and asking an
+extractor to notice would make the one path with an explicit declaration the
+least reliable in the service. Everything else — subjects, citations,
+resolution, the write — is the ordinary ingestion path.
+
+<Warning>
+`sensitive=True` is **refused**. Sealing a body needs an owner session and an
+agent holds a grant, so there is no path by which it can be sealed today. Refused
+up front rather than skipped inside the graph, where it would read as a partial
+success.
+</Warning>
+</Accordion>
+</AccordionGroup>
+
 ## What deliberately does not exist
 
 | Absent tool | Why |
 | --- | --- |
 | a neighbourhood tool | It is a visualization payload. An adjacency list answers no question an agent has, and exposing one hands agents a cheap structure-enumeration primitive — seed, walk, re-seed — for no gain in answer quality. |
 | a read-log tool | An agent that could read the log would see which objects *other* agents were shown, which is a disclosure channel around the permission check rather than a record of it. It needs an owner session. |
-| a write tool | Not yet. A write-capable grant and `record_decision` are designed and in progress. |
+| a mutation-log tool | Sharper version of the same: read wholesale it would tell one agent what every other agent has been writing. A briefing surfaces mutations only for objects the asking agent was just permitted to see. |
+| a second write tool | One write, so the gate, the precedence class and the `agent` source are enforced in one place. A test asserts no other tool looks like a write path. |
 
 <Note>
 A test asserts the exact tool set **and** that these names stay absent. An

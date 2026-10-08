@@ -26,10 +26,14 @@ EXPECTED = {
     "open_session",
     "append_context",
     "close_session",
+    "record_decision",
 }
 
 #: Names that must never appear. Each is a decision with its reason recorded in
 #: `mcp_server`'s module docstring or the root README.
+#: The one write, so the absence of the others stays deliberate.
+WRITES = {"record_decision"}
+
 FORBIDDEN = {
     "memory_neighbourhood",  # a cheap seed-walk-reseed structure enumerator
     "neighbourhood",
@@ -69,3 +73,17 @@ def test_every_tool_documents_itself() -> None:
     it, so an undocumented tool is one that gets called wrongly."""
     for tool in asyncio.run(mcp_server.mcp.list_tools()):
         assert tool.description and len(tool.description) > 40, tool.name
+
+
+def test_only_one_tool_writes() -> None:
+    """A second write tool is a decision, not an implementation detail: the write
+    gate, the precedence class and the `agent` source are all enforced in one
+    place, and a tool that wrote by another route would bypass all three."""
+    writes = _tool_names() & WRITES
+    assert writes == WRITES
+    suspicious = {
+        n for n in _tool_names() - WRITES if any(
+            v in n for v in ("write", "store", "remember", "upsert", "delete", "ingest")
+        )
+    }
+    assert not suspicious, f"these look like write paths: {suspicious}"

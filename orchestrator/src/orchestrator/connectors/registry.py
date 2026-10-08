@@ -113,6 +113,7 @@ def register(spec: ConnectorSpec) -> ConnectorSpec:
 
 
 def _register_builtins() -> None:
+    from .agent import SPEC as AGENT_SPEC
     from .chatgpt import SPEC as CHATGPT_SPEC
     from .direct import SPECS as DIRECT_SPECS
     from .github import SPEC as GITHUB_SPEC
@@ -120,7 +121,15 @@ def _register_builtins() -> None:
     from .mock import SPEC as MOCK_SPEC
     from .web import SPEC as WEB_SPEC
 
-    for spec in (MOCK_SPEC, GOOGLE_SPEC, GITHUB_SPEC, CHATGPT_SPEC, WEB_SPEC, *DIRECT_SPECS):
+    for spec in (
+        MOCK_SPEC,
+        GOOGLE_SPEC,
+        GITHUB_SPEC,
+        CHATGPT_SPEC,
+        WEB_SPEC,
+        AGENT_SPEC,
+        *DIRECT_SPECS,
+    ):
         REGISTRY.register(spec)
 
 

@@ -12,16 +12,19 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Annotated, Any, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..enums import ClaimStatus
+from ..enums import Authority, ClaimStatus, EntityKind, Sensitivity
+from ..extraction.ids import stable_id
+from ..permissions import ObjectAcl
 from ..resolution.entities import Canonicaliser
 from ..resolution.resolver import Decision, Resolver
-from ..schema import Candidate, RawRecord
+from ..schema import Candidate, Citation, Claim, Provenance, RawRecord
 from ..storage.content import text_for_index
 from ..storage.mutations import (
     KIND_CREATE,
@@ -62,6 +65,13 @@ class IngestionState(TypedDict, total=False):
     decisions: Annotated[list[dict], _extend]
     #: Who caused this run. Absent means the owner's own pipeline.
     actor: dict
+    #: The precedence class every object extracted in this run carries. Absent
+    #: means the owner's own sources, which leave `Provenance.authority` unset so
+    #: the resolver's fallback keeps working on them.
+    authority: str
+    #: ``{record external_id: statement}``. A claim the *caller* asserts rather
+    #: than one extraction found. See `_declared_claim`.
+    declared: dict[str, str]
     supersessions: list[list[str]]
     contradictions: list[list[str]]
     errors: Annotated[list[str], _extend]
@@ -96,6 +106,12 @@ class IngestionResult:
     supersessions: list[tuple[str, str]] = field(default_factory=list)
     contradictions: list[tuple[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    #: Ids of everything this run actually wrote, in write order. The counts
+    #: above are its length by label; this is here because a caller that has to
+    #: do something to what landed -- label it, link it -- needs the ids and not
+    #: the totals, and recomputing them from the candidate set would reintroduce
+    #: exactly the considered-versus-written gap the counts exist to close.
+    written: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -152,10 +168,27 @@ def build_ingestion_graph(runtime: Runtime):
 
     def extract(state: IngestionState) -> dict:
         owner_id = state["owner_id"]
+        actor = _actor_of(state)
+        authority = state.get("authority")
         candidates = []
         for raw in state.get("records", []):
             record = RawRecord.model_validate(raw)
             candidate = runtime.extractor.extract(owner_id, record)
+            # **The one point where input becomes a candidate**, which is where
+            # authority and the actor are stamped and the only place they may be.
+            #
+            # Never read from the extractor. An extractor is a prompt plus a
+            # model for the agent source, and a claim that could nominate its own
+            # precedence class could nominate `delegate` and overwrite the
+            # person's own decision. Same rule ADR 0014 applies to a fetched
+            # page's source and sensitivity: forced here, not trusted from there.
+            declared = (state.get("declared") or {}).get(record.external_id)
+            if declared:
+                candidate.claims.append(
+                    _declared_claim(owner_id, record, candidate, declared)
+                )
+            if authority is not None:
+                _stamp(candidate, authority=authority, actor=actor)
             candidates.append(candidate.model_dump(mode="json"))
         log.info("ingestion.extract candidates=%d", len(candidates))
         return {"candidates": candidates}
@@ -313,13 +346,7 @@ def build_ingestion_graph(runtime: Runtime):
         refs_by_external_id, blob_errors = _persist_sealed(runtime, owner_id, sealed)
         errors += blob_errors
 
-        # Who this run is attributable to. `Actor.pipeline()` names no device,
-        # because there is no device: a connector pulling a mailbox is the
-        # owner's own machinery, and a fabricated device id would be
-        # indistinguishable from an authenticated one in every row storing it.
-        actor = (
-            Actor(**state["actor"]) if state.get("actor") else Actor.pipeline()
-        )
+        actor = _actor_of(state)
         decisions_by_object = {
             d["object_id"]: Decision(**d) for d in state.get("decisions", [])
         }
@@ -504,6 +531,94 @@ def _persist_sealed(
     return out, []
 
 
+def _declared_claim(
+    owner_id: str, record: RawRecord, candidate: Candidate, statement: str
+) -> Claim:
+    """A claim the caller asserted, rather than one extraction discovered.
+
+    **Why this exists.** An agent calling `record_decision` has already said, in
+    so many words, that this sentence is a decision. Asking an extractor to
+    re-discover that is not more rigorous, it is less: the rule-based extractor
+    matches a fixture grammar and finds nothing in "project Lantern will use
+    Neo4j", so in mock mode the decision would be stored as an event with no
+    claim -- a write that reports success and remembers nothing a query can
+    answer with. Relying on a model to notice would make the one path with an
+    explicit declaration the least reliable one in the service.
+
+    So the statement is taken as given, and everything else is not: the subjects
+    come from the entities extraction actually found, the citation is the event
+    extraction actually built, and resolution, canonicalisation, sealing and the
+    write are the same path every other claim takes -- which is what keeps a
+    declared claim resolvable against the person's own decisions.
+
+    The id is content-addressed the same way an extracted claim's is, so the
+    same declaration twice is the same claim.
+    """
+    event_id = candidate.events[0].id if candidate.events else record.external_id
+    subject_ids = [
+        e.id
+        for e in candidate.entities
+        if e.kind in (EntityKind.PROJECT, EntityKind.ARTIFACT, EntityKind.TOPIC)
+    ] or [e.id for e in candidate.entities]
+    citations = [
+        Citation(event_id=e.id, source=e.source, quote=None) for e in candidate.events
+    ]
+    return Claim(
+        id=stable_id("clm", owner_id, event_id, statement),
+        owner_id=owner_id,
+        statement=statement,
+        subject_entity_ids=subject_ids,
+        status=ClaimStatus.ACTIVE,
+        supersedes=[],
+        contradicts=[],
+        reconciled_into=None,
+        asserted_at_ms=record.occurred_at_ms,
+        provenance=Provenance(
+            citations=citations,
+            derived_by="declared",
+            confidence=1.0,
+            created_at_ms=int(time.time() * 1000),
+        ),
+        acl=ObjectAcl(
+            owner_id=owner_id,
+            sources=[record.connector],
+            sensitivity=(
+                Sensitivity.CONFIDENTIAL if record.sensitive else Sensitivity.PERSONAL
+            ),
+            entity_kinds=sorted({e.kind for e in candidate.entities}, key=lambda k: k.value)
+            or [EntityKind.TOPIC],
+            occurred_at_ms=record.occurred_at_ms,
+        ),
+    )
+
+
+def _actor_of(state: IngestionState) -> Actor:
+    """Who this run is attributable to.
+
+    `Actor.pipeline()` names no device, because there is no device: a connector
+    pulling a mailbox is the owner's own machinery, and a fabricated device id
+    would be indistinguishable from an authenticated one in every row that
+    stores it.
+    """
+    raw = state.get("actor")
+    return Actor(**raw) if raw else Actor.pipeline()
+
+
+def _stamp(candidate: Candidate, *, authority: str, actor: Actor) -> None:
+    """Writes the precedence class and the actor onto everything extracted.
+
+    Onto every object rather than onto claims alone: an entity or an event an
+    agent produced is also not the person's own account, and the resolver reads
+    authority off whatever it is comparing.
+    """
+    stamped = Authority(authority)
+    for node in (*candidate.entities, *candidate.events, *candidate.claims):
+        node.provenance.authority = stamped
+        node.provenance.actor_agent_id = actor.agent_id
+        node.provenance.actor_device_id = actor.device_id
+        node.provenance.actor_session_id = actor.session_id
+
+
 def _upsert(runtime: Runtime, node) -> bool:
     """Embeds from plaintext, then seals, then writes.
 
@@ -525,6 +640,9 @@ def run_ingestion(
     session_token: str | None = None,
     thread_id: str | None = None,
     records: list[RawRecord] | None = None,
+    actor: Actor | None = None,
+    authority: Authority | None = None,
+    declared: dict[str, str] | None = None,
 ) -> IngestionResult:
     """Runs the ingestion graph.
 
@@ -533,6 +651,14 @@ def run_ingestion(
     the write -- is identical, which is the point. A thing the person said is a
     record like any other once it exists, and giving it its own graph would mean
     two paths that have to be kept resolving the same way.
+
+    ``actor`` and ``authority`` are the agent path. Both are supplied by the
+    caller that holds the *grant* -- never by the extractor, and never derived
+    from the record -- because authority decides whether a claim may overwrite
+    the person's own decision. Left unset, the run is the owner's own pipeline:
+    every object's `Provenance.authority` stays `None`, which is what keeps the
+    resolver's source-based fallback working for material stored before any of
+    this existed.
     """
     graph = build_ingestion_graph(runtime)
     config = {"configurable": {"thread_id": thread_id or f"ingest:{owner_id}:{source}"}}
@@ -543,6 +669,9 @@ def run_ingestion(
             "since_ms": since_ms,
             "session_tokens": {"session_token": session_token} if session_token else {},
             "records": [r.model_dump(mode="json") for r in records] if records else [],
+            **({"actor": asdict(actor)} if actor else {}),
+            **({"authority": authority.value} if authority else {}),
+            **({"declared": declared} if declared else {}),
         },
         config=config,
     )
@@ -563,4 +692,5 @@ def run_ingestion(
         supersessions=[tuple(p) for p in final.get("supersessions", [])],
         contradictions=[tuple(p) for p in final.get("contradictions", [])],
         errors=final.get("errors", []),
+        written=final.get("written", []),
     )
