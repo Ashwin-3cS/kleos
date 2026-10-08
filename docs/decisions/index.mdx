@@ -1,0 +1,57 @@
+---
+title: "Architecture decisions"
+description: "One decision per file, immutable once accepted. A reversal gets its own record rather than an edit."
+---
+
+Until these existed, this repository's reasoning lived in two READMEs and in
+commit messages. That worked while there was one author and one running
+argument, and it is why the READMEs are unusually long: every decision had to be
+re-justified in prose next to the thing it governed.
+
+<Note>
+**An accepted record is immutable.** A decision that is reversed gets a new
+record that supersedes it, rather than an edit — which is the same shape as the
+memory layer's own `supersedes`, and for the same reason: the earlier reasoning
+is part of the history, and overwriting it loses why anyone thought otherwise.
+</Note>
+
+## The records
+
+| | Decision |
+| --- | --- |
+| [0001](/adr/0001-record-architecture-decisions) | Record architecture decisions |
+| [0002](/adr/0002-persist-sealed-ciphertext-in-a-blob-store) | Persist sealed ciphertext in a blob store |
+| [0003](/adr/0003-recency-is-a-real-half-life-and-ranking-is-configurable) | Recency is a real half-life, and ranking is configurable |
+| [0004](/adr/0004-derive-per-purpose-signing-keys-from-one-root) | Derive per-purpose signing keys from one root |
+| [0005](/adr/0005-log-what-each-grant-disclosed) | Log what each grant disclosed |
+| [0006](/adr/0006-measure-the-central-bet-before-building-on-it) | Measure the central bet before building on it |
+| [0007](/adr/0007-measure-disclosure-not-only-recall) | Measure disclosure, not only recall |
+| [0008](/adr/0008-store-sealed-bodies-as-quilt-patches) | Store sealed bodies as Quilt patches |
+| [0009](/adr/0009-affect-as-a-closed-vocabulary-that-raises-the-floor) | Affect as a closed vocabulary that raises the floor |
+| [0010](/adr/0010-encrypt-the-resolved-record-at-rest) | Encrypt the resolved record at rest |
+| [0011](/adr/0011-the-owner-signs-grants-not-the-gateway) | The owner signs grants, not the gateway |
+| [0012](/adr/0012-embed-locally-with-a-real-model) | Embed locally with a real model |
+| [0013](/adr/0013-a-push-path-for-what-the-person-says) | A push path for what the person says |
+| [0014](/adr/0014-following-what-the-person-referred-to) | Following what the person referred to |
+| [0015](/adr/0015-two-names-for-one-thing) | Two names for one thing |
+
+## Open decisions
+
+Four are deliberately open, and each gets a record when it is made:
+
+<CardGroup cols={2}>
+<Card title="Where extraction runs" icon="microchip">
+Step 4. The tension is in [the confidentiality model](/concepts/confidentiality):
+derived memory is readable by the operator, and closing that needs client-side
+extraction or an attested model endpoint.
+</Card>
+<Card title="Whether assemble synthesises or formats" icon="pen">
+Step 2.
+</Card>
+<Card title="Retention for transcripts and derived memory" icon="clock">
+Step 3.
+</Card>
+<Card title="Whether to adopt on-chain components at all" icon="link">
+Step 7, and only if beta users demonstrably need them.
+</Card>
+</CardGroup>

@@ -1,0 +1,123 @@
+---
+title: "Quickstart"
+description: "The whole stack running locally in mock mode: no API keys, no cloud services, no EC2."
+---
+
+Nitro Enclaves only run on EC2. Locally, the `enclave` crate builds with its
+default `mock` feature: it binds `127.0.0.1:4000` directly — no socat, no VSOCK —
+and its OAuth providers short-circuit token verification instead of dialing a
+tunnel that does not exist.
+
+The orchestrator has the same discipline. `ORCHESTRATOR_MODE=mock` (the default)
+needs no API keys: fixture connector, rule-based extractor, local embeddings.
+
+<Warning>
+Neo4j and Redis are **real services even in mock mode**. The test suite *skips*
+rather than fails when Neo4j is unreachable, so starting pytest too early looks
+exactly like everything passing.
+</Warning>
+
+## 1. Start the local services
+
+<CodeGroup>
+```bash Script
+./scripts/services.sh up      # neo4j :7688, redis :6380, postgres :5435
+```
+
+```bash Compose
+cd orchestrator && docker compose up -d
+```
+</CodeGroup>
+
+`scripts/services.sh` exists because `docker compose` is a CLI plugin that is
+not always installed where `docker` is — without it, `docker compose up -d`
+fails with `unknown shorthand flag: 'd'`, which reads like a typo rather than a
+missing component. It runs the same three containers on the same ports with
+plain `docker run`, takes `CONTAINER_CLI=podman`, and **waits for each port
+before returning**.
+
+<Note>
+Upgrading a checkout from before the Kleos rename? `services.sh` detects
+pre-rename containers and prints an in-place migration that loses no data. See
+[Local development](/guides/local-development#upgrading-a-pre-rename-checkout).
+</Note>
+
+## 2. Install the orchestrator
+
+```bash
+cd orchestrator
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+cp .env.example .env
+```
+
+## 3. Run the tests and the eval
+
+```bash
+.venv/bin/pytest                        # the suite; prints its own count
+.venv/bin/python -m orchestrator.eval   # the step 0 exit test
+.venv/bin/ruff check .
+```
+
+## 4. Bring up the Rust stack
+
+```bash
+cd ..
+cargo build                                  # workspace, mock feature
+./scripts/run_local.sh --with-orchestrator   # enclave + gateway + services
+./scripts/smoke_test.sh                      # mock tokens, mock consent flow
+```
+
+## 5. Walk the whole path
+
+```bash
+./scripts/orchestrator_smoke.sh
+```
+
+This is the thing to run to see the memory layer work against the real Rust
+stack. It walks:
+
+<Steps>
+<Step title="Identity">
+`POST /auth/session` with `mock_google_alice` — the enclave verifies the
+identity and attests it; the gateway issues an owner session JWT.
+</Step>
+<Step title="Ingestion">
+`POST /ingest` enqueues an RQ job. The worker runs the ingestion graph: the mock
+connector yields fixture records, the extractor produces entities, events and
+claims, the resolver links superseding decisions and a reassigned commitment,
+and the one sensitive record's body is sealed **inside the enclave** before its
+ciphertext is written. The reported counts are what landed, not what was
+considered.
+</Step>
+<Step title="A grant, signed by the owner's device">
+`kleos-device sign` signs a scoped grant. The gateway verifies it and cannot
+have produced it.
+</Step>
+<Step title="A query, and a decline">
+`POST /query` retrieves, permission-checks each candidate, and answers with
+citations — marking superseded claims as superseded. The same question under a
+scope covering only GitHub declines **explicitly**, naming the reason.
+</Step>
+<Step title="History and structure">
+`POST /memory/shift` walks the claim back through its supersessions and prints,
+for each step, how long the decision stood and which citations are new.
+`POST /memory/neighbourhood` returns nodes and typed edges; `GET /explorer`
+draws them.
+</Step>
+<Step title="The read log">
+`POST /memory/reads` under the **owner session** — not a grant — shows what each
+grant was actually shown, grouped by grant and by signing device.
+</Step>
+</Steps>
+
+## What to read next
+
+<CardGroup cols={2}>
+<Card title="Connect an agent" icon="plug" href="/guides/connect-an-agent">
+The MCP surface, and what a plugged-in agent can and cannot do.
+</Card>
+<Card title="Grants and devices" icon="key" href="/guides/grants-and-devices">
+Registering a device key and signing a scope the gateway cannot mint.
+</Card>
+</CardGroup>

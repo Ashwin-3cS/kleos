@@ -1,4 +1,7 @@
-# ADR 0011: The owner signs grants, not the gateway
+---
+title: "ADR 0011: The owner signs grants, not the gateway"
+description: "The threat model was inconsistent, and ADR 0004 narrowed the inconsistency without removing it."
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

@@ -1,0 +1,79 @@
+---
+title: "MCP tools"
+description: "The six tools an agent can call, and the ones that deliberately do not exist."
+---
+
+Served over stdio by `python -m orchestrator.mcp_server`.
+
+<Warning>
+Every tool takes a `grant_token`, and it is required on every one. MCP carries
+no credential channel, so a `session_id` alone never authorises anything.
+</Warning>
+
+## Reads
+
+<AccordionGroup>
+<Accordion title="query_memory(question, grant_token, top_k=8)">
+Query the owner's memory within the scope of a grant. Returns an answer with
+citations, or an explicit refusal listing why each candidate was out of scope.
+
+A refusal **is a real answer**: the tool never guesses at what it was not
+allowed to read.
+</Accordion>
+<Accordion title="why_this_shifted(claim_id, grant_token)">
+The ordered supersession chain for one claim, and at each step the citations that
+appear in the superseding claim and not in the one it replaced — the evidence
+that moved the decision.
+
+Accepts the current claim, the original, or anything in between. Links the grant
+does not cover come back **withheld**, with a reason and no content, rather than
+being silently dropped from the chain.
+</Accordion>
+<Accordion title="memory_context_chain(object_id, grant_token, hops=3)">
+What an object was derived from and what was derived from it, walked over
+citation edges. Chains cross sources wherever the material does.
+</Accordion>
+</AccordionGroup>
+
+## Session state
+
+<AccordionGroup>
+<Accordion title="open_session(grant_token)">
+Returns `session_id`, `agent_id`, `device_id`, `identity_basis`,
+`expires_at_ms`, `max_blocks`, `max_bytes`.
+
+The session id is minted, never accepted from the caller. `identity_basis` is
+`device_key` when the gateway verified a signature against a registered key —
+rely on it — or `label` when all that is known is the unauthenticated `agent_id`.
+</Accordion>
+<Accordion title="append_context(session_id, grant_token, block)">
+Appends one block of working context: the turn just taken, what a tool returned,
+a scratchpad, the contents of a file.
+
+Stored sealed, and **not searchable** — the response says so explicitly. A block
+over the byte cap is refused rather than truncated.
+
+Deliberately not gated on a write-capable grant: appending to your own
+scratchpad produces nothing searchable, nothing carrying an ACL and nothing the
+resolver sees.
+</Accordion>
+<Accordion title="close_session(session_id, grant_token, consolidate=False)">
+Closes the session. Its blocks stay stored and stay unsearchable.
+
+`consolidate=True` currently **raises**, rather than closing and keeping
+nothing — so "keep my work" cannot look like it succeeded when nothing is wired.
+</Accordion>
+</AccordionGroup>
+
+## What deliberately does not exist
+
+| Absent tool | Why |
+| --- | --- |
+| a neighbourhood tool | It is a visualization payload. An adjacency list answers no question an agent has, and exposing one hands agents a cheap structure-enumeration primitive — seed, walk, re-seed — for no gain in answer quality. |
+| a read-log tool | An agent that could read the log would see which objects *other* agents were shown, which is a disclosure channel around the permission check rather than a record of it. It needs an owner session. |
+| a write tool | Not yet. A write-capable grant and `record_decision` are designed and in progress. |
+
+<Note>
+A test asserts the exact tool set **and** that these names stay absent. An
+absence recorded only in a docstring is one the next person removes by accident.
+</Note>

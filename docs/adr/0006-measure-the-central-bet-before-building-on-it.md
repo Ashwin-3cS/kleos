@@ -1,4 +1,7 @@
-# ADR 0006: Measure the central bet before building on it
+---
+title: "ADR 0006: Measure the central bet before building on it"
+description: "The whole project rests on one claim: that a **resolved, timestamped record** (who said what, when it changed, why, what it links to) is worth more than a pile of retrievable docum"
+---
 
 **Status:** accepted
 **Date:** 2026-10-01

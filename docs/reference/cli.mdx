@@ -1,0 +1,53 @@
+---
+title: "Scripts and CLI"
+description: "kleos-device, and every script in the repository."
+---
+
+## kleos-device
+
+The owner's side of grant signing. A device holds the private key; the gateway
+only ever sees the public half.
+
+| Command | Purpose |
+| --- | --- |
+| `keygen --out <path>` | generate an Ed25519 keypair. Refuses to overwrite, writes `0600` |
+| `pubkey --key <path>` | the base64 public key, for registration |
+| `key-id --key <path>` | the derived key id, which is what the gateway reports |
+| `sign --key <path> --scope <file> --ttl-secs 3600` | sign a scope into a grant token |
+
+`sign` reads a `Scope` as JSON from a file or stdin and generates a fresh nonce
+per grant, so two grants over an identical scope stay distinguishable in the read
+log.
+
+## Scripts
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/services.sh {up,down,reset,status}` | Neo4j, Redis and Postgres without the compose plugin. Waits for every port. Detects a pre-rename container set |
+| `scripts/run_local.sh [--with-orchestrator]` | enclave + gateway in mock mode; optionally the services too |
+| `scripts/smoke_test.sh` | mock tokens and the mock OAuth connect flow |
+| `scripts/orchestrator_smoke.sh` | identity → ingest → grant → query → decline → shift → neighbourhood → read log |
+| `scripts/build_enclave.sh` | stagex/docker build producing a reproducible `.eif` |
+| `scripts/deploy.sh` | ship the `.eif` and gateway binary to `DEPLOY_HOST` |
+| `scripts/parent_forwarder.sh` | host-side VSOCK↔TCP bridging, both directions |
+| `scripts/view_logs.sh` | enclave log forwarding |
+
+<Note>
+`run_local.sh` writes pid files under `.local/`, so stopping is
+`kill $(cat .local/enclave.pid) $(cat .local/gateway.pid)`.
+</Note>
+
+## Repository layout
+
+```
+enclave/      Axum server inside the Nitro Enclave (or locally in mock mode)
+gateway/      Axum server on the host, proxies to the enclave
+shared/       Types shared by both: identity, memory schema, permissions, VSOCK envelopes
+orchestrator/ Python orchestration service; not in the cargo workspace
+              graphs/     ingestion, query, history, neighbourhood
+              storage/    Neo4j, the sealed-blob store, the read log, agent sessions
+              eval/       the labelled corpus and the RAG comparison
+              static/     the graph explorer, one file, no build step
+docs/         this documentation, and one architecture decision per file in adr/
+scripts/      build/run/deploy/smoke-test plumbing
+```

@@ -1,4 +1,7 @@
-# ADR 0008: Store sealed bodies as Quilt patches, and write no tags
+---
+title: "ADR 0008: Store sealed bodies as Quilt patches, and write no tags"
+description: "ADR 0002 gave sealed bodies a content-addressed blob store with 'the shape Walrus has', so that Walrus would be a second implementation rather than a migration."
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

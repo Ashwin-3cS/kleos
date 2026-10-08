@@ -1,4 +1,7 @@
-# ADR 0015: Two names for one thing
+---
+title: "ADR 0015: Two names for one thing"
+description: "An entity id is `stable_id('ent', owner_id, kind, name.lower())`."
+---
 
 **Status:** accepted
 **Date:** 2026-10-03

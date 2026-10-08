@@ -1,0 +1,94 @@
+---
+title: "The resolved record"
+description: "Why Kleos stores who decided what and when it changed, rather than documents to retrieve."
+---
+
+A pile of retrievable documents can answer "what did we say about the database".
+It cannot answer "which decision holds", because **nothing in the text of a
+superseded decision says it was superseded**. That is structural; no embedder
+fixes it.
+
+So Kleos resolves. An ingested fact becomes an `Event`. A durable assertion
+becomes a `Claim`. When a later claim supersedes an earlier one, the earlier one
+**stays stored** with status `superseded`, linked — never overwritten. An
+unresolved conflict is linked as `contradicts`. The claim that eventually
+settles a conflict is pointed at by `reconciled_into`.
+
+## Corrections arrive as new events
+
+`SourceRef` keeps `occurred_at_ms` and `ingested_at_ms` separate, which is what
+lets the record answer *what did I know, and when did I know it*. Events are
+never rewritten.
+
+## Provenance is a chain, not a float
+
+`Provenance` carries citations back to originating source events, not just a
+confidence number. Confidence is carried, but it is advisory.
+
+<Note>
+Building the evaluation harness found a defect in exactly this. The repository
+promised that "why did this shift" returns the citations present in the
+superseder and absent from the claim it replaced — but cross-source references
+were attached to the *event* and not the claim, so the read reached one hop
+short of evidence that was in the database all along. The question scored 60%;
+with references propagated onto the claim, 100%. No test caught it because every
+test asserted the mechanism rather than the outcome. See
+[ADR 0006](/adr/0006-measure-the-central-bet-before-building-on-it).
+</Note>
+
+## Reading why a decision shifted
+
+Two reads make the record legible, and they add **no node type** — everything
+they need is traversal over edges ingestion already writes.
+
+<AccordionGroup>
+<Accordion title="why_did_this_shift(claim_id) — the supersession chain">
+The ordered supersession run containing that claim, and for each link: the
+superseding claim, the superseded one, the interval between them, and **the
+citations present in the superseder that were absent from the claim it
+replaced**.
+
+That last set is the point. "B replaced A" is already visible in the graph; what
+is worth reading is the evidence that appeared and moved the decision.
+
+The walk is undirected, so handing it the current claim, the original, or
+something mid-chain all answer the same question.
+</Accordion>
+<Accordion title="context_chain(object_id, hops) — the citation neighbourhood">
+What an object was derived from and what was derived from it, walked over
+`CITES`. Citations are keyed by **event id rather than by source**, so the chain
+crosses connectors wherever the underlying material does.
+
+This is why there is deliberately no `Thread` node type: a speculative node type
+would be a second thing to keep correct.
+</Accordion>
+</AccordionGroup>
+
+## Facets rather than node types
+
+A commitment — "Alice will ship the migration by Friday" — is a claim in every
+respect that matters: it can be superseded ("actually Bob will"), contradicted,
+and reconciled. The resolver already implements exactly that machinery, so a
+parallel `Commitment` node type would need all of it duplicated.
+
+What a commitment *does* need is a **second status axis**, because conflating
+the two is how the concept rots:
+
+| Axis | Question | Values |
+| --- | --- | --- |
+| `ClaimStatus` | Is this still our best understanding? | active / superseded / contradicted / reconciled |
+| `FulfillmentStatus` | Did the thing actually happen? | open / fulfilled / dropped |
+
+They move independently. A commitment can be `active` and `fulfilled` (the
+promise was kept and we still believe it), or `superseded` and `open`
+(reassigned to someone else, still outstanding).
+
+<Tip>
+"Past due" is deliberately **not** a third value. It is `open` plus a
+`due_at_ms` in the past, so no writer has to keep it true.
+</Tip>
+
+The same reasoning governs `Affect` on an `Event` — a closed vocabulary of
+registers, with a sensitivity floor, so labelling content can only ever *narrow*
+who may read it. See
+[ADR 0009](/adr/0009-affect-as-a-closed-vocabulary-that-raises-the-floor).
