@@ -65,6 +65,55 @@ nothing — so "keep my work" cannot look like it succeeded when nothing is wire
 </Accordion>
 </AccordionGroup>
 
+## Before acting
+
+<AccordionGroup>
+<Accordion title="brief_before_acting(intent, grant_token, session_id=None, top_k=8, include_body=False)">
+**The point of the harness.** Called *before* acting, with an intent rather than
+a question — "I am about to pick a database for Lantern" — because the thing an
+agent most needs to know is the thing it does not know to ask about.
+
+Returns what is relevant with citations, the supersession chains those claims sit
+in, who changed each one and on what basis, and `advisories`: one rendered line
+each, ready to put into a context window without parsing anything.
+
+```
+device 3f9adead1c (labelled 'claude-code', device-authenticated) recorded
+"project Lantern will use Neo4j." because "graph proximity is a hard
+requirement and Postgres cannot do it" [rule: agent_delegate_supersedes].
+Be aware of this before acting.
+```
+
+Every advisory names the **device** and says whether that identity is
+authenticated — `device-authenticated` means a signature was verified against a
+key the owner registered; "label only" means all that is known is a string the
+owner typed.
+
+Composed from `run_query` and `why_did_this_shift` rather than retrieving for
+itself, so each keeps its own permission check and its own log entry. One extra
+entry records the composite, which is what lets an owner see what the agent was
+*about to do*.
+
+<Note>
+A conflicting decision outside the grant comes back **withheld**, not omitted:
+the agent is told it exists and that it may not read it. An agent told "no
+conflicts" acts; an agent told "a conflict you cannot see" asks.
+
+There is deliberately **no structure** in the result — no adjacency, no node
+lists. An agent that could walk the graph could map a memory it cannot read.
+</Note>
+
+<Warning>
+A briefing is only as selective as the ranking underneath it. Retrieval returns
+its best `top_k` rather than gating on relevance, so an agent briefing on an
+unrelated intent is still told about the decisions that exist. That is the right
+failure direction — too much context rather than a missed conflict — but it is a
+property of the ranking, and in mock mode the embeddings are hashed tokens and
+barely selective at all.
+</Warning>
+</Accordion>
+</AccordionGroup>
+
 ## Writing
 
 <AccordionGroup>
