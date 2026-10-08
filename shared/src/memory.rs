@@ -85,6 +85,36 @@ pub struct Citation {
 /// Why an object is believed, expressed as a chain back to source events
 /// rather than an opaque score. `confidence` is advisory only; an object
 /// with no citations is not storable.
+/// How much weight what asserted this carries against the person's own account.
+///
+/// A **closed** vocabulary, for the reason [`AffectTone`] is one: this decides
+/// whether a stored claim may overwrite the person's own decision, and a
+/// free-text provenance field built for a precedence rule is where something
+/// eventually writes a sentence.
+///
+/// The distinction it draws is the one ADR 0014 left implicit. A fetched page is
+/// a **stranger**: it may never supersede the person, because timestamps are the
+/// right tie-break between two things the person said and exactly the wrong one
+/// between something they said and something a stranger wrote. An agent the
+/// owner explicitly granted `may_supersede_owner` is a **delegate**, and a
+/// delegate's later decision replacing an earlier one is the record following
+/// what happened.
+///
+/// So precedence is a property of the *grant*, not of the source -- which is
+/// why this is stamped at the one point where agent input becomes a candidate,
+/// and never read from an extractor.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Authority {
+    /// The person, through their own sources or their own typing.
+    Owner,
+    /// An agent acting for them under a grant that says it may.
+    Delegate,
+    /// Material someone else wrote. Reference only: it can be contradicted
+    /// into the record, never superseded over the person.
+    Reference,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Provenance {
@@ -93,6 +123,26 @@ pub struct Provenance {
     pub derived_by: String,
     pub confidence: f32,
     pub created_at_ms: u64,
+    // Everything below is appended and optional, and `None` is a real value
+    // rather than a missing one: every object stored before these fields
+    // existed genuinely has no answer, and inventing one would be worse than
+    // the gap. `_is_weaker` in the resolver reads `authority` and falls back to
+    // the source rule precisely when it is absent, so a default here would
+    // silently relabel every claim already in the database.
+    /// What asserted this, as a precedence class. See [`Authority`].
+    #[serde(default)]
+    pub authority: Option<Authority>,
+    /// The agent label the owner put in the scope they signed. Not
+    /// authenticated -- see `actor_device_id` for the part that is.
+    #[serde(default)]
+    pub actor_agent_id: Option<String>,
+    /// The registered device key whose signature the gateway verified. The only
+    /// cryptographically authenticated identity in a write.
+    #[serde(default)]
+    pub actor_device_id: Option<String>,
+    /// The agent session this was written inside, when there was one.
+    #[serde(default)]
+    pub actor_session_id: Option<String>,
 }
 
 /// Pointer to raw content that was Seal-encrypted inside the enclave before
@@ -376,6 +426,15 @@ pub struct Claim {
     /// epistemic axis; this is the lifecycle one.
     pub commitment: Option<Commitment>,
     pub asserted_at_ms: u64,
+    /// Which kind of long-term memory this is, when it is known.
+    ///
+    /// `Option` and deliberately not defaulted to [`MemoryKind::Episodic`]:
+    /// every claim written before this field existed genuinely has no kind, and
+    /// inventing one is a lie an indexed column then serves and a grant filter
+    /// then enforces. See the unkinded-object rule in
+    /// [`crate::permissions::evaluate`].
+    #[serde(default)]
+    pub memory_kind: Option<MemoryKind>,
     pub provenance: Provenance,
     pub acl: ObjectAcl,
 }

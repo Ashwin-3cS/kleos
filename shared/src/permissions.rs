@@ -42,6 +42,14 @@ pub struct ObjectAcl {
     /// Agent ids explicitly revoked for this object, overriding any grant.
     #[serde(default)]
     pub denied_agents: Vec<String>,
+    /// The kind of long-term memory this object is, when it is known.
+    ///
+    /// Denormalised onto the ACL for the same reason everything else here is:
+    /// the check has to be decidable from `(scope, acl)` alone, so a scope that
+    /// grants procedures and not episodes needs the kind here rather than
+    /// behind a lookup.
+    #[serde(default)]
+    pub memory_kind: Option<MemoryKind>,
 }
 
 /// A grant presented by a querying agent. The owner's device signs these and
@@ -189,6 +197,29 @@ pub fn evaluate(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> PermissionDecisi
     if acl.sensitivity > scope.max_sensitivity {
         return Deny(DenyReason::TooSensitive);
     }
+    // **The one deliberate exception to deny-by-default in this function**, and
+    // it is on the object side only.
+    //
+    // A *kinded* object requires its kind in scope, and an empty `memory_kinds`
+    // therefore grants no kinded object -- the scope side stays strict. An
+    // *unkinded* object passes any kind scope, which is the exception.
+    //
+    // It has to be this way round. Every claim in every existing database has
+    // no kind, so the strict reading would retroactively hide the entire stored
+    // graph behind a field nothing has set. The alternative -- a migration
+    // backfilling `Episodic` onto everything -- asserts a kind nothing derived,
+    // which is what ADR 0015 refuses in the merge case: an uncertain case has to
+    // fail towards the recoverable outcome, and a wrong label on a million
+    // claims is not recoverable.
+    //
+    // Narrow on purpose: it is an exception for *absence*, not for mismatch. A
+    // claim labelled `Tacit` is never visible to a scope that did not ask for
+    // tacit memory.
+    if let Some(kind) = acl.memory_kind {
+        if !scope.memory_kinds.contains(&kind) {
+            return Deny(DenyReason::MemoryKindNotInScope);
+        }
+    }
     Allow
 }
 
@@ -313,6 +344,7 @@ mod tests {
             entity_kinds: vec![EntityKind::Project],
             occurred_at_ms: 1_000,
             denied_agents: vec![],
+            memory_kind: None,
         }
     }
 
@@ -593,6 +625,93 @@ mod tests {
     #[test]
     fn allows_matching_scope() {
         assert!(permits(&scope(), &acl(), 2_000));
+    }
+
+    /// The one exception to deny-by-default, asserted so it stays an exception
+    /// for *absence* rather than drifting into one for mismatch.
+    #[test]
+    fn an_unkinded_claim_is_not_hidden_by_a_kind_scope() {
+        let s = scope();
+        assert!(s.memory_kinds.is_empty());
+        assert!(
+            permits(&s, &acl(), 2_000),
+            "every claim stored before memory kinds existed has none, and must \
+             stay readable rather than hiding behind a field nothing has set"
+        );
+    }
+
+    #[test]
+    fn a_kinded_claim_needs_its_kind_in_scope() {
+        let mut a = acl();
+        a.memory_kind = Some(MemoryKind::Tacit);
+
+        let mut s = scope();
+        assert_eq!(
+            evaluate(&s, &a, 2_000),
+            PermissionDecision::Deny(DenyReason::MemoryKindNotInScope),
+            "an empty memory_kinds grants no kinded object"
+        );
+
+        s.memory_kinds = vec![MemoryKind::Episodic];
+        assert_eq!(
+            evaluate(&s, &a, 2_000),
+            PermissionDecision::Deny(DenyReason::MemoryKindNotInScope),
+            "one kind granted is not every kind granted"
+        );
+
+        s.memory_kinds = vec![MemoryKind::Tacit];
+        assert!(permits(&s, &a, 2_000));
+    }
+
+    /// "You may read how I do things, not what I did" is the sentence this
+    /// field exists to make expressible.
+    #[test]
+    fn procedures_can_be_granted_without_episodes() {
+        let mut s = scope();
+        s.memory_kinds = vec![MemoryKind::Procedural];
+
+        let mut procedure = acl();
+        procedure.memory_kind = Some(MemoryKind::Procedural);
+        let mut episode = acl();
+        episode.memory_kind = Some(MemoryKind::Episodic);
+
+        assert!(permits(&s, &procedure, 2_000));
+        assert!(!permits(&s, &episode, 2_000));
+    }
+
+    /// A kind in scope does not loosen anything else. The exception is narrow.
+    #[test]
+    fn a_granted_kind_does_not_override_the_other_checks() {
+        let mut s = scope();
+        s.memory_kinds = vec![MemoryKind::Tacit];
+
+        let mut a = acl();
+        a.memory_kind = Some(MemoryKind::Tacit);
+        a.sensitivity = Sensitivity::Restricted;
+        assert_eq!(
+            evaluate(&s, &a, 2_000),
+            PermissionDecision::Deny(DenyReason::TooSensitive)
+        );
+    }
+
+    /// Provenance records what asserted a thing, and `None` has to survive a
+    /// round trip: the resolver's precedence rule falls back to the source rule
+    /// exactly when authority is absent, so a default would silently relabel
+    /// every claim already stored.
+    #[test]
+    fn an_object_stored_before_authority_existed_has_none() {
+        let json = r#"{
+            "citations": [],
+            "derived_by": "mock-extractor@v1",
+            "confidence": 1.0,
+            "created_at_ms": 1000
+        }"#;
+        let p: crate::memory::Provenance =
+            serde_json::from_str(json).expect("an old provenance must still parse");
+
+        assert!(p.authority.is_none());
+        assert!(p.actor_device_id.is_none());
+        assert!(p.actor_session_id.is_none());
     }
 
     /// The regression the closed enum caused: a source this binary has never

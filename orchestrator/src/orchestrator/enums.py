@@ -147,6 +147,29 @@ def raise_to_floor(declared: Sensitivity, tone: AffectTone | None) -> Sensitivit
     return floor if floor.rank > declared.rank else declared
 
 
+class Authority(StrEnum):
+    """How much weight what asserted a thing carries against the person's own
+    account -- a **closed** vocabulary.
+
+    Mirrors ``Authority`` in ``shared/src/memory.rs``, including the ordering.
+
+    The distinction ADR 0014 left implicit. A fetched page is a *stranger*: it
+    may never supersede the person, because timestamps are the right tie-break
+    between two things the person said and exactly the wrong one between
+    something they said and something a stranger wrote. An agent the owner
+    granted ``may_supersede_owner`` is a *delegate*, and a delegate's later
+    decision replacing an earlier one is the record following what happened.
+
+    So precedence is a property of the **grant**, not of the source -- which is
+    why this is stamped at the one point where agent input becomes a candidate,
+    and never read from an extractor.
+    """
+
+    OWNER = "owner"
+    DELEGATE = "delegate"
+    REFERENCE = "reference"
+
+
 class MemoryKind(StrEnum):
     """What kind of long-term memory a claim is -- a **closed** vocabulary.
 

@@ -62,15 +62,30 @@ def _occurred_at(node: MemoryNode) -> int:
 #: due?" has to be a Cypher query against an index, not a full scan that
 #: filters in Python. Non-claims get ``None``, which Neo4j stores as an
 #: absent property.
+#: Fields lifted out of the opaque ``payload`` blob into real Neo4j properties,
+#: because a question has to be answerable without loading and parsing every
+#: payload in Python. Listed once and expanded into every statement that writes
+#: them (`_promoted_set`), because they used to be spelled out in three places
+#: and a field added to two of them is a column that is silently always null in
+#: whichever path was missed.
+_PROMOTED_KEYS = (
+    "claim_status",
+    "commitment_fulfillment",
+    "commitment_due_at_ms",
+    "commitment_owed_by",
+    "commitment_owed_to",
+    "memory_kind",
+)
+
+
+def _promoted_set(var: str) -> str:
+    """The ``SET`` clause for the promoted columns, for one Cypher variable."""
+    return ", ".join(f"{var}.{key} = ${key}" for key in _PROMOTED_KEYS)
+
+
 def _promoted(node: MemoryNode) -> dict[str, Any]:
     if not isinstance(node, Claim):
-        return {
-            "claim_status": None,
-            "commitment_fulfillment": None,
-            "commitment_due_at_ms": None,
-            "commitment_owed_by": None,
-            "commitment_owed_to": None,
-        }
+        return dict.fromkeys(_PROMOTED_KEYS)
     c = node.commitment
     return {
         "claim_status": node.status.value,
@@ -78,6 +93,10 @@ def _promoted(node: MemoryNode) -> dict[str, Any]:
         "commitment_due_at_ms": c.due_at_ms if c else None,
         "commitment_owed_by": c.owed_by_entity_id if c else None,
         "commitment_owed_to": c.owed_to_entity_id if c else None,
+        # `None` stays `None`: a claim with no kind has none, and writing a
+        # default here would put a value an indexed query then serves and a
+        # grant filter then enforces.
+        "memory_kind": node.memory_kind.value if node.memory_kind else None,
     }
 
 
@@ -204,11 +223,7 @@ class Neo4jStore:
             n.acl_sensitivity = $acl_sensitivity,
             n.acl_entity_kinds = $acl_entity_kinds,
             n.embedding = $embedding,
-            n.claim_status = $claim_status,
-            n.commitment_fulfillment = $commitment_fulfillment,
-            n.commitment_due_at_ms = $commitment_due_at_ms,
-            n.commitment_owed_by = $commitment_owed_by,
-            n.commitment_owed_to = $commitment_owed_to
+            {_promoted_set("n")}
         """
         self._run(
             cypher,
@@ -279,11 +294,7 @@ class Neo4jStore:
         mutate(claim)
         self._run(
             "MATCH (c:Claim {id: $id, owner_id: $owner_id}) SET c.payload = $payload, "
-            "c.claim_status = $claim_status, "
-            "c.commitment_fulfillment = $commitment_fulfillment, "
-            "c.commitment_due_at_ms = $commitment_due_at_ms, "
-            "c.commitment_owed_by = $commitment_owed_by, "
-            "c.commitment_owed_to = $commitment_owed_to",
+            + _promoted_set("c"),
             id=claim_id,
             owner_id=owner_id,
             payload=claim.model_dump_json(),
@@ -325,11 +336,7 @@ class Neo4jStore:
         so there is no way to call this without naming one."""
         self._run(
             "MATCH (n:Memory {id: $id, owner_id: $owner_id}) SET n.payload = $payload, "
-            "n.claim_status = $claim_status, "
-            "n.commitment_fulfillment = $commitment_fulfillment, "
-            "n.commitment_due_at_ms = $commitment_due_at_ms, "
-            "n.commitment_owed_by = $commitment_owed_by, "
-            "n.commitment_owed_to = $commitment_owed_to",
+            + _promoted_set("n"),
             id=node.id,
             owner_id=node.owner_id,
             payload=node.model_dump_json(),
@@ -399,6 +406,48 @@ class Neo4jStore:
             "LIMIT $limit",
             owner_id=owner_id,
             limit=limit,
+        )
+        return [_hydrate(row) for row in rows]
+
+    def claims_of_kind(
+        self,
+        owner_id: str,
+        kind: str,
+        *,
+        subject_entity_ids: list[str] | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[StoredNode]:
+        """Claims of one memory kind, newest assertion first.
+
+        An indexed query on the promoted column rather than a scan that hydrates
+        every payload and filters in Python -- the same reason
+        ``open_commitments`` exists in this form. "What procedure do we use for
+        X" is a question the briefing asks on every call, and it has to cost one
+        index seek.
+
+        Superseded claims are excluded by default, like there: a procedure that
+        was replaced is still a stored procedure, but it is not the one to
+        follow, and returning both leaves the caller to guess.
+
+        **Permission-blind, like every other read in this store.** The caller
+        runs ``permits`` per candidate; a scope that grants procedures and not
+        episodes is enforced in the permission node, not here.
+        """
+        rows = self._run(
+            "MATCH (c:Claim {owner_id: $owner_id}) "
+            "WHERE c.memory_kind = $kind "
+            "  AND ($include_superseded OR c.claim_status = 'active') "
+            "  AND ($subjects IS NULL OR ANY(e IN $subjects WHERE "
+            "       (c)-[:ABOUT]->(:Entity {id: e, owner_id: $owner_id}))) "
+            "RETURN c.id AS id, labels(c) AS labels, c.payload AS payload, "
+            "c.text AS text, c.occurred_at_ms AS occurred_at_ms "
+            "ORDER BY c.occurred_at_ms DESC, c.id LIMIT $limit",
+            owner_id=owner_id,
+            kind=kind,
+            subjects=subject_entity_ids,
+            include_superseded=include_superseded,
+            limit=int(limit),
         )
         return [_hydrate(row) for row in rows]
 

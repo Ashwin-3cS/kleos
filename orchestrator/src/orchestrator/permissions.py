@@ -39,6 +39,10 @@ class ObjectAcl(BaseModel):
     entity_kinds: list[EntityKind] = Field(default_factory=list)
     occurred_at_ms: int
     denied_agents: list[str] = Field(default_factory=list)
+    #: Denormalised here for the same reason everything else is: the check must
+    #: be decidable from ``(scope, acl)`` alone, so a scope granting procedures
+    #: and not episodes needs the kind here rather than behind a lookup.
+    memory_kind: MemoryKind | None = None
 
 
 class Scope(BaseModel):
@@ -127,6 +131,22 @@ def evaluate(scope: Scope, acl: ObjectAcl, now_ms: int | None = None) -> Permiss
         return _deny(DenyReason.OUTSIDE_TIME_WINDOW)
     if acl.sensitivity.rank > scope.max_sensitivity.rank:
         return _deny(DenyReason.TOO_SENSITIVE)
+    # **The one deliberate exception to deny-by-default here**, and it is on the
+    # object side only. A kinded object requires its kind in scope, so an empty
+    # ``memory_kinds`` grants no kinded object -- the scope side stays strict.
+    # An unkinded object passes any kind scope, which is the exception.
+    #
+    # It has to be this way round: every claim in every existing database has no
+    # kind, so the strict reading would retroactively hide the whole stored
+    # graph behind a field nothing has set. Backfilling a kind instead would
+    # assert something nothing derived, which is what ADR 0015 refuses in the
+    # merge case -- an uncertain case fails towards the recoverable outcome, and
+    # a wrong label on a million claims is not recoverable.
+    #
+    # Narrow on purpose: an exception for *absence*, not for mismatch. A claim
+    # labelled tacit is never visible to a scope that did not ask for tacit.
+    if acl.memory_kind is not None and acl.memory_kind not in scope.memory_kinds:
+        return _deny(DenyReason.MEMORY_KIND_NOT_IN_SCOPE)
     return _ALLOW
 
 
