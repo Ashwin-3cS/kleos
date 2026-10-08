@@ -65,8 +65,18 @@ encryption claim does and does not cover.
 > - **Local containers** cannot be renamed by this repo at all: the Neo4j password
 >   lives inside its own data directory and the Postgres role was fixed when the
 >   volume was initialised. `scripts/services.sh` detects a pre-rename set and
->   prints the in-place migration -- `docker rename` plus two credential changes,
->   losing no data -- with deleting the volumes offered second.
+>   prints the migration that loses no data -- change the stored credentials,
+>   then *replace* the containers while keeping the volumes.
+>
+>   Replace, not rename, and this is the part that cost time: a container's
+>   environment **and its healthcheck** are fixed at creation, and `docker rename`
+>   changes neither. A compose-created Neo4j keeps running
+>   `cypher-shell -u neo4j -p <old password>` every five seconds, and because
+>   Neo4j rate-limits repeated authentication failures, that healthcheck then
+>   locks out *correct* credentials in windows long enough to span a whole test
+>   run. It reads as a wrong password, intermittently, forever. `tests/conftest.py`
+>   now fails rather than skips on it, so it can never again look like a partial
+>   environment.
 
 ## Documentation
 

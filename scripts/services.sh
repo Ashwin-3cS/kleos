@@ -33,11 +33,20 @@ PG_PASSWORD="${POSTGRES_PASSWORD:-kleosdev}"
 # credentials it no longer uses -- and the failure, left alone, is an
 # authentication error against a database that looks like it is running fine.
 #
-# Said out loud rather than worked around, and with the non-destructive path first:
-# `docker rename` plus two credential changes migrates a live set without losing a
-# node or a row, which is how this repo's own dev environment was moved. A
-# deployment holding anything real needs nothing else -- the SQL in
-# `gateway/src/store/` renames the tables in place, and `storage/migrations.py`
+# Said out loud rather than worked around, and with the non-destructive path
+# first: change the stored credentials, then replace the containers while keeping
+# the volumes, which loses no node and no row.
+#
+# Renaming the container is *not* enough, and finding that out cost a while. A
+# container's environment and its healthcheck are fixed at creation and `docker
+# rename` changes neither, so a compose-created Neo4j keeps running
+# `cypher-shell -u neo4j -p <old password>` every five seconds. Neo4j rate-limits
+# repeated authentication failures, so the healthcheck then locks out *correct*
+# credentials in windows long enough to span a whole test run -- which reads as a
+# wrong password, intermittently, forever.
+#
+# A deployment holding anything real needs none of this: the SQL in
+# `gateway/src/store/` renames the tables in place and `storage/migrations.py`
 # does the same for the Neo4j constraints and indexes.
 check_for_pre_rename_containers() {
   local stale=()
@@ -51,25 +60,38 @@ check_for_pre_rename_containers() {
   echo "Found containers from before the Kleos rename: ${stale[*]}" >&2
   echo >&2
   echo "They hold a 'memorai' Postgres role and Neo4j password this script no longer" >&2
-  echo "uses. Nothing has to be deleted: the containers can be renamed and the two" >&2
-  echo "credentials changed in place, which keeps every node and every row." >&2
+  echo "uses. Nothing has to be deleted: the data lives in named volumes, and a" >&2
+  echo "container can be replaced without touching them." >&2
   echo >&2
-  echo "  # migrate in place -- no data lost" >&2
-  echo "  for n in neo4j redis postgres; do $CLI rename memorai-\$n kleos-\$n; done" >&2
-  echo "  $CLI exec kleos-neo4j cypher-shell -u neo4j -p memoraidev \\" >&2
+  echo "  # 1. change the stored credentials, using the old ones" >&2
+  echo "  $CLI exec memorai-neo4j cypher-shell -u neo4j -p memoraidev \\" >&2
   echo "    \"ALTER CURRENT USER SET PASSWORD FROM 'memoraidev' TO 'kleosdev'\"" >&2
-  echo "  $CLI exec kleos-postgres psql -U memorai -d memorai \\" >&2
+  echo "  $CLI exec memorai-postgres psql -U memorai -d memorai \\" >&2
   echo "    -c \"CREATE ROLE kleos LOGIN SUPERUSER PASSWORD 'kleosdev'\" \\" >&2
   echo "    -c \"CREATE DATABASE kleos OWNER kleos\"" >&2
   echo >&2
-  echo "Then restart Neo4j: it keeps failed-authentication state, so the attempts" >&2
-  echo "made with the old password leave a lockout window that looks exactly like" >&2
-  echo "a wrong password -- and a suite run during it skips rather than fails." >&2
+  echo "  # 2. remove the containers, keeping the volumes, and let this script" >&2
+  echo "  #    recreate them with the new names and credentials" >&2
+  echo "  $CLI rm -f ${stale[*]}" >&2
+  echo "  $0 up" >&2
   echo >&2
-  echo "  $CLI restart kleos-neo4j" >&2
+  echo "Recreating rather than renaming, and this is the part that bites: a" >&2
+  echo "container's environment AND ITS HEALTHCHECK are fixed when it is created." >&2
+  echo "\`$CLI rename\` changes neither. A compose-created Neo4j runs" >&2
+  echo "\`cypher-shell -u neo4j -p <old>\` every five seconds, so after changing the" >&2
+  echo "password the healthcheck fails forever -- and because Neo4j rate-limits" >&2
+  echo "repeated authentication failures, the database then rejects correct" >&2
+  echo "credentials too, in windows long enough to span a whole test run. It looks" >&2
+  echo "exactly like a wrong password. Replacing the container is what actually" >&2
+  echo "ends it; \`$CLI restart\` only clears the lockout until the next healthcheck." >&2
   echo >&2
-  echo "The volumes keep their old names, which is cosmetic -- a container only uses" >&2
-  echo "a volume name when it is first created." >&2
+  echo "If this script created the originals, the volumes are kleos-*-data and are" >&2
+  echo "reused as they are. If compose did, they are orchestrator_*-data and the new" >&2
+  echo "containers will start empty unless you mount them explicitly:" >&2
+  echo >&2
+  echo "  $CLI run -d --name kleos-neo4j -p 127.0.0.1:7688:7687 \\" >&2
+  echo "    -e NEO4J_AUTH=neo4j/kleosdev -v orchestrator_neo4j-data:/data \\" >&2
+  echo "    neo4j:5.26-community" >&2
   echo >&2
   echo "Or start clean, if the contents are expendable (Neo4j rebuilds by" >&2
   echo "re-ingesting and the token rows are mock consents):" >&2
