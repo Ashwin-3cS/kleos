@@ -22,6 +22,12 @@ What is exposed, and what is not:
 - **Session state** -- `open_session`, `append_context`, `close_session`. An
   agent's short-term memory: stored, and deliberately not searchable until it is
   consolidated. See ADR 0016 and `storage/sessions.py`.
+- **One write** -- `record_decision`, and only under a grant whose scope says
+  `may_write`. Deny-by-default, so every grant issued before that field existed
+  is read-only. What an agent writes takes the `agent` source whatever it asks
+  for, and carries a precedence class taken from the grant rather than from the
+  agent: without `may_supersede_owner` its claim *contradicts* the person's
+  rather than replacing it. See ADR 0017 and `graphs/decide.py`.
 
 Run with: ``python -m orchestrator.mcp_server`` (stdio transport).
 """
@@ -32,6 +38,7 @@ import logging
 
 from mcp.server.mcpserver import MCPServer
 
+from .graphs.decide import record_decision as decide
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
@@ -185,6 +192,48 @@ def close_session(session_id: str, grant_token: str, consolidate: bool = False) 
         "block_count": session.block_count,
         "consolidated_into": list(session.consolidated_into),
     }
+
+
+# -- writing ------------------------------------------------------------
+
+
+@mcp.tool()
+def record_decision(
+    grant_token: str,
+    statement: str,
+    reason: str,
+    session_id: str | None = None,
+    memory_kind: str = "episodic",
+    sensitive: bool = False,
+) -> dict:
+    """Record a decision you have just made, and why, into the owner's memory.
+
+    `statement` is the decision as a durable assertion -- "Lantern uses Neo4j"
+    rather than "I think we should probably use Neo4j". `reason` is **required**:
+    the next agent's briefing is built out of it, and a stored decision with no
+    stated basis tells that agent nothing it can act on.
+
+    `memory_kind` is `episodic` (what was decided), `procedural` (how something
+    is done) or `tacit` (a heuristic drawn from experience). A tacit claim is an
+    inference *about* the person rather than something they said, so labelling
+    one raises its sensitivity and the grant is checked at that level.
+
+    Refused unless the grant says `may_write`, and the refusal names the reason.
+    Your claim is recorded as `reference` unless the grant also says
+    `may_supersede_owner`, in which case it is a `delegate` write -- the
+    difference being whether it may replace one of the owner's own decisions or
+    only contradict it, visibly, with both sides kept.
+    """
+    recorded = decide(
+        _get_runtime(),
+        grant_token,
+        statement,
+        reason,
+        session_id=session_id,
+        memory_kind=memory_kind,
+        sensitive=sensitive,
+    )
+    return recorded.as_dict()
 
 
 def main() -> None:
