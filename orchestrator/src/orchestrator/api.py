@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
         _runtime = None
 
 
-app = FastAPI(title="memorai orchestrator", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Kleos orchestrator", version="0.1.0", lifespan=lifespan)
 
 
 class IngestRequest(BaseModel):

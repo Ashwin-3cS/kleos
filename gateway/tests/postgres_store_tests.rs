@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! docker compose -f orchestrator/docker-compose.yml up -d postgres
-//! SEALED_TOKEN_STORE_URL=postgres://memorai:memoraidev@127.0.0.1:5435/memorai \
+//! SEALED_TOKEN_STORE_URL=postgres://Kleos:kleosdev@127.0.0.1:5435/Kleos \
 //!   cargo test -p gateway --test postgres_store_tests -- --nocapture
 //! ```
 

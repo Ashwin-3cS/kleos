@@ -103,14 +103,14 @@ RUN eif_build \
 	--kernel /bzImage \
 	--kernel_config /linux.config \
 	--ramdisk /build_cpio/rootfs.cpio \
-	--pcrs_output /memorai.pcrs \
-	--output /memorai.eif \
+	--pcrs_output /kleos.pcrs \
+	--output /kleos.eif \
 	--cmdline 'reboot=k initrd=0x2000000,3228672 root=/dev/ram0 panic=1 pci=off nomodules console=ttyS0 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd'
 
 FROM base AS install
 WORKDIR /rootfs
-COPY --from=build /memorai.eif .
-COPY --from=build /memorai.pcrs .
+COPY --from=build /kleos.eif .
+COPY --from=build /kleos.pcrs .
 COPY --from=build /build_cpio/rootfs.cpio .
 
 FROM scratch AS package

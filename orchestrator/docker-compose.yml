@@ -3,15 +3,15 @@
 services:
   neo4j:
     image: neo4j:5.26-community
-    container_name: memorai-neo4j
+    container_name: kleos-neo4j
     ports:
       - "127.0.0.1:7688:7687"
       - "127.0.0.1:7475:7474"
     environment:
-      NEO4J_AUTH: neo4j/memoraidev
+      NEO4J_AUTH: neo4j/kleosdev
       NEO4J_server_memory_heap_max__size: 512M
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p memoraidev 'RETURN 1' || exit 1"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p kleosdev 'RETURN 1' || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -25,15 +25,15 @@ services:
   # commonly taken by other local stacks.
   postgres:
     image: postgres:16-alpine
-    container_name: memorai-postgres
+    container_name: kleos-postgres
     ports:
       - "127.0.0.1:5435:5432"
     environment:
-      POSTGRES_USER: memorai
-      POSTGRES_PASSWORD: memoraidev
-      POSTGRES_DB: memorai
+      POSTGRES_USER: kleos
+      POSTGRES_PASSWORD: kleosdev
+      POSTGRES_DB: kleos
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U memorai -d memorai"]
+      test: ["CMD-SHELL", "pg_isready -U kleos -d kleos"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -42,7 +42,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: memorai-redis
+    container_name: kleos-redis
     ports:
       - "127.0.0.1:6380:6379"
     healthcheck:

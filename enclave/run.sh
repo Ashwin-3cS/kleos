@@ -57,7 +57,7 @@ socat TCP-LISTEN:8005,reuseaddr,fork VSOCK-CONNECT:3:8005 &   # Walrus Memory re
 echo "Bridging inbound VSOCK port 4000 -> localhost:4000..."
 socat VSOCK-LISTEN:4000,reuseaddr,fork TCP:localhost:4000 &
 
-echo "Starting memorai enclave on port 4000..."
+echo "Starting Kleos enclave on port 4000..."
 /enclave > /tmp/server.log 2>&1 &
 ENCLAVE_PID=$!
 

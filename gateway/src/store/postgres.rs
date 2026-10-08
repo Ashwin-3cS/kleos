@@ -8,7 +8,25 @@ use tokio_postgres::NoTls;
 /// `(owner_id, provider)` is what makes re-consent an update rather than a
 /// second row.
 const MIGRATION: &str = "
-CREATE TABLE IF NOT EXISTS memorai_sealed_oauth_tokens (
+-- The rename, as a migration. A `CREATE TABLE IF NOT EXISTS` under the new name
+-- against a database holding the old one creates an *empty second table*, and
+-- every sealed refresh token stays in the first, invisible and unreferenced. The
+-- rows would still be there and the gateway would behave as though the user had
+-- never consented.
+--
+-- So the rename happens first, conditionally, and the create below is then a
+-- no-op on an existing database and the whole schema on a fresh one. `IF EXISTS`
+-- makes it safe to run forever, which it will be: deleting this line would mean a
+-- database last migrated before the rename silently loses its tokens.
+ALTER TABLE IF EXISTS memorai_sealed_oauth_tokens RENAME TO kleos_sealed_oauth_tokens;
+-- The index backing the UNIQUE constraint was named after the table at creation
+-- time, and `RENAME TO` does not follow. Harmless to enforcement, but it would
+-- leave an upgraded database structurally different from a fresh one, which is a
+-- difference someone eventually debugs.
+ALTER INDEX IF EXISTS memorai_sealed_oauth_tokens_owner_id_provider_key
+    RENAME TO kleos_sealed_oauth_tokens_owner_id_provider_key;
+
+CREATE TABLE IF NOT EXISTS kleos_sealed_oauth_tokens (
     owner_id              TEXT   NOT NULL,
     provider              TEXT   NOT NULL,
     sealed_refresh_token  BYTEA  NOT NULL,
@@ -62,7 +80,7 @@ impl SealedTokenStore for PostgresTokenStore {
         let client = self.client().await?;
         client
             .execute(
-                "INSERT INTO memorai_sealed_oauth_tokens
+                "INSERT INTO kleos_sealed_oauth_tokens
                    (owner_id, provider, sealed_refresh_token, key_id, scheme, scopes,
                     granted_at_ms, expires_at_ms)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -99,7 +117,7 @@ impl SealedTokenStore for PostgresTokenStore {
             .query_opt(
                 "SELECT owner_id, provider, sealed_refresh_token, key_id, scheme, scopes,
                         granted_at_ms, expires_at_ms
-                   FROM memorai_sealed_oauth_tokens
+                   FROM kleos_sealed_oauth_tokens
                   WHERE owner_id = $1 AND provider = $2",
                 &[&owner_id, &provider],
             )

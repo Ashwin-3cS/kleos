@@ -39,7 +39,7 @@ impl OAuthProvider for GitHubProvider {
         let resp = client
             .get(url)
             .bearer_auth(token)
-            .header("User-Agent", "memorai-enclave")
+            .header("User-Agent", "kleos-enclave")
             .send()
             .await
             .map_err(|e| EnclaveError::Upstream(format!("github /user call failed: {e}")))?;
@@ -100,7 +100,7 @@ impl OAuthProvider for GitHubProvider {
             // GitHub's token endpoint returns form-encoded output unless
             // asked for JSON.
             .header("Accept", "application/json")
-            .header("User-Agent", "memorai-enclave")
+            .header("User-Agent", "kleos-enclave")
             .form(&[
                 ("code", code),
                 ("client_id", self.client_id.as_str()),

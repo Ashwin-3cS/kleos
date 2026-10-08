@@ -486,7 +486,7 @@ class Neo4jStore:
         fewer than `k` means the index had no more to give.
         """
         rows = self._run(
-            "CALL db.index.vector.queryNodes('memorai_memory_embedding', $k, $embedding) "
+            "CALL db.index.vector.queryNodes('kleos_memory_embedding', $k, $embedding) "
             "YIELD node, score "
             "RETURN node.id AS id, labels(node) AS labels, node.payload AS payload, "
             "node.text AS text, node.occurred_at_ms AS occurred_at_ms, score, "

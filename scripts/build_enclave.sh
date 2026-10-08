@@ -10,13 +10,13 @@ OUT_DIR="$ROOT_DIR/enclave/out"
 mkdir -p "$OUT_DIR"
 
 echo "Building enclave EIF image (stagex/docker)..."
-docker build -f "$ROOT_DIR/enclave/Dockerfile" -t memorai-enclave:latest --target package "$ROOT_DIR"
+docker build -f "$ROOT_DIR/enclave/Dockerfile" -t kleos-enclave:latest --target package "$ROOT_DIR"
 
-CONTAINER_ID=$(docker create memorai-enclave:latest)
-docker cp "$CONTAINER_ID:/memorai.eif" "$OUT_DIR/memorai-enclave.eif"
-docker cp "$CONTAINER_ID:/memorai.pcrs" "$OUT_DIR/memorai-enclave.pcrs"
+CONTAINER_ID=$(docker create kleos-enclave:latest)
+docker cp "$CONTAINER_ID:/kleos.eif" "$OUT_DIR/kleos-enclave.eif"
+docker cp "$CONTAINER_ID:/kleos.pcrs" "$OUT_DIR/kleos-enclave.pcrs"
 docker rm "$CONTAINER_ID" > /dev/null
 
-echo "Built $OUT_DIR/memorai-enclave.eif"
-echo "PCRs: $OUT_DIR/memorai-enclave.pcrs"
-echo "Register/run with: nitro-cli run-enclave --cpu-count 2 --memory 4096 --eif-path $OUT_DIR/memorai-enclave.eif --enclave-cid 16"
+echo "Built $OUT_DIR/kleos-enclave.eif"
+echo "PCRs: $OUT_DIR/kleos-enclave.pcrs"
+echo "Register/run with: nitro-cli run-enclave --cpu-count 2 --memory 4096 --eif-path $OUT_DIR/kleos-enclave.eif --enclave-cid 16"
