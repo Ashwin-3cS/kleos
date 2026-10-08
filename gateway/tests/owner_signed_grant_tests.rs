@@ -146,6 +146,62 @@ async fn an_owner_signed_grant_introspects_to_its_scope() {
 }
 
 #[tokio::test]
+async fn introspect_reports_the_device_that_signed_the_grant() {
+    // The identity an agent asserts and the identity it proves are different
+    // things. `scope.agent_id` is a label the owner typed before signing; the key
+    // id is the key this gateway just checked a signature against. Attribution
+    // downstream rests on the second, so introspection has to return it -- it
+    // used to be read, used, and dropped. ADR 0016.
+    let state = state();
+    let kp = keypair();
+    let key_id = register(&state, "owner-1", &kp).await;
+
+    let token =
+        shared::sign_grant(&scope("owner-1", "agent-1"), &kp, now_ms(), HOUR_MS, "n1").unwrap();
+    let (status, body) = call(
+        &state,
+        post("/memory/scope/introspect", None, json!({"grant_token": token})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "introspect failed: {body}");
+    assert_eq!(
+        body["key_id"],
+        json!(key_id),
+        "introspection must name the registered device key it verified against"
+    );
+}
+
+#[tokio::test]
+async fn the_signing_device_is_not_a_field_the_signer_can_choose() {
+    // Two agents can be handed the same scope file, so `agent_id` collides by
+    // design and is not a device id. The guard is that the device id is reported
+    // out of band from the signed payload: two grants over an identical scope,
+    // signed by different registered keys, must introspect to different devices.
+    let state = state();
+    let (kp1, kp2) = (keypair(), keypair());
+    let id1 = register(&state, "owner-1", &kp1).await;
+    let id2 = register(&state, "owner-1", &kp2).await;
+    assert_ne!(id1, id2);
+
+    let same_scope = scope("owner-1", "agent-1");
+    let mut seen = vec![];
+    for (kp, nonce) in [(&kp1, "n1"), (&kp2, "n2")] {
+        let token = shared::sign_grant(&same_scope, kp, now_ms(), HOUR_MS, nonce).unwrap();
+        let (status, body) = call(
+            &state,
+            post("/memory/scope/introspect", None, json!({"grant_token": token})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "introspect failed: {body}");
+        assert_eq!(body["scope"]["agent_id"], json!("agent-1"));
+        seen.push(body["key_id"].as_str().unwrap().to_string());
+    }
+
+    assert_eq!(seen, vec![id1, id2], "the same label, two distinguishable devices");
+}
+
+#[tokio::test]
 async fn a_grant_signed_by_an_unregistered_key_is_refused() {
     let state = state();
     let kp = keypair();
