@@ -22,6 +22,7 @@ from ..storage.content import ContentCrypto, NullContentCrypto
 from ..storage.migrations import apply_migrations
 from ..storage.neo4j_store import Neo4jStore
 from ..storage.reads import ReadLog
+from ..storage.sessions import SessionStore
 from ..tools.registry import REGISTRY as TOOL_REGISTRY
 from ..tools.registry import ToolRegistry
 
@@ -45,6 +46,9 @@ class Runtime:
     blobs: BlobStore
     #: What every agent read actually returned. See ADR 0005.
     read_log: ReadLog
+    #: Each agent's working context while it is still working. Short-term memory:
+    #: stored, and deliberately not searchable until consolidated. See ADR 0016.
+    sessions: SessionStore
     #: Seals the record's text before it is stored, and unseals only what a read
     #: is about to disclose. See ADR 0010.
     content: ContentCrypto | NullContentCrypto
@@ -72,6 +76,10 @@ class Runtime:
         if migrate:
             apply_migrations(store.driver, settings.neo4j_database, settings.embedding_dim)
         gateway = GatewayClient(settings.gateway_url)
+        # One store, shared: sealed record bodies and session blocks go to the
+        # same place, and two instances would be two Quilt id spaces over the
+        # same directory.
+        blobs = get_blob_store(settings)
         return cls(
             settings=settings,
             store=store,
@@ -80,8 +88,18 @@ class Runtime:
             gateway=gateway,
             registry=registry or REGISTRY.copy(),
             tools=TOOL_REGISTRY.copy(),
-            blobs=get_blob_store(settings),
+            blobs=blobs,
             read_log=ReadLog(store),
+            sessions=SessionStore(
+                store,
+                blobs,
+                # Sealing a block needs an owner session on the gateway, which an
+                # agent-authorised call does not have -- so blocks are sealed only
+                # where record text already is. Step 8's grant-authorised unseal is
+                # what makes the symmetric grant-authorised seal possible; until
+                # then this is stated rather than silently half-done.
+                gateway=gateway if settings.encrypt_content_at_rest else None,
+            ),
             content=(
                 ContentCrypto(gateway)
                 if settings.encrypt_content_at_rest
