@@ -147,6 +147,49 @@ def raise_to_floor(declared: Sensitivity, tone: AffectTone | None) -> Sensitivit
     return floor if floor.rank > declared.rank else declared
 
 
+class MemoryKind(StrEnum):
+    """What kind of long-term memory a claim is -- a **closed** vocabulary.
+
+    Mirrors ``MemoryKind`` in ``shared/src/memory.rs``, including the ordering.
+
+    A hierarchy rather than one pile, because the three answer different
+    questions and an agent can reasonably be granted one and not another: "you
+    may read how I do things, not what I did" is a sentence a person would say,
+    and ``Scope`` can only express it if the kinds are named.
+
+    Closed for the reason ``AffectTone`` is: this is promoted to an indexed
+    column and read by a grant filter, and a free-text field built for filtering
+    is where an extractor eventually writes a sentence.
+
+    Short-term memory is deliberately **not** a member. It is a different
+    *state* -- stored, and not searchable until consolidated -- and a fourth
+    value here would put session scratchpads in the same vector index as
+    consolidated facts. See ``storage/sessions.py``.
+    """
+
+    EPISODIC = "episodic"
+    PROCEDURAL = "procedural"
+    TACIT = "tacit"
+
+    @property
+    def sensitivity_floor(self) -> Sensitivity:
+        """The lowest sensitivity a claim of this kind may carry.
+
+        Same self-protecting property as ``AffectTone.sensitivity_floor``:
+        labelling content can only ever narrow who may read it. A tacit claim is
+        an inference *about* a person rather than something they said, so naming
+        it has to cost reach.
+        """
+        return _MEMORY_KIND_FLOOR[self]
+
+
+_MEMORY_KIND_FLOOR = {
+    MemoryKind.EPISODIC: Sensitivity.PERSONAL,
+    MemoryKind.PROCEDURAL: Sensitivity.PERSONAL,
+    MemoryKind.TACIT: Sensitivity.CONFIDENTIAL,
+}
+
+
 class DenyReason(StrEnum):
     WRONG_OWNER = "wrong_owner"
     GRANT_EXPIRED = "grant_expired"
@@ -155,3 +198,12 @@ class DenyReason(StrEnum):
     ENTITY_KIND_NOT_IN_SCOPE = "entity_kind_not_in_scope"
     OUTSIDE_TIME_WINDOW = "outside_time_window"
     TOO_SENSITIVE = "too_sensitive"
+    #: The grant does not permit writing at all.
+    WRITE_NOT_PERMITTED = "write_not_permitted"
+    #: It permits writing, but not as this source.
+    WRITE_SOURCE_NOT_IN_SCOPE = "write_source_not_in_scope"
+    MEMORY_KIND_NOT_IN_SCOPE = "memory_kind_not_in_scope"
+    #: The object is readable; turning its sealed body back into plaintext is a
+    #: second disclosure and a separate axis.
+    UNSEAL_NOT_PERMITTED = "unseal_not_permitted"
+    ACTION_NOT_PERMITTED = "action_not_permitted"

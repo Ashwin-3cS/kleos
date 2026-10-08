@@ -79,6 +79,7 @@ PY_MODELS = {
         "Claim",
         "ObjectAcl",
         "Scope",
+        "WriteIntent",
     ],
 )
 def test_struct_fields_match(name: str):
@@ -94,6 +95,11 @@ def test_struct_fields_match(name: str):
         ("ClaimStatus", schema.ClaimStatus),
         ("FulfillmentStatus", schema.FulfillmentStatus),
         ("AffectTone", schema.AffectTone),
+        # Declared in `memory.rs` beside the other memory enums, and reached
+        # for here through `permissions`, which is what consumes it today --
+        # `Scope.memory_kinds`. The module it is imported into is not the
+        # property under test; the variants and their order are.
+        ("MemoryKind", permissions.MemoryKind),
         ("Sensitivity", permissions.Sensitivity),
         ("DenyReason", permissions.DenyReason),
     ],

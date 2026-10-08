@@ -307,6 +307,10 @@ mod tests {
             not_after_ms: None,
             max_sensitivity: Sensitivity::Personal,
             expires_at_ms: None,
+            // Read-only, and deliberately spelled this way: a capability added
+            // to `Scope` later must not quietly become granted in a test that
+            // never mentioned it.
+            ..Default::default()
         }
     }
 
