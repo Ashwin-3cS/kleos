@@ -20,6 +20,8 @@ _CONSTRAINTS = [
     "FOR (n:Claim) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT memorai_agent_read_id IF NOT EXISTS "
     "FOR (n:AgentRead) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT memorai_agent_session_id IF NOT EXISTS "
+    "FOR (n:AgentSession) REQUIRE n.id IS UNIQUE",
 ]
 
 _INDEXES = [
@@ -44,6 +46,18 @@ _INDEXES = [
     "FOR (n:AgentRead) ON (n.owner_id, n.at_ms)",
     "CREATE INDEX memorai_agent_read_grant IF NOT EXISTS "
     "FOR (n:AgentRead) ON (n.grant_fp)",
+    # Agent sessions. Read the same two ways the log is -- an owner's sessions
+    # newest first, and everything one grant did -- and off `:Memory` for the
+    # same reason: a scratchpad that could be retrieved as memory would put an
+    # agent's working context into another agent's answers. See ADR 0016.
+    "CREATE INDEX memorai_agent_session_owner_at IF NOT EXISTS "
+    "FOR (n:AgentSession) ON (n.owner_id, n.opened_at_ms)",
+    "CREATE INDEX memorai_agent_session_grant IF NOT EXISTS "
+    "FOR (n:AgentSession) ON (n.grant_fp)",
+    # A block belongs to exactly one session and is only ever read in order, so
+    # the session id is the whole access path.
+    "CREATE INDEX memorai_session_block_session IF NOT EXISTS "
+    "FOR (n:SessionBlock) ON (n.owner_id, n.session_id, n.index)",
 ]
 
 # Every stored node also carries the :Memory label so one vector index covers

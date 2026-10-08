@@ -16,7 +16,9 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "httpx>=0.27",
-    "mcp>=1.2",
+    # >=2: `FastMCP` became `MCPServer` in 2.0, and `mcp>=1.2` silently allowed
+    # the major that renamed it -- so this module could not be imported at all.
+    "mcp>=2,<3",
     # Local ONNX embeddings on CPU. Chosen over sentence-transformers deliberately:
     # the same models without torch, 67MB against roughly 2GB, for an identical
     # vector. See ADR 0012.

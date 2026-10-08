@@ -56,6 +56,27 @@ class Settings(BaseSettings):
         default_factory=list, validation_alias="ENABLED_TOOLS"
     )
 
+    #: Bounds on one agent session (ADR 0016). Guards, not tuning.
+    #:
+    #: 400 blocks and not 660: `MAX_PATCHES_PER_QUILT` is 660 in
+    #: `storage/blobs.py`, and a session that overran it would silently split
+    #: across two Quilts. Correct for a backfill, wrong for a thing that is
+    #: supposed to be one coherent context, so the session cap sits below the
+    #: storage cap rather than on it.
+    agent_session_max_blocks: int = Field(
+        default=400, validation_alias="AGENT_SESSION_MAX_BLOCKS", gt=0
+    )
+    #: Per block, and a block over it is refused rather than truncated: a
+    #: truncated scratchpad is one that silently lost the part the decision
+    #: turned on.
+    agent_session_max_bytes: int = Field(
+        default=2_000_000, validation_alias="AGENT_SESSION_MAX_BYTES", gt=0
+    )
+    #: Clamped by the grant's own expiry, never extending past it.
+    agent_session_ttl_secs: int = Field(
+        default=3600, validation_alias="AGENT_SESSION_TTL_SECS", gt=0
+    )
+
     #: Limits on fetching a page the person referred to. All three are guards rather
     #: than tuning: a body cap because Content-Length is a claim and not a fact, a
     #: redirect limit because the usual SSRF is a public URL that redirects to a

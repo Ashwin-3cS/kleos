@@ -93,6 +93,52 @@ def _hydrate(record: dict[str, Any]) -> StoredNode:
     )
 
 
+#: The session columns, listed once: three reads return the same shape and a
+#: column added to one and forgotten in another is a field that is silently
+#: always None.
+_SESSION_COLUMNS = (
+    "s.id AS id, s.owner_id AS owner_id, s.agent_id AS agent_id, "
+    "s.device_id AS device_id, s.grant_fp AS grant_fp, "
+    "s.opened_at_ms AS opened_at_ms, s.expires_at_ms AS expires_at_ms, "
+    "s.closed_at_ms AS closed_at_ms, s.block_count AS block_count, "
+    "s.byte_len AS byte_len, s.consolidated_into AS consolidated_into"
+)
+
+
+def _session_to_row(session) -> dict:
+    return {
+        "id": session.id,
+        "owner_id": session.owner_id,
+        "agent_id": session.agent_id,
+        "device_id": session.device_id,
+        "grant_fp": session.grant_fp,
+        "opened_at_ms": int(session.opened_at_ms),
+        "expires_at_ms": int(session.expires_at_ms),
+        "closed_at_ms": session.closed_at_ms,
+        "block_count": int(session.block_count),
+        "byte_len": int(session.byte_len),
+        "consolidated_into": list(session.consolidated_into),
+    }
+
+
+def _row_to_session(row: dict):
+    from .sessions import AgentSession
+
+    return AgentSession(
+        id=row["id"],
+        owner_id=row["owner_id"],
+        agent_id=row["agent_id"],
+        device_id=row["device_id"],
+        grant_fp=row["grant_fp"],
+        opened_at_ms=int(row["opened_at_ms"]),
+        expires_at_ms=int(row["expires_at_ms"] or 0),
+        closed_at_ms=None if row["closed_at_ms"] is None else int(row["closed_at_ms"]),
+        block_count=int(row["block_count"] or 0),
+        byte_len=int(row["byte_len"] or 0),
+        consolidated_into=list(row["consolidated_into"] or []),
+    )
+
+
 class Neo4jStore:
     def __init__(
         self,
@@ -620,6 +666,138 @@ class Neo4jStore:
             limit=int(limit),
         )
         return [row_to_entry(row) for row in rows]
+
+    # -- agent sessions -------------------------------------------------
+    #
+    # Beside the read log, and off `:Memory` for the same reason. A session holds
+    # an agent's working context; if it were retrievable as memory, one agent's
+    # scratchpad would surface in another agent's answers through the very check
+    # that is supposed to separate them. See `storage/sessions.py` and ADR 0016.
+
+    def append_session(self, session) -> None:
+        """Records an opened session. Raises if it cannot be written."""
+        self._run(
+            "CREATE (s:AgentSession) SET s = $row",
+            row=_session_to_row(session),
+        )
+
+    def get_session(self, owner_id: str, session_id: str):
+        """One session, scoped to its owner.
+
+        Owner-scoped in the match rather than checked afterwards: a session id
+        from another owner must not be an existence oracle, the same rule every
+        traversal here follows.
+        """
+        rows = self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id, id: $id}) "
+            f"RETURN {_SESSION_COLUMNS}",
+            owner_id=owner_id,
+            id=session_id,
+        )
+        return _row_to_session(rows[0]) if rows else None
+
+    def recent_sessions(self, owner_id: str, limit: int = 50) -> list:
+        rows = self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id}) "
+            f"RETURN {_SESSION_COLUMNS} "
+            "ORDER BY s.opened_at_ms DESC, s.id DESC LIMIT $limit",
+            owner_id=owner_id,
+            limit=int(limit),
+        )
+        return [_row_to_session(row) for row in rows]
+
+    def close_session(self, owner_id: str, session_id: str, at_ms: int) -> bool:
+        rows = self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id, id: $id}) "
+            "SET s.closed_at_ms = $at_ms RETURN s.id AS id",
+            owner_id=owner_id,
+            id=session_id,
+            at_ms=int(at_ms),
+        )
+        return bool(rows)
+
+    def bump_session_counters(
+        self, owner_id: str, session_id: str, blocks: int, bytes_: int
+    ) -> None:
+        """Advances the bounds counters in the database, not in Python.
+
+        A read-modify-write from the caller would lose an append whenever two
+        arrive at once, and the counters are what the caps are checked against.
+        """
+        self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id, id: $id}) "
+            "SET s.block_count = coalesce(s.block_count, 0) + $blocks, "
+            "    s.byte_len = coalesce(s.byte_len, 0) + $bytes",
+            owner_id=owner_id,
+            id=session_id,
+            blocks=int(blocks),
+            bytes=int(bytes_),
+        )
+
+    def set_session_consolidation(
+        self, owner_id: str, session_id: str, claim_ids: list[str]
+    ) -> None:
+        """Records which claims this session produced. Additive, never replacing:
+        a second consolidation of the same session adds to what the first found."""
+        self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id, id: $id}) "
+            "SET s.consolidated_into = coalesce(s.consolidated_into, []) + "
+            "  [x IN $ids WHERE NOT x IN coalesce(s.consolidated_into, [])]",
+            owner_id=owner_id,
+            id=session_id,
+            ids=list(claim_ids),
+        )
+
+    def append_session_block(self, owner_id: str, block) -> None:
+        """Records where one block landed. The bytes are in the blob store; this
+        is the index into it, and it holds no content of any kind."""
+        self._run(
+            "CREATE (b:SessionBlock) SET b = $row",
+            row={
+                "owner_id": owner_id,
+                "session_id": block.session_id,
+                "index": int(block.index),
+                "blob_id": block.blob_id,
+                "patch_id": block.patch_id,
+                "byte_len": int(block.byte_len),
+                "backend": block.backend,
+                "at_ms": int(block.at_ms),
+            },
+        )
+
+    def session_blocks(self, owner_id: str, session_id: str) -> list:
+        from .sessions import StoredBlock
+
+        rows = self._run(
+            "MATCH (b:SessionBlock {owner_id: $owner_id, session_id: $session_id}) "
+            "RETURN b.session_id AS session_id, b.index AS index, b.blob_id AS blob_id, "
+            "b.patch_id AS patch_id, b.byte_len AS byte_len, b.backend AS backend, "
+            "b.at_ms AS at_ms ORDER BY b.index ASC",
+            owner_id=owner_id,
+            session_id=session_id,
+        )
+        return [
+            StoredBlock(
+                session_id=row["session_id"],
+                index=int(row["index"]),
+                blob_id=row["blob_id"],
+                patch_id=row["patch_id"],
+                byte_len=int(row["byte_len"]),
+                backend=row["backend"],
+                at_ms=int(row["at_ms"]),
+            )
+            for row in rows
+        ]
+
+    def wipe_sessions(self, owner_id: str) -> None:
+        """For tests and an explicit owner request. Not a side effect of
+        re-ingesting, like the read log and for the same reason."""
+        self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id}) DELETE s", owner_id=owner_id
+        )
+        self._run(
+            "MATCH (b:SessionBlock {owner_id: $owner_id}) DELETE b", owner_id=owner_id
+        )
 
     def wipe_owner(self, owner_id: str) -> None:
         """Removes an owner's memory graph.
