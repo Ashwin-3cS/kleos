@@ -57,6 +57,8 @@ class NeighbourhoodState(TypedDict, total=False):
     seed_ids: list[str]
     grant_token: str
     scope: dict
+    #: Resolved alongside the scope, carried so the assembler can log it.
+    device_id: str
     hops: int
     candidates: list[dict]
     verdicts: dict[str, str | None]
@@ -96,8 +98,11 @@ def build_neighbourhood_graph(runtime: Runtime):
     def authorize(state: NeighbourhoodState) -> dict:
         if state.get("scope") and not state.get("grant_token"):
             raise ValueError("a grant_token is required; a caller-supplied scope is not trusted")
-        scope = runtime.gateway.introspect_scope(state["grant_token"])
-        return {"scope": scope.model_dump(mode="json")}
+        # The grant, not just the scope: the signing device is what makes the
+        # read log able to say *which* agent instance read this. ADR 0016.
+        resolved = runtime.gateway.introspect_grant(state["grant_token"])
+        scope = resolved.scope
+        return {"scope": scope.model_dump(mode="json"), "device_id": resolved.device_id}
 
     def walk(state: NeighbourhoodState) -> dict:
         """Permission-blind traversal, owner-constrained at every node."""
@@ -160,6 +165,7 @@ def build_neighbourhood_graph(runtime: Runtime):
             runtime,
             Scope.model_validate(state["scope"]),
             state["grant_token"],
+            device_id=state.get("device_id"),
             kind="neighbourhood",
             disclosed_ids=[nid for nid in walked if verdicts.get(nid) is None],
             denied=denials,

@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from orchestrator.enums import EntityKind, Sensitivity
+from orchestrator.gateway_client import ResolvedGrant
 from orchestrator.graphs.history import context_chain, why_did_this_shift
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.neighbourhood import neighbourhood
@@ -39,6 +40,25 @@ class _StubGateway:
 
     def introspect_scope(self, grant_token: str) -> Scope:
         return self._scopes[grant_token]
+
+    def introspect_grant(self, grant_token: str) -> ResolvedGrant:
+        """What the graphs actually call: the scope *and* the signing device.
+
+        A stub has to supply a device id, because every read now records which
+        one authorised it. Derived from the token so that two grants held by the
+        same agent label are two distinguishable devices -- which is the property
+        `agent_id` cannot give and the whole reason the device is carried.
+
+        Through the fingerprint and not the token itself: a device id goes into
+        every log row, and `test_the_grant_token_is_never_stored` is right to fail
+        a stub that smuggles a bearer credential in beside it.
+        """
+        return ResolvedGrant(
+            scope=self.introspect_scope(grant_token),
+            device_id=f"device-{grant_fingerprint(grant_token)[:12]}",
+            grant_fp=grant_fingerprint(grant_token),
+        )
+
 
     def adopt_session(self, token: str) -> None:
         pass
@@ -247,3 +267,70 @@ def test_a_long_question_is_truncated_not_stored_whole(runtime: Runtime) -> None
     subject = runtime.read_log.recent(OWNER)[0].subject
     assert len(subject) < len(question)
     assert subject.endswith("...")
+
+
+# -- which agent instance read it ---------------------------------------
+#
+# `agent_id` is a label the owner typed into the scope they signed. The device
+# key is what the gateway verified a signature against. Only the second can
+# answer "did device 1 or device 2 read this", which is the question a
+# multi-agent setup asks first. See ADR 0016.
+
+
+def test_an_entry_records_the_signing_device(runtime: Runtime) -> None:
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    entry = runtime.read_log.recent(OWNER)[0]
+    assert entry.device_id == f"device-{grant_fingerprint(TOKEN)[:12]}"
+    assert entry.agent_id == "agent-reader", "the label is kept, not replaced"
+
+
+def test_two_devices_under_one_label_stay_apart(runtime: Runtime) -> None:
+    """The collision `agent_id` permits by design must not reach the log. An
+    owner deciding which capability to stop issuing needs the two apart."""
+    second = "a-second-grant-for-the-same-agent"
+    runtime.gateway._scopes[second] = _scope("agent-reader")
+
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+    run_query(runtime, "what did we decide about the migration?", second)
+
+    by_device = {e.device_id for e in runtime.read_log.recent(OWNER)}
+    assert len(by_device) == 2, f"one device for two grants: {by_device}"
+    assert {e.agent_id for e in runtime.read_log.recent(OWNER)} == {"agent-reader"}
+
+
+def test_the_summary_names_the_device_per_grant(runtime: Runtime) -> None:
+    """Per grant rather than per read: one grant is signed by one device, so the
+    device is a property of the capability."""
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    grants = runtime.read_log.summary(OWNER)["grants"]
+    assert [g["device_id"] for g in grants] == [f"device-{grant_fingerprint(TOKEN)[:12]}"]
+
+
+def test_a_row_written_without_the_columns_reads_back_as_none(runtime: Runtime) -> None:
+    """Every entry written before ADR 0016 has no device, because there was none
+    to record. Reading those back must yield `None` -- an audit log that cannot
+    read its own history is worse than one with gaps, and a backfilled guess
+    would be indistinguishable from an authenticated id in every later row."""
+    runtime.store._run(
+        "CREATE (r:AgentRead) SET r = $row",
+        row={
+            "id": "read-legacy-1",
+            "owner_id": OWNER,
+            "agent_id": "agent-from-before",
+            "grant_fp": "deadbeef",
+            "kind": "query",
+            "disclosed_ids": ["x"],
+            "denied_json": "[]",
+            "considered": 1,
+            "subject": "legacy",
+            "at_ms": 1,
+        },
+    )
+
+    legacy = [e for e in runtime.read_log.recent(OWNER) if e.id == "read-legacy-1"]
+    assert len(legacy) == 1
+    assert legacy[0].device_id is None
+    assert legacy[0].session_id is None
+    assert legacy[0].agent_id == "agent-from-before"

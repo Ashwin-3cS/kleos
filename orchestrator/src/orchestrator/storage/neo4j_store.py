@@ -611,6 +611,7 @@ class Neo4jStore:
         rows = self._run(
             "MATCH (r:AgentRead {owner_id: $owner_id}) "
             "RETURN r.id AS id, r.owner_id AS owner_id, r.agent_id AS agent_id, "
+            "r.device_id AS device_id, r.session_id AS session_id, "
             "r.grant_fp AS grant_fp, r.kind AS kind, r.disclosed_ids AS disclosed_ids, "
             "r.denied_json AS denied_json, r.considered AS considered, "
             "r.subject AS subject, r.at_ms AS at_ms "

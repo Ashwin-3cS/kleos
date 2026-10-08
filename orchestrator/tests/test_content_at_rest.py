@@ -17,13 +17,14 @@ from __future__ import annotations
 import pytest
 
 from orchestrator.enums import EntityKind, Sensitivity
-from orchestrator.gateway_client import SealedContent
+from orchestrator.gateway_client import ResolvedGrant, SealedContent
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.query import run_query
 from orchestrator.graphs.runtime import Runtime
 from orchestrator.permissions import ObjectAcl, Scope
 from orchestrator.schema import Claim, EncryptedContentRef, Entity, Event, Provenance
 from orchestrator.storage.content import ContentCrypto, is_sealed, sealed_field_report
+from orchestrator.storage.reads import grant_fingerprint
 
 OWNER = "owner-at-rest"
 TOKEN = "grant-for-at-rest"
@@ -68,6 +69,25 @@ class _CountingSealGateway:
 
     def introspect_scope(self, grant_token: str) -> Scope:
         return self._scopes[grant_token]
+
+    def introspect_grant(self, grant_token: str) -> ResolvedGrant:
+        """What the graphs actually call: the scope *and* the signing device.
+
+        A stub has to supply a device id, because every read now records which
+        one authorised it. Derived from the token so that two grants held by the
+        same agent label are two distinguishable devices -- which is the property
+        `agent_id` cannot give and the whole reason the device is carried.
+
+        Through the fingerprint and not the token itself: a device id goes into
+        every log row, and `test_the_grant_token_is_never_stored` is right to fail
+        a stub that smuggles a bearer credential in beside it.
+        """
+        return ResolvedGrant(
+            scope=self.introspect_scope(grant_token),
+            device_id=f"device-{grant_fingerprint(grant_token)[:12]}",
+            grant_fp=grant_fingerprint(grant_token),
+        )
+
 
     def adopt_session(self, token: str) -> None:
         pass

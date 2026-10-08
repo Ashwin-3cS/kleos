@@ -23,11 +23,13 @@ import pytest
 
 from orchestrator.connectors import REGISTRY, ConnectorSpec
 from orchestrator.enums import ClaimStatus, EntityKind, Sensitivity
+from orchestrator.gateway_client import ResolvedGrant
 from orchestrator.graphs.history import context_chain, why_did_this_shift
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.runtime import Runtime
 from orchestrator.permissions import Scope
 from orchestrator.schema import Claim, RawRecord
+from orchestrator.storage.reads import grant_fingerprint
 
 OWNER = "owner-shift"
 INTRUDER = "owner-shift-other"
@@ -85,6 +87,25 @@ class _FakeGateway:
         if grant_token != "grant-ok":
             raise ValueError("grant is not active")
         return self.scope
+
+    def introspect_grant(self, grant_token: str) -> ResolvedGrant:
+        """What the graphs actually call: the scope *and* the signing device.
+
+        A stub has to supply a device id, because every read now records which
+        one authorised it. Derived from the token so that two grants held by the
+        same agent label are two distinguishable devices -- which is the property
+        `agent_id` cannot give and the whole reason the device is carried.
+
+        Through the fingerprint and not the token itself: a device id goes into
+        every log row, and `test_the_grant_token_is_never_stored` is right to fail
+        a stub that smuggles a bearer credential in beside it.
+        """
+        return ResolvedGrant(
+            scope=self.introspect_scope(grant_token),
+            device_id=f"device-{grant_fingerprint(grant_token)[:12]}",
+            grant_fp=grant_fingerprint(grant_token),
+        )
+
 
     def close(self) -> None:
         pass
