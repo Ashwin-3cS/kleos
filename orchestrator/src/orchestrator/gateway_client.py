@@ -9,15 +9,34 @@ Nothing else about the memory layer round-trips through Rust.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 
 import httpx
 
 from .permissions import Scope
 from .schema import EncryptedContentRef
+from .storage.reads import grant_fingerprint
 
 
 class GatewayError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedGrant:
+    """What a grant token resolves to: its scope, and who presented it.
+
+    Frozen, because this is the authority for a read and nothing downstream has
+    any business editing it.
+    """
+
+    scope: Scope
+    #: The registered device key that signed this grant. Authenticated.
+    device_id: str
+    #: Keyed hash of the token, for the read and mutation logs. The token itself
+    #: is never stored anywhere -- an audit log holding live bearer credentials is
+    #: a vulnerability wearing an accountability costume (ADR 0005).
+    grant_fp: str
 
 
 class SealedContent:
@@ -135,11 +154,36 @@ class GatewayClient:
             raise GatewayError("session is not active")
         return body["owner_id"]
 
-    def introspect_scope(self, grant_token: str) -> Scope:
+    def introspect_grant(self, grant_token: str) -> ResolvedGrant:
+        """Resolves a grant token to the scope **and the device that signed it**.
+
+        `Scope.agent_id` is a string the owner typed into a scope file before
+        running `kleos-device sign`; nothing authenticates it, so two agents handed
+        the same file are indistinguishable. The signing key is different: the
+        gateway looked it up in the owner's registered device keys and checked the
+        signature against it. So this is the one identity in an agent's request
+        that can be relied on, and it is what makes "device 1 decided this"
+        answerable. See ADR 0016.
+        """
         body = self._post("/memory/scope/introspect", {"grant_token": grant_token})
         if not body.get("active"):
             raise GatewayError("grant is not active")
-        return Scope.model_validate(body["scope"])
+        return ResolvedGrant(
+            scope=Scope.model_validate(body["scope"]),
+            # Absent only against a gateway older than ADR 0016. Empty rather than
+            # a guess: a fabricated device id would be indistinguishable from an
+            # authenticated one in every record that stores it.
+            device_id=body.get("key_id", ""),
+            grant_fp=grant_fingerprint(grant_token),
+        )
+
+    def introspect_scope(self, grant_token: str) -> Scope:
+        """The scope alone, for the read paths that do not record who asked.
+
+        Kept as a wrapper rather than replaced so that adding the device to one
+        read path is not a change to all four at once.
+        """
+        return self.introspect_grant(grant_token).scope
 
     def _get(self, path: str) -> dict:
         return self._unwrap(self._http.get(path))

@@ -93,6 +93,21 @@ pub struct ScopeIntrospectRequest {
 pub struct ScopeIntrospectResponse {
     pub active: bool,
     pub scope: Scope,
+    /// The registered device key whose signature was just checked.
+    ///
+    /// Deliberately here and not on [`Scope`]. The scope is the thing the device
+    /// *signs*, so a device id inside it would be self-asserted, and the verifier
+    /// would then have to cross-check it against the token's own key id -- two
+    /// sources of truth for one fact, with a forgery oracle in the gap. The
+    /// signing key is a property of the token, which is what this response is
+    /// about. It also keeps `Scope` shaped to become an on-chain grant object
+    /// verbatim, and a signer's key is not part of a grant object's contents
+    /// anywhere that signatures work.
+    ///
+    /// This is the only cryptographically authenticated identity in an agent's
+    /// request. `Scope.agent_id` is a label the owner typed before signing and
+    /// nothing checks it.
+    pub key_id: String,
 }
 
 /// Request the gateway sends to the enclave's `/oauth/exchange` route.
