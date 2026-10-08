@@ -1,4 +1,4 @@
-use crate::memory::{EntityKind, SourceId};
+use crate::memory::{EntityKind, MemoryKind, SourceId};
 use serde::{Deserialize, Serialize};
 
 /// How sensitive a piece of stored memory is. Ordered: a scope granting
@@ -44,10 +44,17 @@ pub struct ObjectAcl {
     pub denied_agents: Vec<String>,
 }
 
-/// A grant presented by a querying agent. The gateway mints and validates
-/// these (see `gateway/src/routes/memory.rs`); the orchestrator's query
-/// graph enforces them per candidate object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A grant presented by a querying agent. The owner's device signs these and
+/// the gateway verifies them (see `gateway/src/routes/memory.rs`); the
+/// orchestrator's query graph enforces them per candidate object.
+///
+/// `Default` is safe to reach for and is how a read-only scope is spelled:
+/// every list defaults empty and every capability flag defaults false, and
+/// empty denies everywhere here. So `Scope { agent_id, owner_id, sources,
+/// entity_kinds, ..Default::default() }` grants reads over those sources and
+/// nothing else -- and a field appended later cannot silently become granted in
+/// a caller that did not mention it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Scope {
     pub agent_id: String,
@@ -58,6 +65,54 @@ pub struct Scope {
     pub not_after_ms: Option<u64>,
     pub max_sensitivity: Sensitivity,
     pub expires_at_ms: Option<u64>,
+    // Everything below is appended, defaulted, and false or empty when absent.
+    //
+    // `serde(default)` is load-bearing rather than tidy: a grant is signed by a
+    // key the owner holds, and the signature covers the payload bytes as they
+    // were signed. Without a default, every grant issued before this change
+    // would fail to deserialize -- and there is no way to reissue one without
+    // the owner's device in hand. Defaulting means an old grant stays valid and
+    // stays read-only, which is the safe direction.
+    /// May this agent write into the owner's memory at all.
+    #[serde(default)]
+    pub may_write: bool,
+    /// May it turn a sealed body back into plaintext.
+    ///
+    /// A separate axis from `may_write` because the risks are different: one
+    /// changes the person's record, the other produces plaintext the operator
+    /// cannot otherwise read. The same split `ToolSpec` makes between
+    /// `writes_memory` and `reaches_network`, one layer up.
+    #[serde(default)]
+    pub may_unseal: bool,
+    /// May a claim this agent writes supersede one the owner wrote.
+    ///
+    /// Off by default, so an agent's claim *contradicts* the owner's rather
+    /// than replacing it -- the disagreement stays visible with neither side
+    /// overwritten. ADR 0014 established that a web page may never supersede
+    /// the person; an agent the owner explicitly granted this is a delegate
+    /// rather than a stranger, which is why precedence is a property of the
+    /// grant and not of the source.
+    #[serde(default)]
+    pub may_supersede_owner: bool,
+    /// Which sources this agent may write *as*.
+    ///
+    /// Deliberately not `sources`. Read scope and write scope are not one set:
+    /// an agent permitted to read `text` must not thereby be able to write a
+    /// claim that claims to be a typed note from the person.
+    #[serde(default)]
+    pub write_sources: Vec<SourceId>,
+    /// Which kinds of long-term memory this agent may read. Empty grants none
+    /// of them, like every other list here.
+    #[serde(default)]
+    pub memory_kinds: Vec<MemoryKind>,
+    /// May this agent ask the enclave to perform a sensitive action on the
+    /// owner's behalf. The agent never receives the credential -- it submits an
+    /// intent and receives an acknowledgement.
+    #[serde(default)]
+    pub may_act: bool,
+    /// Which actions, by id. Empty grants none.
+    #[serde(default)]
+    pub act_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,6 +125,11 @@ pub enum DenyReason {
     EntityKindNotInScope,
     OutsideTimeWindow,
     TooSensitive,
+    WriteNotPermitted,
+    WriteSourceNotInScope,
+    MemoryKindNotInScope,
+    UnsealNotPermitted,
+    ActionNotPermitted,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,6 +196,107 @@ pub fn permits(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> bool {
     evaluate(scope, acl, now_ms).is_allowed()
 }
 
+/// What an agent proposes to write: the ACL the object *would* carry.
+///
+/// A write cannot honestly share [`evaluate`]'s signature, because there is no
+/// [`ObjectAcl`] yet -- there is no object. So the asymmetry is in the type:
+/// reads evaluate `(scope, acl)`, writes evaluate `(scope, intent)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WriteIntent {
+    pub owner_id: String,
+    pub source: SourceId,
+    pub entity_kinds: Vec<EntityKind>,
+    pub sensitivity: Sensitivity,
+    pub memory_kind: Option<MemoryKind>,
+}
+
+/// Pure, total write check. Deny-by-default, like [`evaluate`].
+///
+/// A sibling function rather than a mode on [`evaluate`]. A mode parameter
+/// would mean every existing call site has to say "read", and the one that
+/// forgets gets whatever the default is -- a deny-by-default violation waiting
+/// for someone to add a fifth read path.
+pub fn evaluate_write(scope: &Scope, intent: &WriteIntent, now_ms: u64) -> PermissionDecision {
+    use PermissionDecision::{Allow, Deny};
+
+    if scope.owner_id != intent.owner_id {
+        return Deny(DenyReason::WrongOwner);
+    }
+    if let Some(expiry) = scope.expires_at_ms {
+        if now_ms >= expiry {
+            return Deny(DenyReason::GrantExpired);
+        }
+    }
+    if !scope.may_write {
+        return Deny(DenyReason::WriteNotPermitted);
+    }
+    if !scope.write_sources.contains(&intent.source) {
+        return Deny(DenyReason::WriteSourceNotInScope);
+    }
+    // `all` and empty-denies, exactly as the read check does: an agent writing
+    // a claim about a person and a project needs both kinds in scope.
+    if intent.entity_kinds.is_empty()
+        || !intent
+            .entity_kinds
+            .iter()
+            .all(|k| scope.entity_kinds.contains(k))
+    {
+        return Deny(DenyReason::EntityKindNotInScope);
+    }
+    // An agent must not write something it could not then read: a claim above
+    // its own ceiling would be invisible to the agent that asserted it, and
+    // would be a way to put material into the record that no grant accounts
+    // for.
+    if intent.sensitivity > scope.max_sensitivity {
+        return Deny(DenyReason::TooSensitive);
+    }
+    if let Some(kind) = intent.memory_kind {
+        if !scope.memory_kinds.contains(&kind) {
+            return Deny(DenyReason::MemoryKindNotInScope);
+        }
+        if intent.sensitivity < kind.sensitivity_floor() {
+            return Deny(DenyReason::TooSensitive);
+        }
+    }
+    Allow
+}
+
+pub fn permits_write(scope: &Scope, intent: &WriteIntent, now_ms: u64) -> bool {
+    evaluate_write(scope, intent, now_ms).is_allowed()
+}
+
+/// Whether this grant may turn a sealed body back into plaintext.
+///
+/// Separate from [`evaluate`] rather than folded into it: seeing a resolved
+/// claim and pulling the raw transcript it was derived from are different
+/// disclosures, and the body is the one the enclave exists for. The caller is
+/// expected to have passed [`permits`] on the object first -- this is the
+/// second gate, not a replacement for the first.
+pub fn evaluate_unseal(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> PermissionDecision {
+    match evaluate(scope, acl, now_ms) {
+        PermissionDecision::Allow if !scope.may_unseal => {
+            PermissionDecision::Deny(DenyReason::UnsealNotPermitted)
+        }
+        other => other,
+    }
+}
+
+/// Whether this grant may ask for one named action.
+pub fn evaluate_action(scope: &Scope, action_id: &str, now_ms: u64) -> PermissionDecision {
+    use PermissionDecision::{Allow, Deny};
+
+    if let Some(expiry) = scope.expires_at_ms {
+        if now_ms >= expiry {
+            return Deny(DenyReason::GrantExpired);
+        }
+    }
+    if !scope.may_act || !scope.act_actions.iter().any(|a| a == action_id) {
+        return Deny(DenyReason::ActionNotPermitted);
+    }
+    Allow
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,7 +326,268 @@ mod tests {
             not_after_ms: None,
             max_sensitivity: Sensitivity::Personal,
             expires_at_ms: None,
+            may_write: false,
+            may_unseal: false,
+            may_supersede_owner: false,
+            write_sources: vec![],
+            memory_kinds: vec![],
+            may_act: false,
+            act_actions: vec![],
         }
+    }
+
+    fn intent() -> WriteIntent {
+        WriteIntent {
+            owner_id: "owner-1".into(),
+            source: SourceId::parse("agent").expect("valid source id"),
+            entity_kinds: vec![EntityKind::Project],
+            sensitivity: Sensitivity::Personal,
+            memory_kind: Some(MemoryKind::Episodic),
+        }
+    }
+
+    /// Every capability is off in a default scope, and a default scope grants
+    /// nothing. This is the one test that fails if a field is appended with a
+    /// permissive default.
+    #[test]
+    fn a_default_scope_grants_nothing() {
+        let s = Scope::default();
+        assert!(!s.may_write);
+        assert!(!s.may_unseal);
+        assert!(!s.may_supersede_owner);
+        assert!(!s.may_act);
+        assert!(s.write_sources.is_empty());
+        assert!(s.memory_kinds.is_empty());
+        assert!(s.act_actions.is_empty());
+        assert!(!permits_write(&s, &intent(), 2_000));
+        assert!(!evaluate_unseal(&s, &acl(), 2_000).is_allowed());
+        assert!(!evaluate_action(&s, "anything", 2_000).is_allowed());
+    }
+
+    /// The property that matters most operationally: a grant signed before
+    /// these fields existed must still verify, and must be read-only. The
+    /// signature covers the bytes as signed, and there is no way to reissue a
+    /// grant without the owner's device.
+    #[test]
+    fn a_grant_signed_before_these_fields_existed_is_read_only() {
+        let json = r#"{
+            "agent_id": "agent-1",
+            "owner_id": "owner-1",
+            "sources": ["github"],
+            "entity_kinds": ["project"],
+            "not_before_ms": null,
+            "not_after_ms": null,
+            "max_sensitivity": "personal",
+            "expires_at_ms": null
+        }"#;
+        let old: Scope = serde_json::from_str(json).expect("an old grant must still parse");
+
+        assert!(permits(&old, &acl(), 2_000), "reads must keep working");
+        assert_eq!(
+            evaluate_write(&old, &intent(), 2_000),
+            PermissionDecision::Deny(DenyReason::WriteNotPermitted)
+        );
+        assert_eq!(
+            evaluate_unseal(&old, &acl(), 2_000),
+            PermissionDecision::Deny(DenyReason::UnsealNotPermitted)
+        );
+    }
+
+    #[test]
+    fn writing_needs_the_write_flag_and_the_write_source() {
+        let mut s = scope();
+        s.entity_kinds = vec![EntityKind::Project];
+        s.memory_kinds = vec![MemoryKind::Episodic];
+
+        assert_eq!(
+            evaluate_write(&s, &intent(), 2_000),
+            PermissionDecision::Deny(DenyReason::WriteNotPermitted)
+        );
+
+        s.may_write = true;
+        assert_eq!(
+            evaluate_write(&s, &intent(), 2_000),
+            PermissionDecision::Deny(DenyReason::WriteSourceNotInScope),
+            "may_write alone says nothing about what it may write as"
+        );
+
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+        assert!(permits_write(&s, &intent(), 2_000));
+    }
+
+    /// Read scope and write scope are not one set. An agent that may *read* the
+    /// person's typed notes must not thereby be able to write a claim that
+    /// claims to be one.
+    #[test]
+    fn read_scope_does_not_confer_write_scope() {
+        let mut s = scope();
+        s.may_write = true;
+        s.memory_kinds = vec![MemoryKind::Episodic];
+        s.sources = vec![SourceId::parse("text").unwrap()];
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+
+        let mut as_the_person = intent();
+        as_the_person.source = SourceId::parse("text").unwrap();
+
+        assert_eq!(
+            evaluate_write(&s, &as_the_person, 2_000),
+            PermissionDecision::Deny(DenyReason::WriteSourceNotInScope)
+        );
+    }
+
+    #[test]
+    fn a_kind_outside_the_scope_cannot_be_written() {
+        let mut s = scope();
+        s.may_write = true;
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+        s.memory_kinds = vec![MemoryKind::Episodic];
+
+        let mut procedural = intent();
+        procedural.memory_kind = Some(MemoryKind::Procedural);
+        assert_eq!(
+            evaluate_write(&s, &procedural, 2_000),
+            PermissionDecision::Deny(DenyReason::MemoryKindNotInScope)
+        );
+    }
+
+    /// A tacit claim is an inference about a person rather than something they
+    /// said. Labelling one may only narrow who can read it, so writing one
+    /// below its floor is refused rather than silently stored at the lower
+    /// sensitivity.
+    #[test]
+    fn a_tacit_claim_cannot_be_written_below_its_floor() {
+        let mut s = scope();
+        s.may_write = true;
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+        s.memory_kinds = vec![MemoryKind::Tacit];
+        s.max_sensitivity = Sensitivity::Confidential;
+
+        let mut tacit = intent();
+        tacit.memory_kind = Some(MemoryKind::Tacit);
+        tacit.sensitivity = Sensitivity::Personal;
+        assert_eq!(
+            evaluate_write(&s, &tacit, 2_000),
+            PermissionDecision::Deny(DenyReason::TooSensitive)
+        );
+
+        tacit.sensitivity = Sensitivity::Confidential;
+        assert!(permits_write(&s, &tacit, 2_000));
+    }
+
+    #[test]
+    fn no_kind_lowers_the_floor_below_personal() {
+        for kind in [
+            MemoryKind::Episodic,
+            MemoryKind::Procedural,
+            MemoryKind::Tacit,
+        ] {
+            assert!(kind.sensitivity_floor() >= Sensitivity::Personal);
+        }
+    }
+
+    /// An agent must not write something it could not then read: a claim above
+    /// its own ceiling would be invisible to the agent that asserted it.
+    #[test]
+    fn an_agent_cannot_write_above_its_own_ceiling() {
+        let mut s = scope();
+        s.may_write = true;
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+        s.memory_kinds = vec![MemoryKind::Episodic];
+
+        let mut restricted = intent();
+        restricted.sensitivity = Sensitivity::Restricted;
+        assert_eq!(
+            evaluate_write(&s, &restricted, 2_000),
+            PermissionDecision::Deny(DenyReason::TooSensitive)
+        );
+    }
+
+    /// Seeing a resolved claim and pulling the raw transcript it came from are
+    /// different disclosures.
+    #[test]
+    fn reading_an_object_does_not_confer_unsealing_it() {
+        let mut s = scope();
+        assert!(permits(&s, &acl(), 2_000));
+        assert_eq!(
+            evaluate_unseal(&s, &acl(), 2_000),
+            PermissionDecision::Deny(DenyReason::UnsealNotPermitted)
+        );
+
+        s.may_unseal = true;
+        assert!(evaluate_unseal(&s, &acl(), 2_000).is_allowed());
+    }
+
+    /// And the other direction: `may_unseal` is not a way around the read
+    /// check. An object the grant cannot see stays unseen, with the read
+    /// check's own reason rather than an unseal reason.
+    #[test]
+    fn may_unseal_does_not_bypass_the_read_check() {
+        let mut s = scope();
+        s.may_unseal = true;
+        s.sources = vec![];
+
+        assert_eq!(
+            evaluate_unseal(&s, &acl(), 2_000),
+            PermissionDecision::Deny(DenyReason::SourceNotInScope)
+        );
+    }
+
+    #[test]
+    fn an_action_must_be_named_in_the_grant() {
+        let mut s = scope();
+        assert_eq!(
+            evaluate_action(&s, "gmail.send", 2_000),
+            PermissionDecision::Deny(DenyReason::ActionNotPermitted)
+        );
+
+        s.may_act = true;
+        assert_eq!(
+            evaluate_action(&s, "gmail.send", 2_000),
+            PermissionDecision::Deny(DenyReason::ActionNotPermitted),
+            "may_act alone names no action"
+        );
+
+        s.act_actions = vec!["gmail.send".into()];
+        assert!(evaluate_action(&s, "gmail.send", 2_000).is_allowed());
+        assert!(
+            !evaluate_action(&s, "gmail.delete", 2_000).is_allowed(),
+            "one action granted is not every action granted"
+        );
+    }
+
+    #[test]
+    fn an_expired_grant_writes_and_acts_no_more_than_it_reads() {
+        let mut s = scope();
+        s.may_write = true;
+        s.may_act = true;
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+        s.memory_kinds = vec![MemoryKind::Episodic];
+        s.act_actions = vec!["gmail.send".into()];
+        s.expires_at_ms = Some(1_500);
+
+        assert_eq!(
+            evaluate_write(&s, &intent(), 2_000),
+            PermissionDecision::Deny(DenyReason::GrantExpired)
+        );
+        assert_eq!(
+            evaluate_action(&s, "gmail.send", 2_000),
+            PermissionDecision::Deny(DenyReason::GrantExpired)
+        );
+    }
+
+    #[test]
+    fn a_write_for_another_owner_is_refused() {
+        let mut s = scope();
+        s.may_write = true;
+        s.write_sources = vec![SourceId::parse("agent").unwrap()];
+        s.memory_kinds = vec![MemoryKind::Episodic];
+
+        let mut theirs = intent();
+        theirs.owner_id = "owner-2".into();
+        assert_eq!(
+            evaluate_write(&s, &theirs, 2_000),
+            PermissionDecision::Deny(DenyReason::WrongOwner)
+        );
     }
 
     #[test]
