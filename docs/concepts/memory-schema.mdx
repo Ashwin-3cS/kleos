@@ -1,0 +1,98 @@
+---
+title: "Memory schema"
+description: "Entities, events, claims, their facets, and the parity test that keeps Rust and Python identical."
+---
+
+The schema lives in `shared/src/memory.rs` and is mirrored field-for-field by
+`orchestrator/src/orchestrator/schema.py`.
+`orchestrator/tests/test_schema_parity.py` parses the Rust source and **fails if
+the two ever drift**, comparing field order positionally.
+
+<Warning>
+Any schema change must land in both languages, in the same commit, with fields
+appended in identical order.
+</Warning>
+
+## Node types
+
+<AccordionGroup>
+<Accordion title="Entity — a referent">
+A person, project, artifact, organization or topic referenced across sources.
+
+```rust
+pub struct Entity {
+    pub id: String,
+    pub owner_id: String,
+    pub kind: EntityKind,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub first_seen_at_ms: u64,
+    pub last_seen_at_ms: u64,
+    pub provenance: Provenance,
+    pub acl: ObjectAcl,
+}
+```
+
+Ids are content-addressed over the name, which is why "RAG" and "retrieval
+augmented generation" were once two permanently separate nodes — and why a
+canonicalisation step now runs between extraction and resolution. See
+[ADR 0015](/adr/0015-two-names-for-one-thing).
+</Accordion>
+<Accordion title="Event — an atomic ingested fact">
+Carries a `SourceRef`. Never rewritten; corrections arrive as new events.
+Optionally carries an `Affect` facet and an `EncryptedContentRef` in place of a
+body that was sealed inside the enclave.
+</Accordion>
+<Accordion title="Claim — the decisions layer">
+```rust
+pub struct Claim {
+    pub id: String,
+    pub owner_id: String,
+    pub statement: String,
+    pub subject_entity_ids: Vec<String>,
+    pub status: ClaimStatus,
+    pub supersedes: Vec<String>,
+    pub contradicts: Vec<String>,
+    pub reconciled_into: Option<String>,
+    pub commitment: Option<Commitment>,
+    pub asserted_at_ms: u64,
+    pub provenance: Provenance,
+    pub acl: ObjectAcl,
+}
+```
+</Accordion>
+</AccordionGroup>
+
+## Supporting types
+
+| Type | Purpose |
+| --- | --- |
+| `SourceRef` | `connector`, `external_id`, `url`, and **`occurred_at_ms` separate from `ingested_at_ms`** |
+| `Citation` | An event id, its source, and an optional quote |
+| `Provenance` | Citations, `derived_by` (which extractor build), advisory confidence, `created_at_ms` |
+| `Commitment` | A facet on `Claim`: who owes what to whom, by when, and whether it was settled |
+| `Affect` | A facet on `Event`: a closed-vocabulary register with an intensity and a sensitivity floor |
+| `EncryptedContentRef` | `key_id`, `scheme`, `blob_id`, `patch_id`, `byte_len` — what is stored in place of a sealed body |
+| `ObjectAcl` | The denormalised facts a permission check needs, with no further lookups |
+
+## Source ids stay open strings
+
+`SourceId::parse` accepts any `[a-z0-9_-]{1,64}` identifier. The enclave treats
+source ids as opaque, so **adding a connector never changes the measurement an
+attestation commits to**. The host-side registry of sources this build knows how
+to *fetch* is a different question, and lives outside the trust boundary.
+
+## Promoted columns
+
+Most of a node round-trips through an opaque `payload` JSON blob, so objects
+return to pydantic without a lossy column mapping. Three groups of fields are
+**promoted** out of it into indexed Neo4j properties, because a question has to
+be answerable without loading every payload:
+
+- `claim_status`
+- `commitment_fulfillment`, `commitment_due_at_ms`, `commitment_owed_by`,
+  `commitment_owed_to`
+- the ACL fields used for filtering
+
+"Which commitments are open and past due?" is then one indexed Cypher query
+rather than a scan that filters in Python.

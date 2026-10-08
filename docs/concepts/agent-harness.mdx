@@ -1,0 +1,123 @@
+---
+title: "The agent harness"
+description: "Several agents, one mutable record: instance identity, short-term sessions, and the three states of memory."
+---
+
+Kleos is built for more than one agent. Claude Code on one device and ChatGPT on
+another each hold their own context window and make their own decisions, and the
+record they share has to be able to say **which one decided what, and why**.
+
+<Info>
+This is the layer currently under construction. What is built is described
+below; what is not yet built is marked, and the honest list is on
+[Project status](/status).
+</Info>
+
+## Instance identity
+
+A decision is attributed to a triple:
+
+| Part | Where it comes from | Authenticated |
+| --- | --- | --- |
+| `agent_id` | the label the owner typed into the scope they signed | no |
+| `device_id` | the registered device key whose signature the gateway verified | **yes** |
+| `session_id` | minted by the orchestrator when a session opens | n/a — never supplied by the caller |
+
+The session id is minted rather than accepted because an agent-chosen id is an
+unauthenticated string two agents could collide on, by accident or on purpose,
+and attribution is the entire point.
+
+<Note>
+"Device 1 decided this" is answerable with cryptographic force. "Claude Code
+decided this" is answerable only as well as the owner labels their own devices —
+so anything Kleos renders about an agent carries an `identity_basis` of
+`device_key` or `label`.
+</Note>
+
+## Three states: stored, searchable, loaded
+
+The distinction the whole design rests on. They are different states, and only
+the first two are durable.
+
+| State | What it means here | Enforced by |
+| --- | --- | --- |
+| **Stored** | A session block is sealed and written as a Quilt patch. No embedding is computed. | `blobs.put`, and the absence of an `upsert` |
+| **Searchable** | In the vector index, reachable by retrieval and traversal. | the `:Memory` label plus an embedding — both only granted by `upsert` |
+| **Loaded** | What one inference actually sees. Assembled per call, permission-checked per object, never stored as an object. | the read log is its only durable trace |
+
+<Tip>
+The loaded state having no persistent representation is deliberate. A stored
+copy of every context window would be a second uncontrolled copy of the memory.
+</Tip>
+
+## Short-term memory: agent sessions
+
+`:AgentSession` holds identity and bounds; the blocks themselves are sealed
+blobs. A block is whatever the agent is working from — the turn it just took,
+what a tool returned, a scratchpad, the contents of a file it opened.
+
+<AccordionGroup>
+<Accordion title="A session carries no `:Memory` label, and that is the mechanism">
+The vector index and every traversal key on that label, so staying off it is
+what makes "a scratchpad is stored and not retrievable" a property rather than a
+convention. `:AgentRead` is off it for the same reason. One parametrised test
+covers every harness label at once — it is what fails when someone adds a
+convenient `SET n:Memory`.
+</Accordion>
+<Accordion title="A session cannot outlive the grant that opened it">
+Clamped, not refused: a grant with ten minutes left should still be usable for
+ten minutes. What it must not produce is a session surviving the capability that
+authorised it.
+</Accordion>
+<Accordion title="Bounds are guards, not tuning">
+400 blocks sits deliberately below `MAX_PATCHES_PER_QUILT` (660), so a session
+never silently splits across two Quilts — correct for a backfill, wrong for a
+thing that is supposed to be one coherent context.
+
+A block over the byte cap is **refused, not truncated**. A truncated scratchpad
+is one that silently lost the part the decision turned on, and the agent has no
+way to tell.
+</Accordion>
+<Accordion title="Appending is not writing to memory">
+`append_context` is deliberately **not** gated on a write-capable grant. It
+produces nothing searchable, nothing carrying an ACL, and nothing the resolver
+sees. The write gate is for the tool that mints a claim.
+</Accordion>
+</AccordionGroup>
+
+## Memory kinds
+
+Long-term memory is a hierarchy rather than a single pile:
+
+<CardGroup cols={3}>
+<Card title="Episodic" icon="clock-rotate-left">
+Distilled decisions, facts and insights — preferences, codebase conventions.
+</Card>
+<Card title="Procedural" icon="list-check">
+Reusable workflows: *how* a task is done.
+</Card>
+<Card title="Tacit" icon="lightbulb">
+Consolidated heuristics the person never stated outright.
+</Card>
+</CardGroup>
+
+Short-term is deliberately **not** a fourth kind. It is a different *state*, and
+making it a kind would put session scratchpads in the same index as consolidated
+facts — exactly the distinction the three states exist to draw.
+
+<Info>
+Memory kinds, write-capable grants, the mutation log, and the briefing read are
+designed and in progress. They are not yet in the shipped schema.
+</Info>
+
+## Why the record of reading is not memory
+
+If a briefing were itself memory, then agent B reading about agent A's decision
+would create a claim, which agent C's briefing would surface, which would create
+another — a record whose growth is a function of **how often it is read** rather
+than of what happened. Within a week the graph is mostly the system's commentary
+on itself, and the resolver is comparing agent-about-agent material against the
+person's actual decisions in the same subject neighbourhood.
+
+What prevents it is one mechanism, used uniformly: every node that records the
+harness's own activity stays off the `:Memory` label.

@@ -1,4 +1,7 @@
-# ADR 0005: Log what each grant actually disclosed
+---
+title: "ADR 0005: Log what each grant actually disclosed"
+description: "The product's claim is 'you can see exactly what an agent can see'."
+---
 
 **Status:** accepted
 **Date:** 2026-10-01

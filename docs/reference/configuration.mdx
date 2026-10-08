@@ -1,0 +1,81 @@
+---
+title: "Configuration"
+description: "Every environment variable, and the ones whose defaults are decisions."
+---
+
+`.env.example` at the repository root covers the whole stack;
+`orchestrator/.env.example` is the orchestrator's authoritative list.
+
+## Mode
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ORCHESTRATOR_MODE` | `mock` | `mock` needs no API keys and no cloud services |
+| `CONNECTOR_FIXTURES` | `auto` | `never` runs real connectors while extraction stays keyless |
+| `EXTRACTOR` | `auto` | `auto` \| `mock` \| `llm` |
+| `EMBEDDER` | `auto` | `auto` \| `fake` \| `real` |
+| `ENCLAVE_MODE` | `mock` | `nitro` on EC2. In `nitro` the gateway refuses the development default secret |
+
+## Services
+
+| Variable | Default |
+| --- | --- |
+| `ORCHESTRATOR_HOST` / `ORCHESTRATOR_PORT` | `127.0.0.1` / `8090` |
+| `GATEWAY_URL` | `http://127.0.0.1:8080` |
+| `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` / `NEO4J_DATABASE` | `bolt://127.0.0.1:7688` / `neo4j` / `kleosdev` / `neo4j` |
+| `REDIS_URL` / `INGESTION_QUEUE` | `redis://127.0.0.1:6380/0` / `kleos-ingestion` |
+
+## Retrieval
+
+| Variable | Default | Why this default |
+| --- | --- | --- |
+| `EMBEDDING_DIM` | `384` | bge-small-en-v1.5. Must match the Neo4j vector index, or a mismatch is caught at startup |
+| `SEMANTIC_WEIGHT` | `0.6` | weights are ratios and are normalised, so a score is always in `[0, 1]` |
+| `PROXIMITY_WEIGHT` | `0.25` | |
+| `RECENCY_WEIGHT` | `0.15` | |
+| `RECENCY_HALF_LIFE_DAYS` | `180` | **not 30**: in a resolved record an old decision stands until something supersedes it. The eval harness is what should move this |
+
+## Sources and tools
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ENABLED_SOURCES` | empty | empty means every registered connector. Narrowing is explicit |
+| `ENABLED_TOOLS` | empty | empty means every registered tool. Narrowing is how a deployment switches off outbound fetching |
+| `CHATGPT_EXPORT_DIR` | unset | unset means the connector fails **with the export instructions** — that error *is* the onboarding flow for this source |
+| `CHATGPT_SENSITIVE` | `true` | should stay true; see [the orchestrator](/architecture/orchestrator) |
+| `ENRICH_FROM_URLS` | `false` | off by default: it reaches the open web on the person's behalf, which should be an explicit choice rather than something a fresh checkout does |
+| `FETCH_TIMEOUT_SECS` / `FETCH_MAX_BYTES` / `FETCH_MAX_REDIRECTS` | `15` / `2000000` / `3` | guards, not tuning |
+
+## Agent sessions
+
+| Variable | Default | Why this default |
+| --- | --- | --- |
+| `AGENT_SESSION_MAX_BLOCKS` | `400` | deliberately **below** `MAX_PATCHES_PER_QUILT` (660), so a session never silently splits across two Quilts |
+| `AGENT_SESSION_MAX_BYTES` | `2000000` | per block; an over-cap block is refused rather than truncated |
+| `AGENT_SESSION_TTL_SECS` | `3600` | clamped by the grant's own expiry |
+
+## Storage at rest
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ENCRYPT_CONTENT_AT_REST` | `false` | Off by default because the smoke script and the eval run without a gateway. **A deployment holding real memory sets it.** With it on and the gateway down, ingestion fails rather than quietly writing plaintext |
+| `BLOB_STORE_DIR` | `.local/blobs` | These bytes arrive already encrypted, so this directory holds no plaintext — but it holds the **only** copy of a sensitive record's body. Back it up |
+| `WALRUS_PUBLISHER_URL` / `WALRUS_AGGREGATOR_URL` | unset | When set, sealed blobs go to Walrus. Still a stub: it **raises** rather than silently falling back to `BLOB_STORE_DIR` |
+| `SEALED_TOKEN_STORE_URL` | unset | Unset means an in-memory store, which silently forgets tokens on restart |
+
+## LLM, when `ORCHESTRATOR_MODE=live`
+
+| Variable | Default |
+| --- | --- |
+| `LLM_BASE_URL` | an OpenAI-compatible `/chat/completions` endpoint, so the vendor is a URL |
+| `EXTRACTION_MODEL` | |
+| `LLM_TIMEOUT_SECS` | `60` |
+| `LLM_API_KEY` / `LLM_API_KEY_FILE` | prefer the environment; the file is a fallback for a key beside the checkout, covered by `.gitignore` |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` |
+
+<Note>
+There is deliberately **no** `SEALED_TOKEN_STORE_URL` in the orchestrator's
+configuration. The gateway's sealed refresh tokens are Postgres rows the
+orchestrator must never read; giving Python credentials for that database would
+defeat the point of doing the code exchange inside the enclave.
+</Note>

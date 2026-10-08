@@ -1,4 +1,7 @@
-# ADR 0003: Recency is a real half-life, and ranking is configurable
+---
+title: "ADR 0003: Recency is a real half-life, and ranking is configurable"
+description: "`retrieval/ranking.py` scored candidates as `0.6 * semantic + 0.15 * recency + 0.25 * proximity`, with"
+---
 
 **Status:** accepted
 **Date:** 2026-10-01

@@ -1,0 +1,80 @@
+---
+title: "Kleos"
+description: "A personal memory layer for humans and AI agents: a resolved, timestamped record rather than a pile of searchable documents."
+---
+
+Kleos turns a person's sources into a **resolved record** — who decided what,
+when it changed, why, what it links to, who owes whom — instead of a pile of
+retrievable documents. The sensitive parts are encrypted inside a TEE (AWS Nitro
+Enclave) attested via NSM, so the operator holds ciphertext. Authorized agents
+query it over MCP under scoped grants, and every read is logged.
+
+Identity comes from stacked OAuth signals verified **inside the enclave**, not
+from a government ID.
+
+<Note>
+This documentation states what is built, what is mocked, and what has never run
+on real hardware. Where a claim has a limit, the limit is on the same page as
+the claim. [Project status](/status) is the single list.
+</Note>
+
+## The bet, and the measurement
+
+Everything here follows from one claim: that a resolved, timestamped record
+beats a pile of retrievable documents. That claim is measured rather than
+assumed.
+
+<CardGroup cols={2}>
+<Card title="Plain RAG answers with all three" icon="circle-question">
+Ask "which database did we pick" and plain retrieval returns every past
+decision with nothing to say which one holds. Nothing in the text of a
+superseded decision says it was superseded.
+</Card>
+<Card title="Resolution answers with one, and its history" icon="circle-check">
+The current claim, the chain that replaced the earlier ones, and the evidence
+that moved each decision — with citations.
+</Card>
+</CardGroup>
+
+| metric | resolved | resolved + history | plain RAG |
+| --- | --- | --- | --- |
+| recall | 87% | **100%** | 93% |
+| cited | 100% | 100% | 0% |
+| unmarked stale assertions | 0% | **0%** | 50% |
+| forbidden records returned | 33% | 33% | 50% |
+
+The useful part is where resolution *does not* help. The query graph alone
+retrieves **less** than the baseline (87% vs 93%) — the gain comes from marking
+superseded claims and from the supersession read, not from ranking. And graph
+proximity costs precision across projects. See [Evaluation](/guides/evaluation)
+for how to run it and why the absolute numbers are not quotable.
+
+## What this is part of
+
+The memory and permissions core of something larger: a voice-first personal
+assistant, with Kleos as the layer that remembers and decides who may read what.
+Privacy as a structural property rather than a promise — which means the
+boundaries are where the design lives.
+
+<CardGroup cols={3}>
+<Card title="Architecture" icon="sitemap" href="/architecture/overview">
+Enclave, gateway, orchestrator, and the trust boundary between them.
+</Card>
+<Card title="Permissions" icon="shield-halved" href="/concepts/permissions">
+Owner-signed grants, deny-by-default, and a check that is its own graph node.
+</Card>
+<Card title="Confidentiality" icon="lock" href="/concepts/confidentiality">
+Three different claims against three different adversaries, and which are true.
+</Card>
+</CardGroup>
+
+## Start here
+
+<CardGroup cols={2}>
+<Card title="Quickstart" icon="play" href="/quickstart">
+The whole stack in mock mode: no keys, no cloud, no EC2.
+</Card>
+<Card title="Connect an agent" icon="plug" href="/guides/connect-an-agent">
+Point Claude Code or any MCP client at a person's memory, under a grant.
+</Card>
+</CardGroup>

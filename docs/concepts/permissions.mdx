@@ -1,0 +1,122 @@
+---
+title: "Permissions"
+description: "Owner-signed grants, a pure deny-by-default check, and why it runs between retrieval and assembly."
+---
+
+An agent presents a **grant token**. The grant carries a `Scope`: which sources,
+which entity kinds, which time window, which maximum sensitivity, and an expiry.
+Every stored object carries an `ObjectAcl` with the denormalised facts needed to
+decide from `(scope, acl)` alone — which is what will make the identical
+evaluation possible on-chain later.
+
+## The check
+
+```rust
+pub fn evaluate(scope: &Scope, acl: &ObjectAcl, now_ms: u64) -> PermissionDecision
+```
+
+Pure, total, and **deny by default**: an empty `sources` or `entity_kinds` list
+grants nothing rather than everything.
+
+<AccordionGroup>
+<Accordion title="`all`, not `any`, on sources and entity kinds">
+An object derived from two sources is only visible to a scope covering **both**.
+The permissive reading would leak the un-granted source's contribution through a
+resolved statement.
+</Accordion>
+<Accordion title="Deny reasons are returned, not swallowed">
+`WrongOwner`, `GrantExpired`, `AgentRevoked`, `SourceNotInScope`,
+`EntityKindNotInScope`, `OutsideTimeWindow`, `TooSensitive`. A denial surfaces
+*as a denial with reasons* rather than as an empty result set.
+</Accordion>
+</AccordionGroup>
+
+## Where the check runs
+
+<Steps>
+<Step title="Retrieve, permission-blind">
+Retrieval does not know about the scope at all.
+</Step>
+<Step title="Check, in its own graph node">
+A separate node evaluates every candidate.
+</Step>
+<Step title="Assemble">
+The assembler only ever sees checked candidates.
+</Step>
+</Steps>
+
+That ordering is the design. It makes it **structurally impossible** for the
+assembler to see an unchecked candidate, and it makes a denial visible as a
+denial. Every read path — query, shift history, context chain, neighbourhood —
+has the same four-node shape for this reason.
+
+## The owner signs grants, not the gateway
+
+<Note>
+There is **no mint route**. [ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway)
+moved signing to a key the owner holds, so the gateway can verify a grant and
+cannot produce one. `POST /memory/scope/grant` is gone, and a test holds its
+absence.
+</Note>
+
+A grant is an Ed25519-signed token. The gateway looks up the signing `key_id`
+among the owner's registered device keys, verifies the signature, and binds
+`scope.owner_id` to that key — a registered key cannot sign for another owner.
+
+Three signing keys for sessions, grants and OAuth state are derived from one
+root secret via HMAC-SHA256 over a versioned label. One root rather than three
+secrets, because three environment variables let an operator paste the same
+value into all of them and never know. In `nitro` mode the gateway refuses to
+start on the public development default. See
+[ADR 0004](/adr/0004-derive-per-purpose-signing-keys-from-one-root).
+
+## Two identities, one of them authenticated
+
+| Field | What it is | Trust |
+| --- | --- | --- |
+| `Scope.agent_id` | A label the owner typed into the scope before signing | **None.** Two agents handed the same scope file are indistinguishable |
+| The signing `key_id` | The registered device key whose signature the gateway verified | Authenticated |
+
+Grant introspection returns both, and anything Kleos renders about an agent's
+identity carries an `identity_basis` of `device_key` or `label` so a reader
+knows which they are looking at. This is the same discipline as the
+`MOCK_SEAL_V1:` prefix: the weaker thing says so in band.
+
+## Revocation, honestly
+
+<Warning>
+**A grant cannot be revoked before it expires.** There is no revocation list.
+</Warning>
+
+What exists instead:
+
+- **Per object**, via `ObjectAcl.denied_agents` — keyed on the unauthenticated
+  `agent_id`, so it is a convenience rather than a control.
+- **Wholesale**, by revoking the device key: that invalidates every grant the
+  key ever signed, immediately.
+- **Short TTLs**, which is the operational answer until a revocation list exists.
+- **The read log**, which is the evidence layer underneath one. An owner cannot
+  withdraw a live grant, but can see exactly what it has been shown.
+
+## The read log
+
+`:AgentRead` records what was **returned, not what was asked** — a request log
+answers the wrong question.
+
+<CardGroup cols={2}>
+<Card title="Denials are recorded too" icon="ban">
+One declined query is a misconfigured grant. Two hundred is an agent mapping a
+memory it cannot read. Only the second is visible, and only if denials are
+recorded.
+</Card>
+<Card title="The grant is fingerprinted, never stored" icon="fingerprint">
+A keyed hash, domain-separated. An audit log holding live bearer credentials is a
+vulnerability wearing an accountability costume.
+</Card>
+</CardGroup>
+
+Entries carry **no `:Memory` label**. The vector index and every traversal key on
+that label, so a log entry retrievable as memory would disclose other agents'
+reads through the very check it audits. Reading the log needs an **owner
+session**, not a grant, and there is no MCP tool for it. See
+[ADR 0005](/adr/0005-log-what-each-grant-disclosed).

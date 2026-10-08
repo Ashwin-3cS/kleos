@@ -1,0 +1,112 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Kleos",
+  "description": "A personal memory layer for humans and AI agents. Resolved, timestamped, permissioned, and sealed inside a TEE.",
+  "colors": {
+    "primary": "#0F766E",
+    "light": "#2DD4BF",
+    "dark": "#0B3B38"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting started",
+            "pages": [
+              "index",
+              "quickstart",
+              "status"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/resolved-record",
+              "concepts/memory-schema",
+              "concepts/permissions",
+              "concepts/agent-harness",
+              "concepts/confidentiality"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/enclave",
+              "architecture/gateway",
+              "architecture/orchestrator",
+              "architecture/storage",
+              "architecture/vsock"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/local-development",
+              "guides/connect-an-agent",
+              "guides/grants-and-devices",
+              "guides/evaluation",
+              "guides/deploy-nitro"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/http-api",
+              "reference/mcp-tools",
+              "reference/cli",
+              "reference/configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Decisions",
+        "groups": [
+          {
+            "group": "Architecture decision records",
+            "pages": [
+              "decisions/index",
+              "adr/0001-record-architecture-decisions",
+              "adr/0002-persist-sealed-ciphertext-in-a-blob-store",
+              "adr/0003-recency-is-a-real-half-life-and-ranking-is-configurable",
+              "adr/0004-derive-per-purpose-signing-keys-from-one-root",
+              "adr/0005-log-what-each-grant-disclosed",
+              "adr/0006-measure-the-central-bet-before-building-on-it",
+              "adr/0007-measure-disclosure-not-only-recall",
+              "adr/0008-store-sealed-bodies-as-quilt-patches",
+              "adr/0009-affect-as-a-closed-vocabulary-that-raises-the-floor",
+              "adr/0010-encrypt-the-resolved-record-at-rest",
+              "adr/0011-the-owner-signs-grants-not-the-gateway",
+              "adr/0012-embed-locally-with-a-real-model",
+              "adr/0013-a-push-path-for-what-the-person-says",
+              "adr/0014-following-what-the-person-referred-to",
+              "adr/0015-two-names-for-one-thing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Architecture decisions",
+        "href": "https://github.com/Ashwin-3cS/kleos/tree/main/docs/adr"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Ashwin-3cS/kleos"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Ashwin-3cS/kleos"
+    }
+  }
+}

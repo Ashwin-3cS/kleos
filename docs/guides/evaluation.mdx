@@ -1,0 +1,94 @@
+---
+title: "Evaluation"
+description: "Does a resolved record beat plain retrieval? The harness that answers it, and what it found."
+---
+
+`eval/` answers the question the rest of the service is a bet on. A labelled
+synthetic corpus, a plain-RAG baseline held equal on everything except
+resolution, and a harness that prints a verdict and **exits non-zero if the bet
+does not pay**.
+
+```bash
+.venv/bin/python -m orchestrator.eval          # the report
+.venv/bin/python -m orchestrator.eval --json   # machine-readable
+```
+
+## Three systems, not two
+
+| System | What it is |
+| --- | --- |
+| `resolved` | the query graph alone — the like-for-like retrieval comparison |
+| `resolved+history` | plus the supersession read — what the product can actually answer with |
+| `plain-rag` | the baseline |
+
+Reporting only the second would be a rigged comparison; only the first would
+under-measure the design.
+
+## The result
+
+34 records, 6 labelled questions, `top_k=5`:
+
+| metric | resolved | resolved+history | plain-rag |
+| --- | --- | --- | --- |
+| recall | 87% | **100%** | 93% |
+| cited | 100% | 100% | 0% |
+| unmarked stale assertions | 0% | **0%** | 50% |
+| forbidden records returned | 33% | 33% | 50% |
+
+And the three things worth knowing, two of which are losses:
+
+<AccordionGroup>
+<Accordion title="The win is correctness about what is current, not retrieval">
+Plain RAG answers "which database does Lantern use" with all three decisions and
+nothing to say which one holds, because nothing in the text of a superseded
+decision says it was superseded. That is structural; no embedder fixes it.
+</Accordion>
+<Accordion title="The query graph alone retrieves LESS than the baseline">
+87% vs 93%. The gain comes from the supersession read and from marking
+superseded claims, **not** from ranking. Worth knowing before anyone tunes
+weights.
+</Accordion>
+<Accordion title="Graph proximity costs precision across projects">
+Both Harbour questions return a record that is a wrong answer, under every
+system.
+</Accordion>
+</AccordionGroup>
+
+<Warning>
+**The numbers are not quotable.** Both systems run on the same embeddings, which
+is the right control — embedding quality held identical, so the delta isolates
+resolution — and a poor absolute measurement. The report says so itself. Re-run
+and compare deltas when the embedder changes.
+</Warning>
+
+## Disclosure is measured, not only recall
+
+`forbidden records returned` is in that table on purpose. A retrieval system
+measured only on recall is rewarded for returning more, and "returned a record
+this grant should never have seen" has to cost something or the metric pushes
+the wrong way. See
+[ADR 0007](/adr/0007-measure-disclosure-not-only-recall).
+
+## The harness found a product defect
+
+The repository promised that "why did this shift" returns the citations present
+in the superseder and absent from the claim it replaced. Cross-source references
+were attached to the *event* and not the claim, so the read reached one hop short
+of evidence that was in the database all along.
+
+"What changed and why" scored 60%. With references propagated onto the claim,
+100%.
+
+<Note>
+**No test caught it because every test asserted the mechanism rather than the
+outcome.** This is why the roadmap's exit tests are measurements rather than
+passing suites. See
+[ADR 0006](/adr/0006-measure-the-central-bet-before-building-on-it).
+</Note>
+
+## It needs no enclave
+
+The corpus has no sensitive records, so nothing crosses the trust boundary.
+Standing up the Rust stack to measure retrieval quality would make the exit test
+harder to run than it needs to be, and the gateway round trip is already proven
+by `scripts/orchestrator_smoke.sh`.

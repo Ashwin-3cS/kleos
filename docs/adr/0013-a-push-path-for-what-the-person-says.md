@@ -1,4 +1,7 @@
-# ADR 0013: A push path for what the person says
+---
+title: "ADR 0013: A push path for what the person says"
+description: "Every source in this service is a **pull**."
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

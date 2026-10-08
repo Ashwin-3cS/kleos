@@ -11,6 +11,11 @@ in the same repo so the memory schema can be kept in lockstep with
 `shared/src/memory.rs` (see `tests/test_schema_parity.py`, which parses the
 Rust source and fails if the two drift).
 
+The rendered documentation for all of this -- including the graphs, the
+permission model and the MCP surface -- is the Mintlify site in `docs/`. This
+file stays the contributor's view of the service: what each module is, and why
+it is shaped the way it is.
+
 ## What runs where
 
 ```

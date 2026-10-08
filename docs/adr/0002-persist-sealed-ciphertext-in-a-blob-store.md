@@ -1,4 +1,7 @@
-# ADR 0002: Persist sealed ciphertext in a content-addressed blob store
+---
+title: "ADR 0002: Persist sealed ciphertext in a content-addressed blob store"
+description: "`EncryptedContentRef` has carried a `blob_id: Option<String>` since the schema was written, documented as 'the eventual Walrus blob; until Walrus is wired the ciphertext is carried"
+---
 
 **Status:** accepted
 **Date:** 2026-10-01

@@ -1,0 +1,100 @@
+---
+title: "The confidentiality model"
+description: "Three claims against three adversaries. They are not equally true, and this is the honest version."
+---
+
+"Encrypted, and the user owns it" is three different claims against three
+different adversaries.
+
+## 1. Confidential from the storage provider — delivered
+
+Raw sensitive source content is sealed inside the enclave before it is written
+anywhere, and OAuth refresh tokens are sealed inside the enclave before the
+gateway persists them. Whoever runs the disk holds ciphertext.
+
+<Warning>
+In mock mode "sealed" means `MOCK_SEAL_V1:`, a reversible keystream XOR. It is
+obfuscation, not encryption, and it is labelled as such in the scheme id, the
+blob prefix, and every response field that carries it.
+
+What is real today is the **custody path**: the plaintext exists only inside the
+enclave, so when real Seal lands the invariant already holds and nothing outside
+the TEE has to change.
+</Warning>
+
+Sealed bodies are durable but **not yet retrievable**: the gateway exposes
+`POST /memory/seal/decrypt` and `LocalQuiltStore.get` is implemented, but nothing
+converts a stored `EncryptedContentRef` into a `BlobRef`, so the read path has no
+callers. See [Storage](/architecture/storage).
+
+## 2. Confidential from other users and other agents — delivered
+
+Via query-time permissions: every object carries an `ObjectAcl`, every query
+carries a grant resolving to an authoritative `Scope`, and the check is pure,
+total, deny-by-default, and runs between retrieval and assembly. Since there is
+no revocation list, what backs this up is the read log.
+
+## 3. Confidential from the operator — partly
+
+<CardGroup cols={2}>
+<Card title="Raw source content: yes" icon="circle-check">
+The operator never holds a plaintext refresh token. The authorization code is
+exchanged inside the enclave, the refresh token is sealed before the response
+crosses back over VSOCK, and the gateway persists ciphertext it has no key for.
+The access token is used inside the enclave to identify the account and then
+dropped — never returned to the host at all. Only the enclave has the OAuth
+client secret, so the host cannot repeat the exchange itself.
+</Card>
+<Card title="Derived memory: no" icon="circle-xmark">
+Extraction runs in the Python orchestrator, outside the enclave, and in `live`
+mode it sends record text to an external LLM. Entities, events, claims, their
+text and their embeddings are written to Neo4j **in the clear**. An operator
+with database access reads the resolved memory.
+</Card>
+</CardGroup>
+
+<Warning>
+That second column is a **real gap, not a technicality**: for many purposes the
+resolved record is the more sensitive artifact.
+
+It is a deliberate trade. Moving extraction into the enclave would mean putting
+an LLM call and the ingestion pipeline inside the thing being attested, which
+destroys the auditability that makes the attestation worth anything. Closing it
+properly needs a different answer — client-side extraction, or an attested model
+endpoint — and until that exists **the product should not claim the operator
+cannot read your memory. It can. What it cannot read is your mailbox.**
+</Warning>
+
+`ENCRYPT_CONTENT_AT_REST` narrows this: an event's summary and body, a claim's
+statement, an entity's name and aliases, and a citation's quote are sealed at
+rest, while structure — ids, timestamps, edges, ACL fields, claim status — stays
+in the clear so the structural reads keep working. Embeddings do too, until a
+later stage. See [ADR 0010](/adr/0010-encrypt-the-resolved-record-at-rest).
+
+## Where a plaintext refresh token exists
+
+This is the invariant the connect flow is built around, and it is checkable.
+
+| Step | Plaintext refresh token present? |
+| --- | --- |
+| `GET /auth/authorize` builds the consent URL | no token exists yet |
+| Provider redirects to `/auth/callback?code=...` | no — a code is not a token |
+| Gateway validates state, forwards the code to the enclave | no |
+| **Enclave calls the provider's token endpoint** | **yes — inside the TEE, and only here** |
+| Enclave verifies the account with the access token | yes (in-TEE) |
+| Enclave seals the refresh token, drops the access token | leaves the TEE as ciphertext |
+| Gateway decodes base64, writes bytes to Postgres | no |
+| Orchestrator, Neo4j, logs, API responses | no — and no code path exposes it |
+
+`gateway/tests/oauth_flow_tests.rs` runs a real enclave router in-process,
+drives the real callback, and **searches the bytes that actually landed in the
+store** for the mock plaintext. `gateway/tests/postgres_store_tests.rs` does the
+same against real Postgres.
+
+## The load-bearing gap
+
+<Warning>
+`nitro` mode has never run on real Nitro hardware. Everything above describes a
+custody design that is unit-tested and structurally verified, and whose
+hardware-backed form has never executed. See [Project status](/status).
+</Warning>

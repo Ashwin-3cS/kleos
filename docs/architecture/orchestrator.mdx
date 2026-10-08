@@ -1,0 +1,157 @@
+---
+title: "The orchestrator"
+description: "Everything agentic, outside the trust boundary: LangGraph for control flow, LlamaIndex for retrieval."
+---
+
+The Python orchestration service: ingestion pipelines, entity and decision
+resolution, retrieval, answer assembly. It runs **outside** the enclave, calls
+the gateway for the few operations that must be attested or owner-authorised, and
+never itself becomes part of the trust boundary.
+
+It is not part of the cargo workspace. It lives in the same repository so the
+memory schema can be kept in lockstep with `shared/src/memory.rs`.
+
+## Division of labour
+
+<CardGroup cols={2}>
+<Card title="LangGraph owns control flow" icon="diagram-project">
+Both graphs are `StateGraph`s with a checkpointer, not single-turn chains:
+ingestion is bursty, each node is individually retryable, and the approval gate
+later phases need is a node insertion rather than a rewrite.
+</Card>
+<Card title="LlamaIndex owns retrieval" icon="magnifying-glass">
+`retrieval/index.py` exposes a real `BaseRetriever`, so anything in LlamaIndex
+that consumes one works over Kleos memory.
+</Card>
+</CardGroup>
+
+Retrieval is **not** a plain vector retriever: hybrid scoring — semantic,
+recency and graph proximity — runs inside `_retrieve`, because proximity needs
+the graph store rather than just the vector index. Chunking is *dispatched* here
+but **declared by each connector**, since how a record splits is a property of
+the source's shape.
+
+## The graphs
+
+```
+ingestion   fetch -> extract -> [enrich] -> canonicalise -> resolve -> encrypt -> write
+query       authorize -> retrieve -> permission-check -> assemble / decline
+history     authorize -> walk -> permission-check -> assemble
+neighbourhood  authorize -> walk -> permission-check -> assemble
+```
+
+`enrich` sits behind a conditional edge and runs only when a record body
+contains a URL. `canonicalise` sits **before** `resolve` deliberately: merging
+entities after resolution would leave the graph tidy, the record wrong, and
+nothing failing. See [ADR 0015](/adr/0015-two-names-for-one-thing).
+
+<Note>
+The only point in the pipeline that crosses the trust boundary is `encrypt`. If
+the gateway is unreachable, the sensitive record is **not written** — there is no
+fallback that stores a sensitive body in the clear.
+</Note>
+
+## Ranking
+
+| Signal | Default weight |
+| --- | --- |
+| semantic | 0.6 |
+| graph proximity | 0.25 |
+| recency | 0.15 |
+
+Recency is a real half-life, defaulting to **180 days rather than 30**: in a
+resolved record an old decision stands until something supersedes it, and
+`supersedes` carries that signal, not the clock. Weights are configurable so the
+eval harness can move them. See
+[ADR 0003](/adr/0003-recency-is-a-real-half-life-and-ranking-is-configurable).
+
+## Connectors
+
+`connectors/registry.py` maps a source id to a `ConnectorSpec`, where a
+connector declares everything the rest of the service needs: its id, display
+name, whether it needs OAuth and with which scopes, how its records chunk, and
+optionally a fixture stand-in for mock mode.
+
+Adding a source is **one module plus one registration** — no change to
+`enums.py`, to retrieval, to the graphs, or to anything in Rust. A test registers
+a connector that exists only inside that test file and ingests from it end to
+end, which is the property the test exists to hold.
+
+<AccordionGroup>
+<Accordion title="chatgpt — a file-import connector, and that is the point">
+There is **no ChatGPT conversation-history API**. The only route to a person's
+conversations is their own export (Settings → Data controls → Export data), so
+this is a file-import connector — the first source that does not fit the shape
+Google and GitHub established, registering with no change to the registry, the
+schema, retrieval, or anything in Rust.
+
+**One record per conversation, not per message.** `mapping` is a tree, not a
+list — regenerating a response forks it — so a transcript is the walk from the
+root taking the last child at each branch, which is the version the person kept.
+A per-message record would cut a decision away from the reasoning that produced
+it, strand pronouns with no referent, and bury the graph under thousands of
+"thanks" events.
+
+`since_ms` filters on **last activity**, not start time: a months-old thread
+replied to yesterday is new information.
+
+Records are marked `sensitive` by default. A ChatGPT history is an
+undifferentiated stream of medical, legal, financial and work questions with no
+reliable signal distinguishing them, and the two errors are not symmetric — a
+needless seal costs one gateway round trip, a missed one writes the transcript
+into Neo4j in the clear.
+</Accordion>
+<Accordion title="text and voice — push-only sources">
+They have a `ConnectorSpec` because everything downstream needs one: the source
+id is what every `ObjectAcl` carries and what every grant scope is written
+against. What they do not have is a working `fetch` — it raises, pointing at
+`POST /remember`.
+
+Two sources rather than one with a flag, because "read what I wrote down, not
+what I said out loud in my kitchen" is a real distinction and `permits()` can
+express it for free only if the ids differ. See
+[ADR 0013](/adr/0013-a-push-path-for-what-the-person-says).
+</Accordion>
+<Accordion title="google and github — registered, and raising">
+Registered with their real metadata, so what is missing is the `fetch` body and
+a way to get credentials. They raise in mock mode too, since fixtures are
+declared per connector rather than substituted for every source.
+</Accordion>
+</AccordionGroup>
+
+## The tool layer
+
+`ToolSpec` and `ToolRegistry` are shaped like the connector registry
+deliberately — a second plugin pattern with different semantics would be a
+second thing to keep correct. Two differences are decisions:
+
+- **Every tool returns a `ToolResult` rather than raising.** A tool failing is
+  an ordinary outcome, and whatever drives tools has to record the attempt
+  either way. Raising would make "tried and failed" indistinguishable from
+  "never tried".
+- **`writes_memory` and `reaches_network` are declared per tool.** "Which tools
+  can write" and "which reach outward" are the questions an audit asks first,
+  and they should be answerable from the registry rather than by reading code.
+
+`fetch_url` is the first thing in the service that aims at a target someone else
+chose, and it is guarded accordingly: addresses are judged **after** DNS
+resolution (a blocklist on the name is worthless — the attacker controls their
+own DNS, and `127.0.0.1.nip.io` is an ordinary public name that resolves to
+loopback), every address a name answers with is checked, link-local is called out
+separately because `169.254.169.254` is where an SSRF becomes credential theft,
+every redirect hop is validated, the body is capped **while streaming** because
+`Content-Length` is a claim and not a fact, content types are allow-listed, and
+ports are restricted to 80 and 443.
+
+<Warning>
+Two things deliberately not done, recorded so they are decisions rather than
+oversights: **DNS rebinding is not solved**, and **robots.txt is not consulted**
+— this fetches one page a person just said they read, on their explicit
+instruction; it is not a crawler. If it ever discovers its own URLs, that
+calculation changes. See [ADR 0014](/adr/0014-following-what-the-person-referred-to).
+</Warning>
+
+`extract_page` uses a **different prompt, not a different model**: pointing the
+activity prompt at a reference page produces "the author decided that RAG will
+use a vector store" — a claim attributed to nobody, about a decision nobody made,
+now in a person's memory as though they had made it.

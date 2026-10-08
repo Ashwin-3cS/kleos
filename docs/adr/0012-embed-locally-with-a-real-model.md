@@ -1,4 +1,7 @@
-# ADR 0012: Embed locally, with a real model
+---
+title: "ADR 0012: Embed locally, with a real model"
+description: "Every retrieval number this project has ever reported came from `HashedTokenEmbedder` — a bag-of-tokens projection into a fixed-width unit vector."
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

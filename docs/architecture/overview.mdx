@@ -1,0 +1,128 @@
+---
+title: "Architecture overview"
+description: "Three processes, one trust boundary, and the two reads that are the product."
+---
+
+```
+gateway (Axum, host, TCP)
+  - OAuth redirect flow: authorize URL (PKCE + signed state) + callback
+  - Persists per-owner SEALED refresh tokens (ciphertext only) in Postgres
+  - Verifies owner-signed agent grants; introspects owner sessions
+  - Three signing keys derived from one root: session, grant, oauth_state
+  - Proxies all sensitive work to the enclave over VSOCK
+        |
+        v
+enclave (Axum, inside Nitro Enclave)        <- core trust boundary
+  - Verifies OAuth tokens itself, against the provider, inside the TEE
+  - Exchanges OAuth authorization codes itself, and seals the refresh
+    token before it leaves; holds the only copy of the client secret
+  - Computes trust tier from stacked signals
+  - NSM attestation over the result
+  - Seal-encrypts raw sensitive content before it leaves the TEE
+        |
+        v
+storage: Postgres (sealed refresh tokens), blob store (sealed bodies)
+```
+
+Alongside, and **outside** the trust boundary:
+
+```
+orchestrator/ (Python: LangGraph + LlamaIndex)
+  - ingestion graph: fetch -> extract -> [enrich] -> canonicalise -> resolve
+                     -> encrypt -> write
+  - query graph:     authorize -> retrieve -> permission-check -> assemble/decline
+  - history reads:   authorize -> walk -> permission-check -> assemble
+  - calls the gateway only to seal raw content, resolve agent grants,
+    and resolve an owner session for the read log
+        |
+        v
+Neo4j: entities, events, claims, their edges, one vector index over all
+       three (:Memory), the agent read log (:AgentRead) and agent sessions
+       (:AgentSession) -- deliberately NOT :Memory, so neither can ever be
+       retrieved as memory
+Redis: RQ ingestion jobs
+```
+
+## The two things that are the product
+
+<CardGroup cols={2}>
+<Card title="What an agent can see" icon="eye">
+Every read is permission-checked in its own graph node, after a
+permission-blind walk.
+</Card>
+<Card title="What it did see" icon="clipboard-list">
+Every read is logged with the grant that made it and the device that signed it.
+</Card>
+</CardGroup>
+
+## Invariants
+
+These hold across every component. A change that weakens one is a change to the
+architecture, not an implementation detail.
+
+- `permits()` stays pure, total and deny-by-default; a multi-source ACL requires
+  **all** its sources in scope.
+- Retrieval stays permission-blind, and the permission check stays its own graph
+  node between retrieval and assembly.
+- Traversals stay owner-constrained at **every node on the path**, not just at
+  the endpoints.
+- The withhold-vs-drop asymmetry between the history reads and the neighbourhood
+  read stays intact.
+- Raw audio is never stored by default, and no real personal data goes into
+  fixtures, logs or commits.
+- The documentation says what is mocked, stubbed, or never run on real hardware.
+
+## Why verification happens in the enclave, not the gateway
+
+The NSM attestation only means something if the thing it attests actually
+happened inside the TEE. If the gateway verified an OAuth token and told the
+enclave "trust me, this checked out", the attestation would cover nothing of
+value.
+
+So `enclave/src/routes/identity.rs` calls the provider's verification endpoints
+itself, and only then produces the attestation. The same reasoning puts the OAuth
+**code exchange** in the enclave: a refresh token is not an ordinary app secret,
+it is standing, renewable access to the user's mailbox.
+
+## The Rust/Python split
+
+The enclave's surface grew by exactly two things since the scaffold:
+`POST /seal/{encrypt,decrypt}` and `POST /oauth/exchange`. The attestation is
+only meaningful if what it measures is small enough to audit, so nothing agentic
+— no LLM calls, no retrieval, no ingestion logic — went in.
+
+The gateway's surface is deliberately three things: proxying enclave-touching
+operations, owner-authenticated permission gating, and receiving the OAuth
+redirect, which it cannot avoid because a browser cannot reach the enclave.
+
+<Note>
+There is no second implementation of retrieval or ranking in Rust, on purpose.
+`GET /memory/timeline` is gone — it was a placeholder for retrieval, which is
+Python's. And `enclave/src/services/memory.rs` is gone, because it implied the
+enclave ingests, which it does not and should not.
+</Note>
+
+## Where this is going
+
+The memory core is one layer of a voice-first assistant: room nodes with
+**hardware** mute switches, a local-first hub, and a privacy gateway that is the
+only thing allowed to talk to an external model.
+
+Two things in that design are the whole point. The mute switch is hardware,
+because a software mute is a promise and a cut wire is a property. And the
+privacy gateway is a chokepoint, because "we only send the minimum" is checkable
+only if there is exactly one place that can send anything.
+
+Built in dependency order, where **each step's exit test is a measurement, not a
+passing suite**:
+
+| | Step | Exit test |
+| --- | --- | --- |
+| 0 | Harden the core; measure whether a resolved record beats plain retrieval | a number comparing the two — **done** |
+| 1 | Voice prototype, cloud-first: one room, one node | 20-turn conversation with p50/p95 per stage; mute switch verified to stop capture |
+| 2 | Privacy gateway, and answering from memory | correct cited answer; outbound log shows only redacted minimal context; `local_only` makes zero external calls |
+| 3 | Voice becomes memory: speaker ID, transcripts, consolidation | eval does not regress; guest speech provably never stored; deletion removes derived claims too |
+| 4 | Local-first hub, and the extraction decision | common requests work offline; the local-vs-frontier gap measured and recorded in an ADR |
+| 5 | Multi-room, multi-user, real sources | two-person household leak test; real Gmail flows end to end with the host never holding a refresh token |
+| 6 | Actions and agent safety: tool risk tiers, revocation list | red-team suite passes; revoking a grant takes effect immediately |
+| 7 | Production hardening and closed beta | security review findings resolved or accepted in writing |

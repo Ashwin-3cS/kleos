@@ -1,0 +1,111 @@
+---
+title: "Local development"
+description: "Mock mode, the three real services, and upgrading a pre-rename checkout."
+---
+
+## Mock mode, per axis
+
+`ORCHESTRATOR_MODE=mock` is the default and needs no API keys. Three overrides
+narrow it per axis, each `auto` by default:
+
+| Variable | Values | Why it exists |
+| --- | --- | --- |
+| `CONNECTOR_FIXTURES` | `auto` \| `never` | `never` runs the real connectors while extraction and embedding stay keyless — how to check a parser against your own export without an LLM key |
+| `EXTRACTOR` | `auto` \| `mock` \| `llm` | |
+| `EMBEDDER` | `auto` \| `fake` \| `real` | |
+
+## The three services
+
+```bash
+./scripts/services.sh up       # start, wait until each is answering
+./scripts/services.sh status
+./scripts/services.sh down     # stop and remove (volumes survive)
+./scripts/services.sh reset    # down, then delete the volumes too
+```
+
+Ports: Neo4j `7688` (bolt) and `7475` (browser), Redis `6380`, Postgres `5435` —
+all non-default, so they do not collide with anything already running.
+
+<Warning>
+The suite **skips** rather than fails when Neo4j is unreachable, so starting
+pytest too early looks exactly like everything passing. `services.sh up` waits
+for every port before returning, which is what makes
+`services.sh up && pytest` honest.
+</Warning>
+
+`CONTAINER_CLI=podman` works.
+
+## Upgrading a pre-rename checkout
+
+Identifiers used to say `memorai`. The Neo4j constraint and index names and the
+two Postgres tables are migrated automatically — the Neo4j migration creates the
+new names and then drops the old ones, and the Postgres migration renames in
+place, preserving every row.
+
+Local containers cannot be migrated by the repository: the Neo4j password lives
+inside its own data directory and the Postgres role was fixed when the volume was
+initialised. `services.sh` detects a pre-rename set and refuses to start rather
+than failing later as an authentication error against a database that looks
+healthy.
+
+<Tabs>
+<Tab title="Migrate in place (no data lost)">
+```bash
+for n in neo4j redis postgres; do docker rename memorai-$n kleos-$n; done
+
+docker exec kleos-neo4j cypher-shell -u neo4j -p memoraidev \
+  "ALTER CURRENT USER SET PASSWORD FROM 'memoraidev' TO 'kleosdev'"
+
+docker exec kleos-postgres psql -U memorai -d memorai \
+  -c "CREATE ROLE kleos LOGIN SUPERUSER PASSWORD 'kleosdev'" \
+  -c "CREATE DATABASE kleos OWNER kleos"
+
+docker restart kleos-neo4j
+```
+
+The restart matters: Neo4j keeps failed-authentication state, so attempts made
+with the old password leave a lockout window that looks exactly like a wrong
+password — and a suite run during it **skips rather than fails**.
+
+The volumes keep their old names, which is cosmetic: a container only uses a
+volume name when it is first created.
+</Tab>
+<Tab title="Start clean">
+```bash
+docker rm -f memorai-neo4j memorai-redis memorai-postgres
+docker volume rm memorai-neo4j-data memorai-postgres-data
+./scripts/services.sh up
+```
+
+Only if the contents are expendable. Neo4j rebuilds by re-ingesting, and the
+token rows are mock consents.
+</Tab>
+</Tabs>
+
+## Running the pieces by hand
+
+```bash
+.venv/bin/python -m orchestrator.api            # FastAPI on :8090
+.venv/bin/python -m orchestrator.jobs.worker    # RQ worker
+.venv/bin/python -m orchestrator.mcp_server     # MCP server over stdio
+```
+
+## The explorer
+
+`GET /explorer` serves one self-contained HTML page — no build step, no npm, no
+CDN, a hand-rolled force layout. Paste a grant token and a node id (or ask a
+question and pick a seed from the answer's citations) and it draws the
+**permission-filtered** neighbourhood.
+
+It is served by the orchestrator because it reads localhost-only data under a
+grant token typed into it; there is nowhere external it could be hosted without
+moving both off the machine.
+
+<Note>
+**What it shows:** exactly what the pasted grant can see.
+**What it does not:** objects the grant denies. Those are not drawn, not greyed
+out, and not placeheld — but when any exist the page says so in a banner, with
+the count of hidden nodes and dropped edges and the deny reasons. A filtered
+subgraph rendered as if it were the whole graph is the one lie the tool must not
+tell.
+</Note>

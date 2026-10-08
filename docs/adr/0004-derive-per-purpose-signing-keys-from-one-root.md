@@ -1,4 +1,7 @@
-# ADR 0004: Derive per-purpose signing keys from one root secret
+---
+title: "ADR 0004: Derive per-purpose signing keys from one root secret"
+description: "The gateway signs three unrelated things:"
+---
 
 **Status:** accepted
 **Date:** 2026-10-01

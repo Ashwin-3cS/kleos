@@ -1,0 +1,122 @@
+---
+title: "Project status"
+description: "What exists, what is mocked, what is stubbed, and what has never run on real hardware."
+---
+
+The repository's rule is that documentation says what is mocked, stubbed, or
+never run on real hardware. This page is that list.
+
+## What exists
+
+<CardGroup cols={2}>
+<Card title="Enclave and gateway" icon="server">
+OAuth verification and code exchange inside the TEE, NSM attestation, sealed
+refresh-token store, owner-signed grant verification, device key registry.
+</Card>
+<Card title="The resolved memory layer" icon="diagram-project">
+Ingestion and query graphs, Neo4j-backed hybrid retrieval, query-time
+permissions, supersession and citation reads, the graph neighbourhood, a
+read-only explorer.
+</Card>
+<Card title="The agent read log" icon="clipboard-list">
+What each grant actually disclosed, owner-readable only, with the signing
+device recorded.
+</Card>
+<Card title="Agent sessions" icon="layer-group">
+Short-term working context, stored sealed and deliberately not searchable until
+consolidated.
+</Card>
+<Card title="MCP server" icon="plug">
+Six read and session tools over stdio.
+</Card>
+<Card title="One real connector" icon="file-import">
+ChatGPT, via the person's own data export. It ingests real data today.
+</Card>
+</CardGroup>
+
+## What does not exist
+
+No web app, no SDK, no smart contracts. Google and GitHub have consent and a
+sealed refresh-token store but no `fetch` yet.
+
+## Mocked
+
+<AccordionGroup>
+<Accordion title="Seal encryption is a reversible XOR in mock mode">
+`enclave/src/services/seal.rs` has a deliberately fake implementation whose
+output is prefixed `MOCK_SEAL_V1:` and whose scheme id says so. It is
+obfuscation, not encryption, and it is labelled as such in the scheme id, the
+blob prefix and every response field that carries it.
+
+What is real today is the **custody path**: the plaintext exists only inside the
+enclave, so when real Seal lands the invariant already holds and nothing outside
+the TEE has to change.
+</Accordion>
+<Accordion title="Attestation documents are prefixed MOCK_ATTESTATION_">
+So a mock document can never be mistaken for a real one.
+</Accordion>
+<Accordion title="OAuth providers short-circuit in mock mode">
+Pass a token of the form `mock_google_<subject>` or `mock_github_<login>` and
+the provider deterministically returns that identity, instead of dialing a
+tunnel that does not exist locally.
+</Accordion>
+<Accordion title="Mock mode is per source, not global">
+A connector gets fixture data only if its spec declares a `mock_factory`. The
+Google and GitHub stubs raise in both modes. This replaced a short-circuit that
+returned mock fixtures for *every* source, which made a half-built connector
+look like it worked.
+</Accordion>
+</AccordionGroup>
+
+## Stubs
+
+These have real signatures and typed returns. They raise `NotImplementedError`
+with the reason rather than failing silently.
+
+| Stub | What is missing |
+| --- | --- |
+| **Walrus reads/writes** | `WalrusQuiltStore` has `LocalQuiltStore`'s interface and raises. It does **not** fall back to local disk: a deployment that believes it writes to Walrus and actually writes to the orchestrator's disk has a confidentiality bug, not a performance one. |
+| **The blob read path** | The gateway *does* expose `POST /memory/seal/decrypt`, and `LocalQuiltStore.get` is implemented and owner-partitioned. What is missing is the middle: nothing converts a stored `EncryptedContentRef` into a `BlobRef`, so `get` has no callers. |
+| **Google and GitHub connectors** | Consent, code exchange and the sealed per-owner refresh-token store exist. Nothing yet *uses* a stored token to fetch. The missing half is a design question: how Python obtains usable credentials without the host ever holding the refresh token. |
+| **Real Seal** | Needs a key-server committee and an on-chain owner policy object. |
+| **`VoyageEmbedder`** | Needs an API key and an `EMBEDDING_DIM` matching that model, which must also match the Neo4j vector index. |
+| **Wallet and domain identity signals** | Reject explicitly rather than pretending to work. Trust tiers 3 and 4 are unreachable. |
+| **Anything on-chain** | Grants are signed JWTs. `Scope` is shaped to become an on-chain grant object verbatim. |
+
+`extraction/llm.py` is **not** a stub: it is wired and works the moment an API
+key is set and `ORCHESTRATOR_MODE=live`. It has not been run against the live
+API from this repository.
+
+## Never run on real hardware
+
+<Warning>
+**`nitro` mode has never executed on a real Nitro Enclave.** This is the
+load-bearing gap under every confidentiality claim in this documentation.
+
+The `.eif` has not been built either: the Dockerfile needs the stagex image
+cache, which is not present on the development machine. It is structurally
+verified — `cargo build --release --no-default-features --features nitro -p enclave`
+compiles cleanly, including the pinned `aws-nitro-enclaves-nsm-api` git
+dependency — but compiling is not handshaking with Google.
+</Warning>
+
+A bug found while writing this down: until recently the enclave dialled
+`http://127.0.0.1:<port>` — plaintext HTTP — into a tunnel that landed on port
+443. A TLS listener cannot answer a plaintext request, so **no outbound enclave
+call could ever have succeeded in `nitro` mode**. It went unnoticed because
+`nitro` mode had never been run and `mock` mode short-circuits before the
+network. Fixed and unit-tested; still unproven on hardware.
+
+## Known sharp edges
+
+- **A grant cannot be revoked before it expires**, except per-object via
+  `ObjectAcl.denied_agents` and wholesale by revoking the device key that signed
+  it. There is no revocation list. Keep grant TTLs short.
+- **Pending PKCE verifiers live in gateway process memory**, so a restart
+  invalidates in-flight consents and a multi-instance gateway needs shared
+  state.
+- **`SEALED_TOKEN_STORE_URL` unset means an in-memory store.** Correct for mock
+  mode; it silently forgets tokens on restart.
+- **`POST /ingest` and `POST /remember` are unauthenticated** and take
+  `owner_id` from the request body. The orchestrator binds to localhost, and
+  that is currently the only control.

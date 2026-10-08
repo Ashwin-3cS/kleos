@@ -1,0 +1,97 @@
+---
+title: "The enclave"
+description: "What runs inside the TEE, why it is exactly this much, and the identity path end to end."
+---
+
+The enclave is the trust boundary. Everything inside it is small enough to audit,
+because the attestation is only worth what its measurement is worth.
+
+## Its entire surface
+
+| Route | Purpose |
+| --- | --- |
+| `POST /identity/verify` | verify an OAuth token against the provider, compute a trust tier, attest the result |
+| `POST /oauth/exchange` | exchange an authorization code and seal the refresh token before it leaves |
+| `POST /seal/encrypt` | seal raw content under the owner's key |
+| `POST /seal/decrypt` | unseal **record content** — never a refresh token |
+| `POST /attest` | an NSM attestation document |
+| `GET /health` | liveness |
+
+<Note>
+Two of those — the seal pair and the code exchange — are the only additions
+since the scaffold. Code exchange qualifies on the same test as sealing: it is
+small, it is the point at which a long-lived credential comes into existence,
+and there is nowhere else it can happen without breaking the confidentiality
+claim.
+</Note>
+
+## The identity path
+
+<Steps>
+<Step title="A client presents a token to the gateway">
+`POST /identity/verify`. This is the direct path, for a token obtained
+elsewhere; the real consent flow is `GET /auth/authorize` →
+`GET /auth/callback`.
+</Step>
+<Step title="The gateway forwards it over VSOCK">
+Via its VSOCK-bridged TCP client. The gateway inspects nothing.
+</Step>
+<Step title="The enclave calls the provider itself">
+Through an outbound VSOCK tunnel, with **TLS terminated inside the enclave**.
+</Step>
+<Step title="It computes a trust tier from the signals present">
+Google alone = 1, + GitHub = 2, + wallet = 3, + domain = 4. Wallet and domain
+are stubs that **reject explicitly** rather than pretending to work, so tiers 3
+and 4 are unreachable today.
+</Step>
+<Step title="It produces an NSM attestation over the result">
+In mock mode the document is prefixed `MOCK_ATTESTATION_`, so it can never be
+mistaken for a real one.
+</Step>
+<Step title="The gateway returns it unmodified">
+`{ identity, attestation }`.
+</Step>
+</Steps>
+
+Nothing is persisted by that path. What *is* persisted is the sealed refresh
+token from the consent flow, and sealed record bodies from ingestion — both
+ciphertext the host has no key for.
+
+## Upstream hostnames are compile-time constants
+
+<Warning>
+The enclave's environment is supplied by the host. A host-settable endpoint
+would let the operator repoint the OAuth client secret at a server it controls.
+</Warning>
+
+So the upstreams live in `enclave/src/services/http.rs` as constants rather than
+configuration, and that table must agree with `enclave/run.sh` and
+`scripts/parent_forwarder.sh`. See [VSOCK and socat](/architecture/vsock).
+
+## Sealing
+
+In `mock` mode the seal is a deliberately fake, reversible keystream XOR whose
+output is prefixed `MOCK_SEAL_V1:` and whose scheme id says so. Real Seal needs a
+key-server committee and an on-chain owner policy object, and is a documented
+stub.
+
+<Note>
+One identifier inside the seal still says `memorai`: the domain separator in the
+mock key derivation. It is an input to a key, not a name. Renaming it would be a
+key rotation wearing a rename's clothes — existing ciphertext would stay on disk
+with a `key_id` that no longer matches, and every unseal would fail as though
+the blob belonged to another owner. A real rotation gets a v2 and a path that
+reads both.
+</Note>
+
+## Mock mode
+
+The `enclave` crate's default feature is `mock`: it binds `127.0.0.1:4000`
+directly — no socat, no VSOCK — and its OAuth providers short-circuit
+verification. Pass `mock_google_<subject>` or `mock_github_<login>` and the
+provider deterministically returns that identity.
+
+<Warning>
+`nitro` mode has never run on real Nitro hardware, and the `.eif` has never been
+built. See [Project status](/status).
+</Warning>

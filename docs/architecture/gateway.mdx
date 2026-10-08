@@ -1,0 +1,105 @@
+---
+title: "The gateway"
+description: "The host-side process: three jobs, no signing key for grants, and no path to a plaintext refresh token."
+---
+
+The gateway runs on the host — which is to say, it runs where the operator is.
+Its surface is deliberately three things:
+
+1. proxying enclave-touching operations,
+2. owner-authenticated permission gating,
+3. receiving the OAuth redirect, which it cannot avoid because a browser cannot
+   reach the enclave.
+
+## Routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /auth/authorize` | build the provider consent URL (PKCE + signed, expiring state) |
+| `GET /auth/callback` | validate state, have the enclave exchange the code, persist the sealed refresh token, issue the owner session |
+| `POST /auth/session` | verify identity via the enclave, issue an owner session JWT |
+| `POST /auth/session/introspect` | resolve an owner session to its owner id |
+| `POST /identity/verify` | the direct identity path |
+| `POST /memory/seal/encrypt` | seal raw content in the enclave, under the session's owner |
+| `POST /memory/seal/decrypt` | unseal record content for an owner about to be shown it |
+| `POST /auth/device/register` | register a device public key for the authenticated owner |
+| `GET /auth/device/keys` | list the owner's device keys, including revoked ones |
+| `POST /auth/device/revoke` | revoke one device key, and with it every grant it signed |
+| `POST /memory/scope/introspect` | resolve a grant token to the authoritative scope, and name the device that signed it |
+
+<Note>
+`/auth/session/introspect` is the mirror of `/memory/scope/introspect` and exists
+for the same reason: the orchestrator holds no signing key, so anything it must
+authenticate it has to ask the gateway about. It was added for the read log —
+the first **owner**-authenticated thing the orchestrator serves.
+</Note>
+
+## No mint route
+
+There is no route that mints a grant, and a test holds its absence. The owner's
+device signs scopes; the gateway verifies them. See
+[ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway) and
+[Grants and devices](/guides/grants-and-devices).
+
+## Keys
+
+Three independent signing keys — session, grant, oauth_state — derived from one
+root secret with HMAC-SHA256 over a versioned label. Each token states its own
+`typ` and is rejected when presented as another.
+
+<Note>
+That used to hold only because the three claim shapes happened to be disjoint
+and serde rejects a missing field — an accident of the structs rather than a
+defence, which one `#[serde(default)]` would have undone.
+</Note>
+
+In `nitro` mode the gateway **refuses to start** on the public development
+default secret.
+
+## What the gateway never holds
+
+- **A plaintext refresh token.** The code exchange happens in the enclave and
+  the token is sealed before the response crosses back. The gateway writes
+  ciphertext it has no key for.
+- **The OAuth client secret.** Only the enclave has it, so the host cannot
+  repeat an exchange itself.
+- **An access token.** Used inside the enclave to identify the account, then
+  dropped. A host holding one could read the mailbox for its lifetime.
+- **A grant signing key.** It has none.
+
+## Device keys
+
+A device is a holder of an Ed25519 private key used to sign grants.
+
+```rust
+pub struct DeviceKey {
+    pub owner_id: String,
+    pub key_id: String,          // Blake2b over a domain tag and the public key
+    pub public_key: Vec<u8>,
+    pub label: String,           // display only, never trusted
+    pub registered_at_ms: i64,
+    pub revoked_at_ms: Option<i64>,
+}
+```
+
+`get` is deliberately cross-owner so the verifier can report an owner mismatch
+rather than a missing key; registration refuses material already registered to
+another owner, because the key id is derived from the public key and the same
+material claiming two identities is not something to resolve later.
+
+<Warning>
+Device registration is authorised by an owner session, which is still
+**host-signed** — so this route is where the design's remaining weakness lives,
+and it is deliberately loud about it. A host that forges a session can register a
+key of its own; what it cannot do is that invisibly, because the row is
+timestamped and `GET /auth/device/keys` shows it to the owner.
+</Warning>
+
+## Known gaps
+
+- Pending PKCE verifiers live in **process memory**, so a restart invalidates
+  in-flight consents and a multi-instance gateway needs shared state. This is
+  why the verifier is not stuffed into the state token instead: anyone who could
+  observe the redirect could then complete the flow.
+- `SEALED_TOKEN_STORE_URL` unset means an in-memory store — correct for mock
+  mode, and it silently forgets tokens on restart.

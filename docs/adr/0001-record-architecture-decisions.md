@@ -1,4 +1,7 @@
-# ADR 0001: Record architecture decisions
+---
+title: "ADR 0001: Record architecture decisions"
+description: "Until now this repo's reasoning lived in two READMEs and in commit messages."
+---
 
 **Status:** accepted
 **Date:** 2026-10-01

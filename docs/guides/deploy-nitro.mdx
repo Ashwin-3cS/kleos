@@ -1,0 +1,69 @@
+---
+title: "Deploy to Nitro"
+description: "The EC2 path — and the fact that it has never been run."
+---
+
+<Warning>
+**This path has never been executed.** `nitro` mode has never run on real Nitro
+hardware, and the `.eif` has never been built: the Dockerfile needs the stagex
+image cache, which is not present on the development machine.
+
+What *is* verified: `cargo build --release --no-default-features --features nitro -p enclave`
+compiles cleanly standalone, including resolving the pinned
+`aws-nitro-enclaves-nsm-api` git dependency. Compiling is not handshaking.
+</Warning>
+
+## The steps
+
+```bash
+cargo build --release --no-default-features --features nitro -p enclave
+./scripts/build_enclave.sh      # stagex/docker build -> enclave/out/*.eif
+./scripts/deploy.sh             # ships .eif + gateway binary to DEPLOY_HOST
+```
+
+On the parent instance:
+
+```bash
+nitro-cli run-enclave --cpu-count 2 --memory 4096 \
+  --eif-path kleos-enclave.eif --enclave-cid 16
+./parent_forwarder.sh &
+ENCLAVE_MODE=nitro ./kleos-gateway
+```
+
+## The build
+
+`enclave/Dockerfile` is a stagex-based multi-stage build producing a
+**reproducible** `.eif` via `eif_build`. It needs the stagex image cache and a
+network-reachable cargo registry.
+
+## What must agree
+
+Four places carry the VSOCK port table, and all four must match or an outbound
+call lands on the wrong upstream:
+
+1. the `Upstream` constants in `enclave/src/services/http.rs`
+2. `enclave/run.sh`
+3. `scripts/parent_forwarder.sh`
+4. the table in [VSOCK and socat](/architecture/vsock)
+
+## What changes in `nitro` mode
+
+| | `mock` | `nitro` |
+| --- | --- | --- |
+| Transport | binds `127.0.0.1:4000` directly | socat bridges VSOCK↔TCP |
+| OAuth verification | short-circuits on `mock_*` tokens | real HTTPS, TLS terminated in-TEE |
+| Attestation | prefixed `MOCK_ATTESTATION_` | NSM document |
+| Seal | reversible XOR, prefixed `MOCK_SEAL_V1:` | documented stub — real Seal needs a key-server committee |
+| Gateway secret | development default accepted | **refuses to start** on the public default |
+
+<Note>
+Real Seal is still a stub even in `nitro` mode. The custody path is what is
+real: plaintext exists only inside the enclave, so when Seal lands the invariant
+already holds and nothing outside the TEE has to change.
+</Note>
+
+## Before trusting this in production
+
+Everything on [Project status](/status) that says "never run on real hardware"
+has to become "run, and here is the attestation document". Until then this is a
+correct design with no hardware behind it.

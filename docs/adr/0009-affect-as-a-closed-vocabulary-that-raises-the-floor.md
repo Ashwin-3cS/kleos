@@ -1,4 +1,7 @@
-# ADR 0009: Affect as a closed vocabulary that raises the sensitivity floor
+---
+title: "ADR 0009: Affect as a closed vocabulary that raises the sensitivity floor"
+description: "A memory layer that knows *what kind* of thing a stored body is can answer questions the graph otherwise cannot: what was I anxious about last spring, which conversations about thi"
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

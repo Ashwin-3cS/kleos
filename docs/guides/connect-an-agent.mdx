@@ -1,0 +1,107 @@
+---
+title: "Connect an agent"
+description: "Point Claude Code or any MCP client at a person's memory, under a grant."
+---
+
+Kleos speaks MCP over stdio. An agent connects, asks questions of a person's
+memory, and keeps its own working context there while it does.
+
+## Configure the client
+
+```json
+{
+  "mcpServers": {
+    "kleos": {
+      "command": "orchestrator/.venv/bin/python",
+      "args": ["-m", "orchestrator.mcp_server"],
+      "env": {
+        "ORCHESTRATOR_MODE": "mock",
+        "NEO4J_URI": "bolt://127.0.0.1:7688"
+      }
+    }
+  }
+}
+```
+
+<Warning>
+**MCP has no credential channel.** A tool call carries arguments and nothing
+else, so the grant token is an argument on **every** call, and a `session_id` is
+never sufficient on its own.
+
+A second agent on the same machine that learns a session id still needs a valid
+grant for every call — which is what makes the session id safe to be
+unauthenticated, not any property of the id itself.
+</Warning>
+
+## The flow
+
+<Steps>
+<Step title="Open a session">
+`open_session(grant_token)` returns a minted `session_id`, the `agent_id`, the
+authenticated `device_id`, an `identity_basis`, the expiry, and the block caps.
+
+The expiry is clamped by the grant's own: a session cannot outlive the capability
+that opened it.
+</Step>
+<Step title="Ask questions">
+`query_memory`, `why_this_shifted`, `memory_context_chain` — each takes the grant
+token. A refusal is a real answer: the tool never guesses at what it was not
+allowed to read, and a decline names the reasons.
+</Step>
+<Step title="Keep working context">
+`append_context(session_id, grant_token, block)` stores a block sealed. It is
+**not** searchable: nothing an agent appends reaches the vector index.
+</Step>
+<Step title="Close">
+`close_session(session_id, grant_token)`. The blocks stay stored and stay
+unsearchable. `consolidate=False` is a real and correct outcome — a session that
+decided nothing should leave nothing in the person's memory.
+</Step>
+</Steps>
+
+## What an agent cannot do
+
+<CardGroup cols={2}>
+<Card title="Read without a grant" icon="ban">
+Every tool requires one, and a test asserts that every tool's schema marks it
+required.
+</Card>
+<Card title="Walk the graph structurally" icon="ban">
+There is no neighbourhood tool. An adjacency list answers no question an agent
+has, and exposing one would hand agents a cheap structure-enumeration primitive
+— seed, walk, re-seed — for no gain in answer quality.
+</Card>
+<Card title="Read the read log" icon="ban">
+An agent that could read it would see what *other* agents were shown, which is a
+disclosure channel around the permission check rather than a record of it. It
+needs an owner session.
+</Card>
+<Card title="Write memory" icon="ban">
+Not yet. A write-capable grant and a `record_decision` tool are designed and in
+progress; today the only write path is the owner's own `POST /remember`.
+</Card>
+</CardGroup>
+
+## Reading a denial correctly
+
+A query whose candidates are all out of scope does not return an empty result.
+It declines, and says why:
+
+```
+8 candidate memory object(s) matched, but none are within the requesting
+agent's scope (source not in scope)
+```
+
+<Note>
+A conflicting or superseded claim that the grant does not cover comes back
+**withheld** — `{id, withheld, reason}`, with no statement, no timestamps and no
+citations — rather than silently dropped. The caller named a claim, so the
+chain's existence and length were already implied by the question, and a
+silently shortened chain misstates the record.
+
+The neighbourhood read does the opposite: there a denied node is **dropped**,
+along with every edge touching it, and only aggregates come back. The caller
+supplied a seed and a hop count, so there the *structure is the answer*, and
+placeholders would let an agent whose grant reads nothing recover adjacency,
+degree and cluster density.
+</Note>

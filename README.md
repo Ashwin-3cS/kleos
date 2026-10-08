@@ -68,6 +68,23 @@ encryption claim does and does not cover.
 >   prints the in-place migration -- `docker rename` plus two credential changes,
 >   losing no data -- with deleting the volumes offered second.
 
+## Documentation
+
+`docs/` is a Mintlify site: concepts, architecture, guides and reference, with
+one page -- `docs/status.mdx` -- that is the single list of what is mocked,
+stubbed, or has never run on real hardware. `docs/adr/` is unchanged and is
+served as its own tab.
+
+```bash
+npm i -g mint && cd docs && mint dev    # http://localhost:3000
+```
+
+It is written to the same rule as this README: where a claim has a limit, the
+limit is on the same page as the claim. The two overlap on purpose -- this file
+is what a contributor reads in the repository, the site is what someone reads
+before trusting the thing -- and `docs/status.mdx` plus "Still stubs" below are
+the two that must never disagree.
+
 The only asset carried over from the abandoned prior product
 (`suiverify`, a decentralized KYC platform) is the Nitro Enclave build/deploy
 template at `suiverify/nautilus-attestation-backend/` -- its NSM attestation

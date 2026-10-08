@@ -1,0 +1,66 @@
+---
+title: "VSOCK and socat"
+description: "Why there is no Rust VSOCK crate, and where TLS terminates."
+---
+
+There is no VSOCK crate anywhere in this codebase, by design. All VSOCK↔TCP
+bridging happens at the shell level with `socat`.
+
+## Inbound
+
+`enclave/run.sh` runs:
+
+```bash
+socat VSOCK-LISTEN:4000,reuseaddr,fork TCP:localhost:4000 &
+```
+
+So the enclave's Rust binary binds plain TCP — completely ordinary Axum/tokio
+code.
+
+## Outbound
+
+The enclave dials the **real hostname over HTTPS**, e.g.
+`https://oauth2.googleapis.com/token`. Inside the enclave, `/etc/hosts` maps
+that hostname to a loopback alias where socat listens on :443 and forwards over
+VSOCK; `scripts/parent_forwarder.sh` on the host connects that VSOCK port to the
+real `host:443` and pipes the bytes.
+
+<Warning>
+**TLS terminates inside the enclave**, not on the host. The host moves an opaque
+encrypted stream, and the certificate is validated in the TEE against the real
+hostname.
+
+This matters: the host forwarder *is* the operator, and letting it terminate TLS
+would hand it every client secret and refresh token in plaintext — exactly what
+doing the code exchange in the enclave is meant to prevent.
+</Warning>
+
+## The port table
+
+Each entry carries a TLS stream terminated inside the enclave. This table is
+mirrored by the `Upstream` constants in `enclave/src/services/http.rs`,
+`enclave/run.sh`, and `scripts/parent_forwarder.sh` — **all four must agree.**
+
+| Port | Direction | Loopback alias | Upstream |
+| --- | --- | --- | --- |
+| 4000 | Gateway → Enclave | — | Main API |
+| 5000 | Enclave → Host | — | Log forwarding |
+| 8002 | Enclave → Host | 127.0.0.2 | `www.googleapis.com` (tokeninfo) |
+| 8003 | Enclave → Host | 127.0.0.3 | `api.github.com` (user API) |
+| 8004 | Enclave → Host | — | Walrus publisher/aggregator |
+| 8005 | Enclave → Host | — | Walrus Memory relayer |
+| 8006 | Enclave → Host | 127.0.0.4 | `oauth2.googleapis.com` (token) |
+| 8007 | Enclave → Host | 127.0.0.5 | `github.com` (token) |
+
+## A historical note worth keeping
+
+Until this was fixed, the enclave dialled `http://127.0.0.1:<port>` — plaintext
+HTTP — into a tunnel that landed on port 443. A TLS listener cannot answer a
+plaintext request, so **no outbound enclave call could ever have succeeded in
+`nitro` mode**.
+
+It went unnoticed because `nitro` mode had never been run on real hardware and
+`mock` mode short-circuits before the network. Fixed and unit-tested; the
+tunnel, hostname and alias tables agree across Rust, `run.sh` and
+`parent_forwarder.sh` — but agreeing in review is not the same as having
+handshaked with Google.
