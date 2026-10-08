@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Annotated, Any, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -20,9 +20,15 @@ from langgraph.graph import END, START, StateGraph
 
 from ..enums import ClaimStatus
 from ..resolution.entities import Canonicaliser
-from ..resolution.resolver import Resolver
+from ..resolution.resolver import Decision, Resolver
 from ..schema import Candidate, RawRecord
 from ..storage.content import text_for_index
+from ..storage.mutations import (
+    KIND_CREATE,
+    RULE_OWNER_EXPLICIT,
+    Actor,
+    MutationEntry,
+)
 from .enrich import enrich_records, urls_in_records
 from .runtime import Runtime
 
@@ -50,6 +56,12 @@ class IngestionState(TypedDict, total=False):
     skipped: int
     #: One entry per entity folded into another, with the rule that allowed it.
     merged_entities: Annotated[list[dict], _extend]
+    #: Why the resolver decided what it did, carried from `resolve` to `write`.
+    #: The resolver knows the rule and knows nothing about who asked; the actor
+    #: arrives here, which is where the grant is.
+    decisions: Annotated[list[dict], _extend]
+    #: Who caused this run. Absent means the owner's own pipeline.
+    actor: dict
     supersessions: list[list[str]]
     contradictions: list[list[str]]
     errors: Annotated[list[str], _extend]
@@ -207,6 +219,7 @@ def build_ingestion_graph(runtime: Runtime):
         merged: list[dict] = []
         supersessions: list[list[str]] = []
         contradictions: list[list[str]] = []
+        decisions: list[dict] = []
         candidates = [Candidate.model_validate(raw) for raw in state.get("candidates", [])]
         for candidate, resolution in zip(
             candidates, resolver.resolve_batch(owner_id, candidates), strict=True
@@ -215,6 +228,7 @@ def build_ingestion_graph(runtime: Runtime):
             merged.append(candidate.model_dump(mode="json"))
             supersessions += [list(p) for p in resolution.supersessions]
             contradictions += [list(p) for p in resolution.contradictions]
+            decisions += [asdict(d) for d in resolution.decisions]
         log.info(
             "ingestion.resolve supersedes=%d contradicts=%d",
             len(supersessions),
@@ -224,6 +238,7 @@ def build_ingestion_graph(runtime: Runtime):
             "candidates": merged,
             "supersessions": supersessions,
             "contradictions": contradictions,
+            "decisions": decisions,
         }
 
     def encrypt(state: IngestionState) -> dict:
@@ -278,12 +293,16 @@ def build_ingestion_graph(runtime: Runtime):
         touched: dict[str, set[str]] = {"entities": set(), "events": set(), "claims": set()}
         skipped = 0
 
-        def link(from_id: str, rel: str, to_id: str) -> None:
+        def link(from_id: str, rel: str, to_id: str, **attribution) -> None:
             # An unwritten endpoint is ordinary: a citation can name an event
             # from a record this batch skipped, or one a later batch brings in.
             # A *cross-owner* endpoint is not ordinary, and `link` refuses it
             # either way -- so a miss is logged at debug and not an error.
-            if not runtime.store.link(owner_id, from_id, rel, to_id):
+            #
+            # `attribution` carries the actor and rule for the two edge types
+            # that are decisions rather than structure; the store ignores it for
+            # the rest.
+            if not runtime.store.link(owner_id, from_id, rel, to_id, **attribution):
                 log.debug("ingestion.write unlinked %s-[:%s]->%s", from_id, rel, to_id)
 
         # One batched write for every sealed body in this run, before anything
@@ -293,6 +312,17 @@ def build_ingestion_graph(runtime: Runtime):
         # transcripts writes one container, not 400 blobs.
         refs_by_external_id, blob_errors = _persist_sealed(runtime, owner_id, sealed)
         errors += blob_errors
+
+        # Who this run is attributable to. `Actor.pipeline()` names no device,
+        # because there is no device: a connector pulling a mailbox is the
+        # owner's own machinery, and a fabricated device id would be
+        # indistinguishable from an authenticated one in every row storing it.
+        actor = (
+            Actor(**state["actor"]) if state.get("actor") else Actor.pipeline()
+        )
+        decisions_by_object = {
+            d["object_id"]: Decision(**d) for d in state.get("decisions", [])
+        }
 
         for raw in state.get("candidates", []):
             candidate = Candidate.model_validate(raw)
@@ -328,9 +358,34 @@ def build_ingestion_graph(runtime: Runtime):
                         link(event.id, "CITES", citation.event_id)
 
             for claim in candidate.claims:
-                _upsert(runtime, claim)
+                created = _upsert(runtime, claim)
                 written.append(claim.id)
                 touched["claims"].add(claim.id)
+                if created:
+                    # A claim coming into existence is a state change, and it is
+                    # the only creation recorded here: an entity or an event is
+                    # an ingested fact arriving, while a claim is an assertion
+                    # the record now makes. Logging all three would bury the
+                    # decisions under the material they were derived from.
+                    #
+                    # The rule matters most for a claim born already superseded
+                    # or contradicted -- the in-batch case, where there is no
+                    # status *transition* for `set_claim_status` to notice, so
+                    # this is the only place the reason can be recorded.
+                    born = decisions_by_object.get(claim.id)
+                    runtime.store.append_mutation(
+                        MutationEntry.for_actor(
+                            actor,
+                            owner_id=owner_id,
+                            object_id=claim.id,
+                            kind=KIND_CREATE,
+                            field_name="status",
+                            before=None,
+                            after=claim.status.value,
+                            reason=born.reason if born else "extracted from a record",
+                            rule=born.rule if born else None,
+                        )
+                    )
                 for entity_id in claim.subject_entity_ids:
                     link(claim.id, "ABOUT", entity_id)
                 if claim.commitment is not None:
@@ -340,12 +395,39 @@ def build_ingestion_graph(runtime: Runtime):
                 for citation in claim.provenance.citations:
                     link(claim.id, "CITES", citation.event_id)
                 for superseded in claim.supersedes:
-                    link(claim.id, "SUPERSEDES", superseded)
+                    decided = decisions_by_object.get(superseded)
+                    link(
+                        claim.id,
+                        "SUPERSEDES",
+                        superseded,
+                        actor=actor,
+                        rule=decided.rule if decided else RULE_OWNER_EXPLICIT,
+                    )
                     runtime.store.set_claim_status(
-                        owner_id, superseded, ClaimStatus.SUPERSEDED.value
+                        owner_id,
+                        superseded,
+                        ClaimStatus.SUPERSEDED.value,
+                        actor=actor,
+                        # The resolver's own words where it has them. A write
+                        # that happened for a reason the resolver did not
+                        # record would be a branch missing a `Decision`, so the
+                        # fallback names the edge rather than inventing a cause.
+                        reason=(
+                            decided.reason
+                            if decided
+                            else f"superseded by {claim.id}"
+                        ),
+                        rule=decided.rule if decided else RULE_OWNER_EXPLICIT,
                     )
                 for conflicting in claim.contradicts:
-                    link(claim.id, "CONTRADICTS", conflicting)
+                    conflict = decisions_by_object.get(claim.id)
+                    link(
+                        claim.id,
+                        "CONTRADICTS",
+                        conflicting,
+                        actor=actor,
+                        rule=conflict.rule if conflict else None,
+                    )
 
         log.info("ingestion.write nodes=%d skipped=%d", len(written), skipped)
         return {
@@ -422,7 +504,7 @@ def _persist_sealed(
     return out, []
 
 
-def _upsert(runtime: Runtime, node) -> None:
+def _upsert(runtime: Runtime, node) -> bool:
     """Embeds from plaintext, then seals, then writes.
 
     The order is the whole correctness condition. An embedding computed after
@@ -432,7 +514,7 @@ def _upsert(runtime: Runtime, node) -> None:
     content fields already sealed (ADR 0010).
     """
     embedding = runtime.embedder.embed(text_for_index(node))
-    runtime.store.upsert(runtime.content.seal_node(node), embedding)
+    return runtime.store.upsert(runtime.content.seal_node(node), embedding)
 
 
 def run_ingestion(

@@ -26,6 +26,7 @@ from orchestrator.permissions import Scope, evaluate
 from orchestrator.resolution.resolver import Resolver
 from orchestrator.schema import Claim, RawRecord
 from orchestrator.storage.migrations import apply_migrations
+from orchestrator.storage.mutations import RULE_NEWER_ASSERTED_AT, Actor
 
 OWNER = "owner-commitments"
 AS_OF = BASE_MS + 31 * DAY_MS  # 2025-02-01
@@ -150,14 +151,28 @@ def test_fulfillment_and_epistemic_status_move_independently(runtime):
 
     # Active, and fulfilled: the promise was kept and the claim is still our
     # best understanding of it.
-    updated = runtime.store.set_fulfillment(OWNER, late.id, "fulfilled", settled_at_ms=AS_OF)
+    updated = runtime.store.set_fulfillment(
+        OWNER,
+        late.id,
+        "fulfilled",
+        settled_at_ms=AS_OF,
+        actor=Actor.pipeline(),
+        reason="the migration shipped",
+    )
     assert updated.status is ClaimStatus.ACTIVE
     assert updated.commitment.fulfillment is FulfillmentStatus.FULFILLED
     assert updated.commitment.settled_at_ms == AS_OF
     assert [s.node.statement for s in runtime.store.open_commitments(OWNER)] == [ROLLOUT]
 
     # And moving the epistemic axis leaves fulfillment where it was.
-    runtime.store.set_claim_status(OWNER, late.id, ClaimStatus.SUPERSEDED.value)
+    runtime.store.set_claim_status(
+        OWNER,
+        late.id,
+        ClaimStatus.SUPERSEDED.value,
+        actor=Actor.pipeline(),
+        reason="reassigned again",
+        rule=RULE_NEWER_ASSERTED_AT,
+    )
     reread = runtime.store.get(late.id).node
     assert reread.status is ClaimStatus.SUPERSEDED
     assert reread.commitment.fulfillment is FulfillmentStatus.FULFILLED
@@ -166,7 +181,13 @@ def test_fulfillment_and_epistemic_status_move_independently(runtime):
 def test_set_fulfillment_rejects_a_claim_that_promised_nothing(runtime):
     plain = _claims(runtime.store)["project Beacon will ship behind a feature flag."]
     with pytest.raises(ValueError, match="no commitment facet"):
-        runtime.store.set_fulfillment(OWNER, plain.id, "fulfilled")
+        runtime.store.set_fulfillment(
+            OWNER,
+            plain.id,
+            "fulfilled",
+            actor=Actor.pipeline(),
+            reason="a caller bug, not a no-op",
+        )
 
 
 def test_a_scope_without_the_source_sees_no_commitments(runtime):

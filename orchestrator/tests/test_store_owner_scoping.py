@@ -19,6 +19,7 @@ from neo4j.exceptions import Neo4jError
 from orchestrator.enums import ClaimStatus, EntityKind, Sensitivity
 from orchestrator.permissions import ObjectAcl
 from orchestrator.schema import Claim, Entity, Provenance
+from orchestrator.storage.mutations import RULE_NEWER_ASSERTED_AT, Actor
 
 OWNER = "owner-scoping-a"
 OTHER = "owner-scoping-b"
@@ -178,12 +179,22 @@ def test_a_mutation_cannot_cross_owners(store, vector) -> None:
     try:
         store.upsert(claim, vector())
 
+        attribution = dict(
+            actor=Actor.pipeline(),
+            reason="probing the owner boundary",
+            rule=RULE_NEWER_ASSERTED_AT,
+        )
+
         # Another owner naming the same claim id changes nothing.
-        store.set_claim_status("owner-mutate-b", claim.id, ClaimStatus.SUPERSEDED.value)
+        store.set_claim_status(
+            "owner-mutate-b", claim.id, ClaimStatus.SUPERSEDED.value, **attribution
+        )
         assert store.get_many("owner-mutate-a", [claim.id])[0].node.status is ClaimStatus.ACTIVE
 
         # Its own owner can.
-        store.set_claim_status("owner-mutate-a", claim.id, ClaimStatus.SUPERSEDED.value)
+        store.set_claim_status(
+            "owner-mutate-a", claim.id, ClaimStatus.SUPERSEDED.value, **attribution
+        )
         assert (
             store.get_many("owner-mutate-a", [claim.id])[0].node.status
             is ClaimStatus.SUPERSEDED

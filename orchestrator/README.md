@@ -80,9 +80,13 @@ owner's keys, which is not wired yet (see **Stubs** below); until then sealed
 ciphertext goes to a content-addressed blob store with the same interface
 (`storage/blobs.py`, ADR 0002).
 
-One exception to "rebuildable", stated because it changes what has to be backed
-up: the read log (`:AgentRead`, see below) cannot be regenerated from anything.
-It is the only such thing in this database.
+Two exceptions to "rebuildable", stated because they change what has to be
+backed up. The read log (`:AgentRead`, see below) cannot be regenerated from
+anything: it records what was disclosed. Neither can the mutation log
+(`:Mutation`): it records what changed and on what basis, and re-deriving a claim
+does not recover the reason the claim it replaced was replaced. Agent sessions
+(`:AgentSession`) are a third in practice -- they are the only trace of a context
+window that no longer exists.
 
 Edges: `(:Event)-[:MENTIONS]->(:Entity)`, `(:Claim)-[:ABOUT]->(:Entity)`,
 `(:Claim|:Event)-[:CITES]->(:Event)`, `(:Claim)-[:SUPERSEDES]->(:Claim)`,
@@ -350,6 +354,7 @@ To run the service by hand instead:
 | `POST /memory/context` | sync | the citation chain around one object, across sources |
 | `POST /memory/neighbourhood` | sync | nodes and typed edges within `hops` of one or more seeds, permission-filtered |
 | `POST /memory/reads` | sync | **owner-authenticated**: what agents have actually read |
+| `POST /memory/mutations` | sync | **owner-authenticated**: every state change, who made it, and which rule decided |
 | `GET /explorer` | static | the read-only graph explorer page (open `http://127.0.0.1:8090/explorer`) |
 
 Ingestion is enqueued from day one because connecting a source means
