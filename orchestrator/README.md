@@ -385,6 +385,7 @@ To run the service by hand instead:
 | `POST /memory/shift` | sync | why a decision shifted: the supersession chain and the evidence at each step |
 | `POST /memory/context` | sync | the citation chain around one object, across sources |
 | `POST /memory/neighbourhood` | sync | nodes and typed edges within `hops` of one or more seeds, permission-filtered |
+| `POST /memory/brief` | sync | what an agent should know before acting: who decided what, and why |
 | `POST /memory/reads` | sync | **owner-authenticated**: what agents have actually read |
 | `POST /memory/mutations` | sync | **owner-authenticated**: every state change, who made it, and which rule decided |
 | `GET /explorer` | static | the read-only graph explorer page (open `http://127.0.0.1:8090/explorer`) |

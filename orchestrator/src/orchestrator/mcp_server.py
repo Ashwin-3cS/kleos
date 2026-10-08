@@ -22,6 +22,11 @@ What is exposed, and what is not:
 - **Session state** -- `open_session`, `append_context`, `close_session`. An
   agent's short-term memory: stored, and deliberately not searchable until it is
   consolidated. See ADR 0016 and `storage/sessions.py`.
+- **The briefing** -- `brief_before_acting`, which is the point of the whole
+  layer: before an agent acts, it is told what another agent already decided on
+  the same subject, who decided it and on what basis. Composed out of the reads
+  above rather than retrieving for itself, so each one keeps its own permission
+  check and its own log entry.
 - **One write** -- `record_decision`, and only under a grant whose scope says
   `may_write`. Deny-by-default, so every grant issued before that field existed
   is read-only. What an agent writes takes the `agent` source whatever it asks
@@ -38,6 +43,7 @@ import logging
 
 from mcp.server.mcpserver import MCPServer
 
+from .graphs.brief import brief_before_acting as brief
 from .graphs.decide import record_decision as decide
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
@@ -192,6 +198,55 @@ def close_session(session_id: str, grant_token: str, consolidate: bool = False) 
         "block_count": session.block_count,
         "consolidated_into": list(session.consolidated_into),
     }
+
+
+# -- before acting ------------------------------------------------------
+
+
+@mcp.tool()
+def brief_before_acting(
+    intent: str,
+    grant_token: str,
+    session_id: str | None = None,
+    top_k: int = 8,
+    include_body: bool = False,
+) -> dict:
+    """Find out what is already decided about what you are about to do.
+
+    Call this **before** acting, with an intent rather than a question -- "I am
+    about to pick a database for Lantern" -- because the thing you most need to
+    know is the thing you do not know to ask about.
+
+    Returns what is relevant with citations, any supersession chains those claims
+    sit in, who changed each one and on what basis, and `advisories`: one
+    rendered line each, ready to put straight into your context without parsing
+    anything.
+
+    Every advisory names the **device** and says whether that identity is
+    authenticated. `device-authenticated` means the gateway verified a signature
+    against a key the owner registered; "label only" means all that is known is a
+    string the owner typed, which nothing checks.
+
+    A conflicting decision outside your grant comes back as *withheld* rather
+    than omitted: you are told it exists and that you may not read it. An agent
+    told "no conflicts" acts; an agent told "a conflict you cannot see" asks.
+
+    `include_body` asks for the raw material behind what was disclosed, and needs
+    a grant that also says `may_unseal` -- seeing a resolved claim and reading the
+    transcript it came from are different disclosures.
+
+    There is deliberately no structure in the result: no adjacency, no node
+    lists. An agent that could walk the graph could map a memory it cannot read.
+    """
+    briefing = brief(
+        _get_runtime(),
+        intent,
+        grant_token,
+        session_id=session_id,
+        top_k=top_k,
+        include_body=include_body,
+    )
+    return briefing.as_dict()
 
 
 # -- writing ------------------------------------------------------------
