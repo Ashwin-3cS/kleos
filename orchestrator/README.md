@@ -18,9 +18,9 @@ orchestrator (this service)                    rust core
 ---------------------------                    ---------
 ingestion graph   fetch                        gateway
                   extract                        POST /auth/session        -> enclave verifies identity
-                  resolve                        POST /memory/seal/encrypt -> enclave seals raw content
-                  encrypt  ------------------->   POST /memory/scope/grant
-                  write     (Neo4j)               POST /memory/scope/introspect
+                  resolve                        POST /memory/scope/introspect
+                  encrypt  ------------------->   POST /memory/seal/encrypt -> enclave seals raw content
+                  write     (Neo4j)               POST /memory/seal/decrypt -> enclave unseals record content
 query graph       authorize ----------------->   POST /auth/session/introspect
                   retrieve  (Neo4j + LlamaIndex)
                   permission-check
@@ -312,7 +312,7 @@ python3 -m venv .venv
 cp .env.example .env
 
 ../scripts/services.sh up                 # neo4j :7688, redis :6380, postgres :5435
-.venv/bin/pytest                          # 146 tests; skips if neo4j is down
+.venv/bin/pytest                          # the suite; skips if neo4j is down
 .venv/bin/python -m orchestrator.eval     # the step 0 exit test
 .venv/bin/ruff check .
 ```
@@ -414,10 +414,11 @@ These have real signatures and typed returns; they raise
   Neo4j vector index.
 - Walrus reads/writes. Sealed ciphertext now lands in a content-addressed
   blob store and `blob_id` is populated (`storage/blobs.py`, ADR 0002);
-  `WalrusBlobStore` has the same interface and raises rather than falling back
-  to local disk. There is still no *read* path: unsealing is `POST
-  /seal/decrypt` on the enclave, which the gateway does not expose, so sealed
-  bodies are durable and not yet retrievable.
+  `WalrusQuiltStore` has the same interface and raises rather than falling back
+  to local disk. There is still no *read* path, and the gap is narrower than it
+  reads: the gateway does proxy `POST /memory/seal/decrypt`, and
+  `LocalQuiltStore.get` is implemented. Nothing converts a stored
+  `EncryptedContentRef` into a `BlobRef`, and nothing calls `get`.
 - `extraction/llm.py` is *not* a stub: it is wired and works the moment
   `ANTHROPIC_API_KEY` is set and `ORCHESTRATOR_MODE=live`. It has not been
   run against the live API from this repo.

@@ -110,12 +110,16 @@ def test_an_unknown_tool_names_the_known_ones() -> None:
 def test_a_disabled_tool_cannot_be_built(settings) -> None:
     """Enforced inside the registry rather than at the call site: an allow-list
     enforced in one place out of three is not an allow-list."""
-    narrowed = settings.model_copy(update={"enabled_tools": ["extract_page"]})
+    narrowed = settings.model_copy(update={"enabled_tools": ["fetch_url"]})
     registry = REGISTRY.copy()
 
-    assert registry.tool("extract_page", narrowed) is not None
+    # `fetch_url` and not `extract_page` as the permitted one: building
+    # `extract_page` constructs an LLM client and therefore needs an API key, so
+    # asserting the allow-list through it made a keyless mock-mode run fail on a
+    # test about neither keys nor LLMs.
+    assert registry.tool("fetch_url", narrowed) is not None
     with pytest.raises(UnknownToolError):
-        registry.tool("fetch_url", narrowed)
+        registry.tool("extract_page", narrowed)
 
 
 def test_an_empty_allow_list_enables_everything(settings) -> None:

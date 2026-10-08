@@ -48,10 +48,6 @@ class Runtime:
     #: Seals the record's text before it is stored, and unseals only what a read
     #: is about to disclose. See ADR 0010.
     content: ContentCrypto | NullContentCrypto
-    #: Which tools this run may invoke. A copy of the process-wide registry, for the
-    #: same reason the connector registry is copied: a caller can withhold a tool for
-    #: one run without mutating global state.
-    tools: ToolRegistry
     weights: RankingWeights
 
     @classmethod

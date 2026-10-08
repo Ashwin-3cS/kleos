@@ -44,9 +44,12 @@ Two properties the interface still enforces, unchanged from ADR 0002:
   *objects*; this governs *bytes*, and collapsing them would mean one bug
   reaches both.
 
-Nothing here can read what it stores. Recovering a body means ``POST
-/seal/decrypt`` on the enclave, which the gateway does not expose, so the bytes
-are durable and not yet retrievable.
+Nothing here can read what it stores *as plaintext*: ``get`` returns the sealed
+bytes, and turning those back into a body means ``POST /memory/seal/decrypt`` on
+the gateway, which proxies the enclave. That route exists. What does not exist is
+a caller: nothing converts a stored ``EncryptedContentRef`` into a ``BlobRef``,
+so ``get`` has no call sites and sealed bodies are durable and not yet
+retrievable.
 """
 
 from __future__ import annotations
