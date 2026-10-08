@@ -60,8 +60,19 @@ resolver sees.
 <Accordion title="close_session(session_id, grant_token, consolidate=False)">
 Closes the session. Its blocks stay stored and stay unsearchable.
 
-`consolidate=True` currently **raises**, rather than closing and keeping
-nothing — so "keep my work" cannot look like it succeeded when nothing is wired.
+`consolidate=True` reads the blocks back and keeps whatever the session
+concluded that outlives it — as ordinary kinded claims, attributed to this
+device, resolvable against the person's own decisions. It needs the same
+`may_write` a direct write does.
+
+Consolidation runs **before** the close, so a failure leaves the session open
+and retryable rather than closed with its work lost.
+
+<Note>
+`consolidate=False` is the right default. Most sessions conclude nothing, and
+what an agent definitely wants remembered it says outright with
+`record_decision` rather than hoping consolidation notices.
+</Note>
 </Accordion>
 </AccordionGroup>
 

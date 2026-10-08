@@ -32,7 +32,14 @@ that filters in Python.
 (:Claim)-[:CONTRADICTS]->(:Claim)
 (:Claim)-[:OWED_BY]->(:Entity)
 (:Claim)-[:OWED_TO]->(:Entity)
+(:Claim)-[:CONSOLIDATED_FROM]->(:AgentSession)
 ```
+
+That last one is the only edge that leaves the memory graph, and it leaves it in
+one direction. `link()` matches both endpoints as `:Memory` and an
+`:AgentSession` is deliberately not one, so it needs its own method — and every
+traversal keys on `:Memory`, which makes following it from a claim into a
+scratchpad impossible rather than merely unsupported.
 
 ### Owner scoping
 

@@ -25,6 +25,13 @@ later claim may always supersede either. So the resolver needs to know nothing
 about grants, and the asymmetry ADR 0014 established for fetched pages extends to
 agents without being re-argued.
 
+Consolidation sits in the same file and goes through the same gate, because it
+is the same act with a different author: an agent saying "this is worth keeping"
+about its own working notes rather than about a conclusion it states outright. It
+reuses `record_decision` per conclusion rather than batching them, so there is
+exactly one write path for an agent-authored claim -- a batched variant would be a
+second place where the gate, the source and the precedence class are decided.
+
 What this deliberately does **not** do is run a second ingestion path. The record
 goes through the ordinary graph -- extraction, canonicalisation, resolution,
 sealing, the write -- because a thing an agent concluded is a record like any
@@ -40,6 +47,7 @@ from typing import Any
 
 from ..connectors.agent import AGENT, build_record
 from ..enums import Authority, MemoryKind, Sensitivity
+from ..extraction.consolidate import get_consolidator
 from ..permissions import WriteIntent, evaluate_write
 from ..storage.mutations import Actor
 from ..storage.sessions import SessionError
@@ -80,6 +88,10 @@ class DecisionRecorded:
     superseded: list[str] = field(default_factory=list)
     contradicted: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    #: The claim ids this write produced. Needed by anything that has to do
+    #: something *to* them afterwards -- consolidation attaches an edge -- and a
+    #: count cannot be linked to.
+    claim_ids: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -240,6 +252,7 @@ def record_decision(
         superseded=[pair[1] for pair in result.supersessions],
         contradicted=[pair[1] for pair in result.contradictions],
         errors=list(result.errors),
+        claim_ids=claim_ids,
     )
 
 
@@ -262,7 +275,8 @@ def _kinded(
     actor: Actor,
     reason: str,
 ) -> list[str]:
-    """Labels the claims this run wrote with the caller's memory kind.
+    """Labels the claims this run wrote with the caller's memory kind, and names
+    all of them.
 
     Only the claims, and only the ones this run actually wrote: a decision
     recorded as procedural says nothing about the episodic claims already in the
@@ -272,12 +286,17 @@ def _kinded(
     from ..schema import Claim
     from ..storage.mutations import KIND_PAYLOAD, MutationEntry
 
-    labelled: list[str] = []
+    # Every claim written, not only the ones this call relabelled. The two
+    # differ on a retry -- a content-addressed record written twice produces the
+    # same claim, already kinded -- and returning nothing the second time would
+    # make an idempotent write look like a write that did nothing.
+    claims: list[str] = []
     for node_id in result.written:
         stored = runtime.store.get_many(owner_id, [node_id])
         if not stored or not isinstance(stored[0].node, Claim):
             continue
         claim = stored[0].node
+        claims.append(claim.id)
         if claim.memory_kind is kind and claim.acl.memory_kind is kind:
             continue
         claim.memory_kind = kind
@@ -302,5 +321,115 @@ def _kinded(
                 reason=reason,
             )
         )
-        labelled.append(claim.id)
-    return labelled
+    return claims
+
+
+# -- consolidation ------------------------------------------------------
+
+
+@dataclass(slots=True)
+class Consolidated:
+    """What a session left behind when it closed."""
+
+    owner_id: str
+    session_id: str
+    #: How many blocks were read. Reported because "concluded nothing from 40
+    #: blocks" and "concluded nothing from 0 blocks" are different situations and
+    #: only one of them is worth looking into.
+    blocks: int
+    #: Claim ids written, newest last. Empty is the common and correct outcome.
+    claims: list[str] = field(default_factory=list)
+    #: One entry per conclusion, with the kind and the reason, so a caller can
+    #: see what was kept without re-reading the graph.
+    conclusions: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def consolidate_session(
+    runtime: Runtime,
+    grant_token: str,
+    session_id: str,
+) -> Consolidated:
+    """Turns what a session concluded into memory, and leaves the rest alone.
+
+    The whole of the second state transition: blocks are *stored* until this
+    runs, and only what it writes becomes *searchable*. Almost nothing should.
+
+    Gated by the same `may_write` the direct write is, because the outcome is
+    identical -- a claim in the person's record attributed to this agent. A
+    session is not a licence to write; the grant is.
+    """
+    resolved = runtime.gateway.introspect_grant(grant_token)
+    scope = resolved.scope
+
+    session = runtime.sessions.get(scope.owner_id, session_id)
+    if session is None:
+        raise SessionError(f"no session {session_id} for this owner")
+
+    blocks = runtime.sessions.block_texts(
+        scope.owner_id, session_id, grant_token=grant_token
+    )
+    consolidator = get_consolidator(runtime.settings)
+    try:
+        conclusions = consolidator.consolidate(blocks)
+    finally:
+        consolidator.close()
+
+    written: list[str] = []
+    errors: list[str] = []
+    kept: list[dict[str, Any]] = []
+    for conclusion in conclusions:
+        try:
+            result = record_decision(
+                runtime,
+                grant_token,
+                conclusion.statement,
+                conclusion.reason,
+                session_id=session_id,
+                memory_kind=conclusion.kind.value,
+                # Dated to the session, not to whenever consolidation ran. The
+                # record's id is content-addressed over its inputs, so a
+                # wall-clock timestamp would make re-consolidating the same
+                # session write a second copy of every conclusion -- and a
+                # conclusion belongs to when the work happened anyway, which is
+                # what `asserted_at_ms` means and what the resolver compares.
+                occurred_at_ms=session.opened_at_ms,
+            )
+        except (WriteRefused, ValueError) as exc:
+            # One refused conclusion does not refuse the rest. A grant that
+            # covers episodes and not procedures should keep the episodes, and
+            # the refusal is reported rather than swallowed -- an agent that
+            # asked for its procedural notes to be kept is entitled to know they
+            # were not.
+            errors.append(f"{conclusion.kind.value}: {exc}")
+            continue
+        for claim_id in result.claim_ids:
+            runtime.store.link_consolidation(scope.owner_id, claim_id, session_id)
+        written += [cid for cid in result.claim_ids if cid not in written]
+        kept.append(conclusion.as_dict())
+
+    if written:
+        # On the session as well as on the edges, so "what did this session
+        # produce" is one property read rather than a traversal. Additive: a
+        # second consolidation of the same session adds to what the first found.
+        runtime.store.set_session_consolidation(scope.owner_id, session_id, written)
+
+    log.info(
+        "consolidate.session id=%s blocks=%d conclusions=%d claims=%d refused=%d",
+        session_id,
+        len(blocks),
+        len(conclusions),
+        len(written),
+        len(errors),
+    )
+    return Consolidated(
+        owner_id=scope.owner_id,
+        session_id=session_id,
+        blocks=len(blocks),
+        claims=written,
+        conclusions=kept,
+        errors=errors,
+    )

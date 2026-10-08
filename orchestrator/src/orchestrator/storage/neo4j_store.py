@@ -1023,11 +1023,47 @@ class Neo4jStore:
             for row in rows
         ]
 
+    def link_consolidation(self, owner_id: str, claim_id: str, session_id: str) -> bool:
+        """``(:Claim)-[:CONSOLIDATED_FROM]->(:AgentSession)``.
+
+        Its own method rather than `link`, because `link` matches both endpoints
+        as `:Memory` and an `:AgentSession` deliberately is not one. That is the
+        constraint working as intended: this is the only edge in the graph that
+        crosses from memory to the harness's own record of itself, and it only
+        goes one way. A traversal from a claim cannot follow it into a scratchpad,
+        because every walk keys on `:Memory` too.
+
+        Owner-scoped at both ends like every other write here.
+        """
+        rows = self._run(
+            "MATCH (c:Claim {id: $claim_id, owner_id: $owner_id}), "
+            "(s:AgentSession {id: $session_id, owner_id: $owner_id}) "
+            "MERGE (c)-[r:CONSOLIDATED_FROM]->(s) "
+            "RETURN count(r) AS n",
+            owner_id=owner_id,
+            claim_id=claim_id,
+            session_id=session_id,
+        )
+        return bool(rows and rows[0]["n"])
+
+    def consolidated_from(self, owner_id: str, session_id: str) -> list[str]:
+        """Claim ids this session produced, read off the edges rather than the
+        session's own property -- so the two can be compared."""
+        rows = self._run(
+            "MATCH (c:Claim {owner_id: $owner_id})-[:CONSOLIDATED_FROM]->"
+            "(:AgentSession {id: $session_id, owner_id: $owner_id}) "
+            "RETURN c.id AS id ORDER BY c.id",
+            owner_id=owner_id,
+            session_id=session_id,
+        )
+        return [row["id"] for row in rows]
+
     def wipe_sessions(self, owner_id: str) -> None:
         """For tests and an explicit owner request. Not a side effect of
         re-ingesting, like the read log and for the same reason."""
         self._run(
-            "MATCH (s:AgentSession {owner_id: $owner_id}) DELETE s", owner_id=owner_id
+            "MATCH (s:AgentSession {owner_id: $owner_id}) DETACH DELETE s",
+            owner_id=owner_id,
         )
         self._run(
             "MATCH (b:SessionBlock {owner_id: $owner_id}) DELETE b", owner_id=owner_id

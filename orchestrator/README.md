@@ -93,6 +93,14 @@ Edges: `(:Event)-[:MENTIONS]->(:Entity)`, `(:Claim)-[:ABOUT]->(:Entity)`,
 `(:Claim)-[:CONTRADICTS]->(:Claim)`, and, for the commitment facet,
 `(:Claim)-[:OWED_BY]->(:Entity)` / `(:Claim)-[:OWED_TO]->(:Entity)`.
 
+One more, and it is the only edge that crosses out of the memory graph:
+`(:Claim)-[:CONSOLIDATED_FROM]->(:AgentSession)`, written when a session's
+working notes are turned into claims. It goes one way only, and not by
+convention: `link()` matches both endpoints as `:Memory` and an `:AgentSession`
+deliberately is not one, so the edge needs its own method -- and every traversal
+keys on `:Memory` too, which is why following it from a claim into a scratchpad
+is impossible rather than merely unsupported.
+
 ## History reads
 
 `graphs/history.py` holds two reads over what ingestion already wrote --

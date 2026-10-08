@@ -44,6 +44,7 @@ import logging
 from mcp.server.mcpserver import MCPServer
 
 from .graphs.brief import brief_before_acting as brief
+from .graphs.decide import consolidate_session
 from .graphs.decide import record_decision as decide
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
@@ -177,26 +178,32 @@ def append_context(session_id: str, grant_token: str, block: str) -> dict:
 def close_session(session_id: str, grant_token: str, consolidate: bool = False) -> dict:
     """Closes the session. Its blocks stay stored and stay unsearchable.
 
-    `consolidate=False` is a real and correct outcome, not a degenerate one: a
-    session that decided nothing should leave nothing in the person's memory.
-    What an agent wants remembered it says with `record_decision`.
+    `consolidate=True` reads this session's blocks back and keeps whatever it
+    concluded that outlives the session -- as ordinary claims, kinded, attributed
+    to this device, and resolvable against the person's own decisions. It needs
+    the same `may_write` a direct write does, because the outcome is identical: a
+    claim in the person's record. A session is not a licence to write.
+
+    **Most sessions conclude nothing, and `consolidate=False` is the right
+    default.** A session that decided nothing should leave nothing in the
+    person's memory, and what an agent definitely wants remembered it says
+    outright with `record_decision` rather than hoping consolidation notices.
+
+    Consolidation happens **before** the close, so a failure leaves the session
+    open and retryable rather than closed with its work lost.
     """
     runtime = _get_runtime()
     resolved = runtime.gateway.introspect_grant(grant_token)
+    consolidated = None
     if consolidate:
-        # Raises rather than quietly closing without consolidating, which would
-        # make "I asked for my work to be kept" look like it had been.
-        raise NotImplementedError(
-            "consolidation is not wired yet: closing with consolidate=True would "
-            "silently keep nothing. Use record_decision for what should be "
-            "remembered, and close with consolidate=False."
-        )
+        consolidated = consolidate_session(runtime, grant_token, session_id)
     session = runtime.sessions.close(resolved.scope.owner_id, session_id)
     return {
         "session_id": session.id,
         "closed_at_ms": session.closed_at_ms,
         "block_count": session.block_count,
         "consolidated_into": list(session.consolidated_into),
+        "consolidation": consolidated.as_dict() if consolidated else None,
     }
 
 
