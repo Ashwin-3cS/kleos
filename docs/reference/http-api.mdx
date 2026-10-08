@@ -1,0 +1,102 @@
+---
+title: "HTTP API"
+description: "Every route the gateway and the orchestrator serve, and what authenticates each."
+---
+
+## Gateway
+
+Host-side. Owner sessions are bearer tokens; grants are introspected, never
+minted.
+
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `GET /health` | — | liveness |
+| `GET /auth/authorize` | — | build the provider consent URL (PKCE + signed, expiring state) |
+| `GET /auth/callback` | signed state | exchange the code **in the enclave**, persist the sealed refresh token, issue an owner session |
+| `POST /auth/session` | — | verify identity via the enclave, issue an owner session JWT |
+| `POST /auth/session/introspect` | — | resolve an owner session to its owner id |
+| `POST /identity/verify` | — | the direct identity path, for a token obtained elsewhere |
+| `POST /memory/seal/encrypt` | owner session | seal raw content; the owner comes from the session, not the request |
+| `POST /memory/seal/decrypt` | owner session | unseal **record content**, never a refresh token |
+| `POST /auth/device/register` | owner session | register a device public key |
+| `GET /auth/device/keys` | owner session | list device keys, including revoked |
+| `POST /auth/device/revoke` | owner session | revoke a key, and every grant it signed |
+| `POST /memory/scope/introspect` | — | resolve a grant token to `{active, scope, key_id}` |
+
+<Note>
+`POST /memory/scope/grant` **does not exist**. Grants are signed by a key the
+owner holds; the gateway can verify one and cannot produce one. A test holds its
+absence.
+</Note>
+
+## Orchestrator
+
+| Route | Shape | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET /health` | sync | — | status of Neo4j, Redis and the gateway |
+| `GET /sources` | sync | — | the connector registry, with `ENABLED_SOURCES` applied |
+| `POST /ingest` | **enqueued** (202, job id) | none today | run the ingestion graph for one source |
+| `GET /ingest/{job_id}` | sync | — | job status and result |
+| `POST /remember` | sync (201) | session only when `sensitive` | push one thing the person said |
+| `POST /query` | sync | grant | run the query graph |
+| `POST /memory/shift` | sync | grant | why a decision shifted: the chain and the evidence at each step |
+| `POST /memory/context` | sync | grant | the citation chain around one object, across sources |
+| `POST /memory/neighbourhood` | sync | grant | nodes and typed edges within `hops` of seeds, permission-filtered |
+| `POST /memory/reads` | sync | **owner session** | what agents have actually read |
+| `GET /explorer` | static | — | the read-only graph explorer |
+
+<Warning>
+`POST /ingest` and `POST /remember` take `owner_id` from the **request body** and
+are unauthenticated. The orchestrator binds to localhost, and that is currently
+the only control. Nothing rate-limits `/remember`. It needs both before the
+orchestrator is reachable from anywhere else.
+</Warning>
+
+### Why ingestion is enqueued and queries are not
+
+Connecting a source means backfilling a large history in bursts, which is the
+wrong lifetime for an HTTP request. An agent asking a question wants an answer,
+not a job id.
+
+### `POST /remember`
+
+```json
+{
+  "owner_id": "...",
+  "text": "Decided that Kleos will use hybrid retrieval rather than pure vector search.",
+  "source": "text",
+  "occurred_at_ms": null,
+  "sensitive": false,
+  "session_token": null
+}
+```
+
+Runs **the existing ingestion graph** with the record pushed in rather than
+pulled — extraction, resolution, sealing and the write are identical, because a
+thing the person said is a record like any other once it exists.
+
+- `external_id` is a **content address** over owner, source, text and timestamp.
+  A retried request writes nothing new; the same sentence tomorrow is a second
+  record, because it is.
+- `url` stays `null` even when the text contains one. `SourceRef.url` means
+  *where this record lives*, and an utterance lives nowhere. A URL inside it is
+  something the person *referred to* — a different relationship.
+- `sensitive` is per request, not per source, and is **refused up front** without
+  a session rather than failing inside the graph where it would surface as a
+  skipped record.
+
+### `POST /query`
+
+Returns an answer with citations, or an explicit decline listing why each
+candidate was out of scope:
+
+```json
+{
+  "question": "...",
+  "answered": false,
+  "text": "8 candidate memory object(s) matched, but none are within the requesting agent's scope (source not in scope)",
+  "citations": [],
+  "denied": [{"id": "...", "reason": "source_not_in_scope"}],
+  "considered": 8
+}
+```

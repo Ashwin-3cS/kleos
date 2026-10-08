@@ -1,4 +1,7 @@
-# ADR 0014: Following what the person referred to
+---
+title: "ADR 0014: Following what the person referred to"
+description: "*'I learnt RAG from this URL'* contains two things: an assertion about the person, and a pointer to something they read."
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

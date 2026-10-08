@@ -1,4 +1,7 @@
-# ADR 0007: Measure disclosure, not only recall
+---
+title: "ADR 0007: Measure disclosure, not only recall"
+description: "mem0 is the closest thing to prior art for this project, and its evaluation page is the clearest statement of what the field currently considers 'a good memory layer'."
+---
 
 **Status:** accepted
 **Date:** 2026-10-02

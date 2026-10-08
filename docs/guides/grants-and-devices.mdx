@@ -1,0 +1,95 @@
+---
+title: "Grants and devices"
+description: "Registering a device key and signing a scope the gateway cannot mint."
+---
+
+A grant is signed by a key the **owner** holds. The gateway verifies it and has
+no way to produce one. See
+[ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway).
+
+## 1. Create a device key
+
+```bash
+cargo run -p gateway --bin kleos-device -- keygen --out ~/.kleos/device.key
+cargo run -p gateway --bin kleos-device -- pubkey  --key ~/.kleos/device.key
+cargo run -p gateway --bin kleos-device -- key-id  --key ~/.kleos/device.key
+```
+
+`keygen` refuses to overwrite an existing key and writes it `0600`.
+
+## 2. Register it with the gateway
+
+Authorised by an **owner session**:
+
+```bash
+curl -s localhost:8080/auth/device/register \
+  -H "Authorization: Bearer $OWNER_SESSION" \
+  -H 'content-type: application/json' \
+  -d "{\"public_key_b64\": \"$PUBKEY\", \"label\": \"laptop\"}"
+```
+
+The `label` is display only and never trusted. The `key_id` is derived from the
+public key, so the same material cannot be claimed by two owners.
+
+## 3. Write a scope
+
+```json
+{
+  "agent_id": "claude-code",
+  "owner_id": "<owner id>",
+  "sources": ["mock", "chatgpt", "text"],
+  "entity_kinds": ["person", "project", "topic", "artifact", "organization"],
+  "not_before_ms": null,
+  "not_after_ms": null,
+  "max_sensitivity": "personal",
+  "expires_at_ms": null
+}
+```
+
+<Warning>
+**Deny by default.** An empty `sources` or `entity_kinds` list grants *nothing*,
+not everything. And an object derived from two sources needs **both** in scope.
+</Warning>
+
+`agent_id` is a label you choose. Nothing authenticates it — see
+[Permissions](/concepts/permissions#two-identities-one-of-them-authenticated).
+
+## 4. Sign it
+
+```bash
+cargo run -p gateway --bin kleos-device -- sign \
+  --key ~/.kleos/device.key --scope scope.json --ttl-secs 3600
+```
+
+A fresh nonce is generated per grant, so two grants over an identical scope are
+still distinguishable in the read log.
+
+<Tip>
+Keep TTLs short. There is no revocation list — the only immediate revocation is
+`POST /auth/device/revoke`, which invalidates **every** grant that key ever
+signed.
+</Tip>
+
+## 5. Check what it resolves to
+
+```bash
+curl -s localhost:8080/memory/scope/introspect \
+  -H 'content-type: application/json' \
+  -d "{\"grant_token\": \"$GRANT\"}"
+```
+
+Returns `{ active, scope, key_id }` — the authoritative scope, and the device
+key whose signature was verified.
+
+## Auditing a grant after the fact
+
+```bash
+curl -s localhost:8090/memory/reads \
+  -H 'content-type: application/json' \
+  -d "{\"session_token\": \"$OWNER_SESSION\", \"limit\": 50}"
+```
+
+Owner-authenticated, never grant-authenticated. Grouped by grant rather than by
+agent, because the grant is the capability: the same agent id holding two grants
+is two different authorisations, and an owner deciding whether to stop issuing
+one needs them apart.

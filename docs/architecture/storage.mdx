@@ -1,0 +1,136 @@
+---
+title: "Storage"
+description: "Neo4j as a queryable index, sealed bytes as Quilt patches, and the one thing that cannot be regenerated."
+---
+
+## Neo4j is the index, not the system of record
+
+Entities, events, claims, their edges and their embeddings live in Neo4j. It is
+conceptually **rebuildable from source material**: raw content belongs in Walrus
+under the owner's keys, which is not wired yet.
+
+Every stored memory node carries three labels' worth of information:
+
+| | Purpose |
+| --- | --- |
+| its specific label (`:Entity` / `:Event` / `:Claim`) | what it is |
+| a shared `:Memory` label | so **one** vector index covers all three in a single ranking pass |
+| a `payload` JSON blob | so objects round-trip back into pydantic without a lossy column mapping |
+
+ACL fields are additionally flattened onto the node for filtering, as are a
+claim's status and commitment facet — promoted out of the blob because "which
+commitments are open and past due?" has to be an indexed Cypher query, not a scan
+that filters in Python.
+
+### Edges
+
+```
+(:Event)-[:MENTIONS]->(:Entity)
+(:Claim)-[:ABOUT]->(:Entity)
+(:Claim|:Event)-[:CITES]->(:Event)
+(:Claim)-[:SUPERSEDES]->(:Claim)
+(:Claim)-[:CONTRADICTS]->(:Claim)
+(:Claim)-[:OWED_BY]->(:Entity)
+(:Claim)-[:OWED_TO]->(:Entity)
+```
+
+### Owner scoping
+
+Traversals are owner-constrained at **every node on the path**, not just at the
+endpoints:
+
+```cypher
+ALL(n IN nodes(path) WHERE n.owner_id = $owner_id)
+```
+
+Because a claim id from another owner must not be an existence oracle, and an
+intermediate hop must not leave the subgraph. A test parses the store's Cypher
+and fails on an unscoped query, with an explicit allow-list for the two that
+genuinely cannot be scoped in the database — each carrying its reason.
+
+<Note>
+**One exception to "rebuildable", stated because it changes what has to be
+backed up:** the agent read log cannot be regenerated from anything. It is the
+only such thing in this database. Agent sessions are the second — they are the
+only trace of a context window that no longer exists.
+</Note>
+
+### What is deliberately off the `:Memory` label
+
+`:AgentRead`, `:AgentSession` and `:SessionBlock`. The vector index and every
+traversal key on that label, so staying off it is what keeps the harness's record
+of its own activity out of retrieval entirely.
+
+### No full-text index
+
+There used to be one over `n.text`. Since text is sealed at rest when
+`ENCRYPT_CONTENT_AT_REST` is on, that index would match nothing and cost writes
+— a broken index that still looks like a feature. It is dropped rather than left,
+because a fresh database would otherwise differ from an upgraded one.
+
+## Sealed bytes: Quilt patches
+
+Sealed bodies are **batched into Quilts** rather than written one blob each. A
+Quilt is a container of patches; an id is content-addressed over the sealed
+bytes, never over the plaintext — hashing a plaintext would leak equality of raw
+content to anyone who can read ids.
+
+```python
+class BlobRef:
+    blob_id: str       # the Quilt
+    patch_id: str|None # this body within it
+    byte_len: int
+    backend: str
+```
+
+```python
+class BlobStore(Protocol):
+    backend: str
+    def put_batch(self, owner_id: str, ciphertexts: list[bytes]) -> list[BlobRef]: ...
+    def put(self, owner_id: str, ciphertext: bytes) -> BlobRef: ...
+    def get(self, owner_id: str, ref: BlobRef) -> bytes | None: ...
+```
+
+`get` is **owner-partitioned**: it will not return another owner's bytes even
+when handed correct ids. The permission layer governs *objects*; this governs
+*bytes*, and collapsing them would mean one bug reaches both.
+
+<Warning>
+**There is no assembled read path.** The gateway exposes
+`POST /memory/seal/decrypt`, and `LocalQuiltStore.get` is implemented and
+guarded against path traversal — but nothing converts a stored
+`EncryptedContentRef` into a `BlobRef`, so `get` has no callers. Sealed bodies
+are durable and not yet retrievable.
+</Warning>
+
+`WalrusQuiltStore` has the same interface and raises. It does **not** fall back
+to local disk when configured, because a deployment that believes it writes to
+Walrus and actually writes to the orchestrator's disk has a confidentiality bug
+rather than a performance one. See
+[ADR 0002](/adr/0002-persist-sealed-ciphertext-in-a-blob-store) and
+[ADR 0008](/adr/0008-store-sealed-bodies-as-quilt-patches).
+
+## Postgres
+
+Two tables, both owned by the gateway, both holding ciphertext or public keys:
+
+| Table | Holds |
+| --- | --- |
+| `kleos_sealed_oauth_tokens` | sealed refresh tokens, keyed `(owner_id, provider)` so re-consent is an update rather than a second row |
+| `kleos_device_keys` | registered device public keys, `key_id` as primary key |
+
+<Note>
+The orchestrator is deliberately given **no credentials** for this database.
+Handing Python the sealed-token rows would defeat the point of doing the code
+exchange inside the enclave.
+</Note>
+
+## Redis
+
+RQ ingestion jobs, and nothing else. Nothing in the enclave or gateway talks to
+Redis.
+
+Ingestion is enqueued from day one because connecting a source means backfilling
+a large history in bursts, which is the wrong lifetime for an HTTP request.
+Queries stay synchronous — an agent asking a question wants an answer, not a job
+id.

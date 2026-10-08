@@ -1,4 +1,7 @@
-# ADR 0010: Encrypt the resolved record's text at rest
+---
+title: "ADR 0010: Encrypt the resolved record's text at rest"
+description: "The confidentiality model said, honestly, that raw bodies and OAuth tokens are ciphertext while the **derived** memory is written to Neo4j in the clear — and that this is 'a real g"
+---
 
 **Status:** accepted
 **Date:** 2026-10-02
