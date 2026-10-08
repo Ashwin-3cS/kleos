@@ -293,6 +293,141 @@ async fn unsealing_takes_the_owner_from_the_verified_scope() {
 }
 
 #[tokio::test]
+async fn acting_needs_the_grant_to_name_the_action() {
+    // Two capability checks, not one. `may_act` says this agent may ask for
+    // actions at all; `act_actions` says which. A grant that said only the first
+    // would be a grant to do anything the build knows how to do, which is not a
+    // capability anybody would knowingly sign.
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+
+    let body = |token: &str| {
+        json!({"grant_token": token, "action_id": "attest.digest", "args": {"digest": "abc"}})
+    };
+
+    let read_only =
+        shared::sign_grant(&scope("owner-1", "agent-1"), &kp, now_ms(), HOUR_MS, "n1").unwrap();
+    let (status, _) = call(&state, post("/memory/act", None, body(&read_only))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "may_act is off by default");
+
+    let mut may_act = scope("owner-1", "agent-1");
+    may_act.may_act = true;
+    let unnamed = shared::sign_grant(&may_act, &kp, now_ms(), HOUR_MS, "n2").unwrap();
+    let (status, _) = call(&state, post("/memory/act", None, body(&unnamed))).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "may_act alone must not grant every action this build knows"
+    );
+}
+
+#[tokio::test]
+async fn one_action_granted_is_not_another_action_granted() {
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+
+    let mut narrow = scope("owner-1", "agent-1");
+    narrow.may_act = true;
+    narrow.act_actions = vec!["attest.digest".into()];
+    let token = shared::sign_grant(&narrow, &kp, now_ms(), HOUR_MS, "n1").unwrap();
+
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/act",
+            None,
+            json!({"grant_token": token, "action_id": "google.gmail.send", "args": {}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn acting_refuses_a_grant_signed_by_an_unregistered_key() {
+    let state = state();
+    let stranger = keypair();
+    let mut acting = scope("owner-1", "agent-1");
+    acting.may_act = true;
+    acting.act_actions = vec!["attest.digest".into()];
+    let token = shared::sign_grant(&acting, &stranger, now_ms(), HOUR_MS, "n1").unwrap();
+
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/act",
+            None,
+            json!({"grant_token": token, "action_id": "attest.digest", "args": {"digest": "a"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_action_request_cannot_name_its_own_owner() {
+    // There is no owner field on `ActRequest`, and this asserts the consequence
+    // rather than the absence: an owner in the body changes nothing, because
+    // nothing reads it. No enclave is reachable here, so the call fails
+    // downstream -- what matters is that it was not refused as owner-2, and not
+    // accepted as owner-2 either.
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+    let mut acting = scope("owner-1", "agent-1");
+    acting.may_act = true;
+    acting.act_actions = vec!["attest.digest".into()];
+    let token = shared::sign_grant(&acting, &kp, now_ms(), HOUR_MS, "n1").unwrap();
+
+    let (status, body) = call(
+        &state,
+        post(
+            "/memory/act",
+            None,
+            json!({
+                "grant_token": token,
+                "action_id": "attest.digest",
+                "args": {"digest": "a"},
+                "owner_id": "owner-2",
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a grant naming this action should authorise: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_grant_cannot_act() {
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+
+    let mut acting = scope("owner-1", "agent-1");
+    acting.may_act = true;
+    acting.act_actions = vec!["attest.digest".into()];
+    // Signed with a one-millisecond life, so it is already past by the time the
+    // route evaluates it.
+    let token = shared::sign_grant(&acting, &kp, now_ms() - 10_000, 1, "n1").unwrap();
+
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/act",
+            None,
+            json!({"grant_token": token, "action_id": "attest.digest", "args": {"digest": "a"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn a_grant_signed_by_an_unregistered_key_is_refused() {
     let state = state();
     let kp = keypair();

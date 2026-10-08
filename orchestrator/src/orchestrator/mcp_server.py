@@ -27,6 +27,10 @@ What is exposed, and what is not:
   the same subject, who decided it and on what basis. Composed out of the reads
   above rather than retrieving for itself, so each one keeps its own permission
   check and its own log entry.
+- **One action** -- `request_action`, under a grant that says `may_act` *and*
+  names the action. The agent submits an intent and receives an
+  acknowledgement: it never receives the credential the action needed, or the
+  material that credential unlocks. See `enclave/src/services/actions.rs`.
 - **One write** -- `record_decision`, and only under a grant whose scope says
   `may_write`. Deny-by-default, so every grant issued before that field existed
   is read-only. What an agent writes takes the `agent` source whatever it asks
@@ -43,6 +47,7 @@ import logging
 
 from mcp.server.mcpserver import MCPServer
 
+from .graphs.act import request_action as act
 from .graphs.brief import brief_before_acting as brief
 from .graphs.decide import consolidate_session
 from .graphs.decide import record_decision as decide
@@ -296,6 +301,48 @@ def record_decision(
         sensitive=sensitive,
     )
     return recorded.as_dict()
+
+
+# -- acting -------------------------------------------------------------
+
+
+@mcp.tool()
+def request_action(
+    action_id: str,
+    grant_token: str,
+    args: dict | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Ask for something sensitive to be *done* on the owner's behalf.
+
+    You submit an intent -- which action, with which arguments -- and receive an
+    **acknowledgement**: whether it happened, a digest over what it did, and one
+    line of summary. You do not receive the credential the action needed, and you
+    do not receive the material that credential unlocks. The work happens inside
+    the enclave, which resolves the credential itself and drops it before
+    replying.
+
+    Needs a grant that says `may_act` **and** names this `action_id`. Both,
+    because a grant saying only the first would be a grant to do anything the
+    build knows how to do.
+
+    The action list is compiled into the enclave, so an unknown id is refused and
+    the refusal says what *is* known. A refusal comes back as `ok: false` rather
+    than as an error, because an attempt made and failed is a different fact from
+    an attempt never made -- and both are recorded against your device.
+
+    If a result is too large to summarise it comes back as a sealed reference
+    rather than as content, and reading it needs a grant that also says
+    `may_unseal`: acknowledgement by default, disclosure as a second step.
+    """
+    result = act(
+        _get_runtime(),
+        grant_token,
+        action_id,
+        args or {},
+        session_id=session_id,
+    )
+    return result.as_dict()
 
 
 def main() -> None:

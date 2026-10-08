@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod attestation;
 pub mod http;
 pub mod identity;

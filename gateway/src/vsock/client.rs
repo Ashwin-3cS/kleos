@@ -1,8 +1,8 @@
 use crate::error::GatewayError;
 use shared::{
-    SealDecryptRequest, SealDecryptResponse,
-    IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
-    SealEncryptRequest, SealEncryptResponse,
+    ActionAck, ActionIntent, IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest,
+    OAuthExchangeResponse, SealDecryptRequest, SealDecryptResponse, SealEncryptRequest,
+    SealEncryptResponse,
 };
 use std::time::Duration;
 
@@ -91,6 +91,15 @@ impl EnclaveClient {
         req: &SealDecryptRequest,
     ) -> Result<SealDecryptResponse, GatewayError> {
         self.post_json("/seal/decrypt", req).await
+    }
+
+    /// Asks the enclave to perform one action and return an acknowledgement.
+    ///
+    /// The gateway forwards and does not interpret: an ack is the enclave's
+    /// statement about what it did, and a host that rewrote it would be the
+    /// operator editing the audit record.
+    pub async fn act(&self, intent: &ActionIntent) -> Result<ActionAck, GatewayError> {
+        self.post_json("/act", intent).await
     }
 
     async fn post_json<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(

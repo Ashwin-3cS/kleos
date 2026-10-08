@@ -123,6 +123,60 @@ pub struct ScopeIntrospectResponse {
     pub key_id: String,
 }
 
+/// An agent asking for something sensitive to be *done*, rather than read.
+///
+/// The shape is the whole point. An agent submits an **intent** -- which action,
+/// with which arguments -- and never receives the credential the action needs.
+/// The enclave resolves that itself: it unseals the owner's refresh token,
+/// obtains a short-lived access token in-TEE, performs the call, and drops both
+/// before replying. Nothing outside the TEE sees either.
+///
+/// `owner_id` is set by the gateway from the verified grant, never by the agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ActionIntent {
+    pub owner_id: String,
+    /// Resolved against a registry compiled into the enclave. An unknown id is
+    /// refused rather than forwarded, for the same reason upstream hostnames are
+    /// compile-time constants: the enclave's environment is supplied by the host,
+    /// so a host-settable action is an operator-repointable one.
+    pub action_id: String,
+    /// JSON, interpreted only by the named action.
+    pub args: serde_json::Value,
+    pub at_ms: u64,
+}
+
+// There is deliberately no grant fingerprint here, and no grant token. The
+// enclave has no use for either: it decides *what may be done in here*, while
+// *who is asking* was already decided by the gateway, and the audit record is
+// written by the orchestrator against the fingerprint it computed itself. Giving
+// the TEE a credential it would only carry is how a boundary accumulates things
+// it does not need.
+
+/// What an agent gets back: an acknowledgement, not the material.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ActionAck {
+    pub ok: bool,
+    pub action_id: String,
+    pub at_ms: u64,
+    /// A hash over what the action actually did, so two acks can be compared and
+    /// a replay recognised, without the content crossing the boundary.
+    pub digest: String,
+    /// One line, bounded, safe to put in an agent's context. Not the response
+    /// body: an action that produced something large says so and seals it.
+    pub summary: String,
+    /// Set when the result was too large to summarise. The agent must then pass
+    /// the `may_unseal` gate to read any of it -- acknowledgement by default,
+    /// disclosure as a second and separately granted step.
+    #[serde(default)]
+    pub sealed_ref: Option<crate::memory::EncryptedContentRef>,
+    /// Present only when `ok` is false. The reason, never the provider's raw
+    /// error: a provider error can carry request URLs and token prefixes.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 /// Request the gateway sends to the enclave's `/oauth/exchange` route.
 ///
 /// The authorization `code` crosses this boundary because the gateway must
