@@ -21,6 +21,7 @@ from ..storage.mutations import (
     RULE_DUPLICATE_ID,
     RULE_EQUAL_ASSERTED_AT_CONTRADICTS,
     RULE_NEWER_ASSERTED_AT,
+    RULE_SUPERSESSION_SETTLES_CONFLICT,
     RULE_WEAKER_SOURCE_CONTRADICTS,
 )
 from ..storage.neo4j_store import Neo4jStore
@@ -161,6 +162,14 @@ class Resolution:
     #: the branch returned, so the graph recorded that B replaced A and nothing
     #: recorded why. The write node turns these into `:Mutation` entries.
     decisions: list[Decision] = field(default_factory=list)
+    #: ``(reconciled claim id, the claim that settled it)``.
+    #:
+    #: `reconciled_into` has been in both schemas since the beginning, is read by
+    #: `graphs/history.py`, and was written by nothing -- so
+    #: `ShiftHistory.reconciliations` was populated-but-always-empty and the
+    #: question "what resolved this disagreement" had no answer the record could
+    #: give. This is the producer.
+    reconciliations: list[tuple[str, str]] = field(default_factory=list)
 
 
 class Resolver:
@@ -252,6 +261,7 @@ class Resolver:
                     claim.supersedes.append(other.id)
                     other.status = ClaimStatus.SUPERSEDED
                     resolution.supersessions.append((claim.id, other.id))
+                    self._settle_conflicts(resolution, claim, other)
                     resolution.decisions.append(
                         Decision(
                             object_id=other.id,
@@ -298,3 +308,44 @@ class Resolver:
             resolution.new_claims.append(claim)
 
         return resolution
+
+    def _settle_conflicts(
+        self, resolution: Resolution, superseding: Claim, superseded: Claim
+    ) -> None:
+        """A later decision on the same subject settles a standing disagreement.
+
+        If the claim being superseded was in an unresolved `CONTRADICTS` pair,
+        both sides of that pair are reconciled into the claim that replaced it.
+        The reasoning is the same one supersession rests on: the person -- or a
+        delegate they authorised -- has decided the matter again, more recently,
+        and a conflict between two older readings of it is no longer open.
+
+        **Conservative on purpose.** It settles only conflicts touching the claim
+        actually superseded, never every conflict about the subject: a decision
+        about the database does not settle an unrelated argument about the same
+        project. And it never reconciles a claim into itself.
+
+        A contradiction with no superseding claim stays open, which is the common
+        case and the right one -- an unresolved disagreement is part of the
+        record, not a defect in it.
+        """
+        pairs = self._store.conflict_links(superseded.owner_id, [superseded.id])
+        if not pairs:
+            return
+        settled: set[str] = set()
+        for left, right in pairs:
+            settled.update({left, right})
+        settled.discard(superseding.id)
+        for claim_id in sorted(settled):
+            resolution.reconciliations.append((claim_id, superseding.id))
+            resolution.decisions.append(
+                Decision(
+                    object_id=claim_id,
+                    other_id=superseding.id,
+                    rule=RULE_SUPERSESSION_SETTLES_CONFLICT,
+                    reason=(
+                        "a later decision on the same subject superseded one side "
+                        "of this disagreement, which settles it"
+                    ),
+                )
+            )

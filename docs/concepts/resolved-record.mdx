@@ -14,6 +14,14 @@ becomes a `Claim`. When a later claim supersedes an earlier one, the earlier one
 unresolved conflict is linked as `contradicts`. The claim that eventually
 settles a conflict is pointed at by `reconciled_into`.
 
+<Note>
+A later decision that supersedes one side of a standing conflict settles both
+sides into itself — conservatively: only conflicts touching the claim actually
+superseded, never every conflict about the subject. A disagreement with nothing
+newer stays open, which is the common case and part of the record rather than a
+defect in it.
+</Note>
+
 ## Corrections arrive as new events
 
 `SourceRef` keeps `occurred_at_ms` and `ingested_at_ms` separate, which is what

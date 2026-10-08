@@ -409,6 +409,54 @@ class Neo4jStore:
             )
         )
 
+    def set_reconciled_into(
+        self,
+        owner_id: str,
+        claim_id: str,
+        into_claim_id: str,
+        *,
+        actor,
+        reason: str,
+        rule: str,
+    ) -> Claim | None:
+        """Marks one side of a settled disagreement, pointing at what settled it.
+
+        Moves the epistemic axis to `reconciled` and sets `reconciled_into`
+        together, because they are one fact and a claim reconciled with nothing
+        to point at is worse than an unreconciled one -- `graphs/history.py`
+        reads the pointer to render what resolved the conflict.
+
+        Attributed like every other mutation, and for the same reason: this is a
+        change to what the record believes, and the question "who decided this
+        disagreement was over" is exactly the kind the log exists for.
+        """
+        from .mutations import KIND_RECONCILE, MutationEntry
+
+        def mutate(claim: Claim) -> None:
+            claim.status = ClaimStatus.RECONCILED
+            claim.reconciled_into = into_claim_id
+
+        result = self._mutate_claim(owner_id, claim_id, mutate)
+        if result is None:
+            return None
+        prior, claim = result
+        if prior.reconciled_into == claim.reconciled_into and prior.status is claim.status:
+            return claim
+        self.append_mutation(
+            MutationEntry.for_actor(
+                actor,
+                owner_id=owner_id,
+                object_id=claim_id,
+                kind=KIND_RECONCILE,
+                field_name="reconciled_into",
+                before=prior.reconciled_into,
+                after=into_claim_id,
+                reason=reason,
+                rule=rule,
+            )
+        )
+        return claim
+
     def set_fulfillment(
         self,
         owner_id: str,

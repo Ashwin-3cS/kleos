@@ -325,3 +325,90 @@ def test_context_chain_withholds_an_out_of_scope_hop(runtime):
     assert all("summary" not in n and "source" not in n for n in withheld)
     assert chain.sources == ["ledger"]
     assert "inbox-002" not in chain.text
+
+
+# -- reconciliation ------------------------------------------------------
+#
+# `reconciled_into` has been in both schemas since the beginning, is read by the
+# walk above, and was written by nothing -- so `ShiftHistory.reconciliations` was
+# populated-but-always-empty and "what resolved this disagreement" had no answer
+# the record could give. The corpus already contains an unresolved conflict
+# (`ledger-003` and `inbox-004`, asserted at the same instant), so the test is a
+# fifth record that decides the matter again.
+
+SQLITE = "project Helios will use SQLite for the primary datastore."
+LEDGER_005 = _record("ledger-005", "ledger", 12, "Erin", SQLITE)
+
+
+def _settle(runtime) -> str:
+    """Ingests a later decision on the same subject, and returns its claim id."""
+    run_ingestion(
+        runtime=runtime,
+        owner_id=OWNER,
+        source="ledger",
+        records=[LEDGER_005],
+        thread_id="shift-settle",
+    )
+    return _claims(runtime.store)[SQLITE].id
+
+
+def test_a_later_decision_settles_a_standing_disagreement(runtime) -> None:
+    _, _, third, dynamo = _ids(runtime)
+
+    settled_by = _settle(runtime)
+
+    stored = _claims(runtime.store)
+    for claim in (stored[REDIS], stored[DYNAMO]):
+        assert claim.status is ClaimStatus.RECONCILED, (
+            "both sides of the conflict are settled, not only the superseded one"
+        )
+        assert claim.reconciled_into == settled_by
+    assert third != settled_by and dynamo != settled_by
+
+
+def test_reconciliations_is_populated(runtime) -> None:
+    """The assertion this whole change exists for: a field that was always empty
+    is not any more. Better than a new assertion against new code -- the read was
+    already written and already correct, and had nothing to read."""
+    settled_by = _settle(runtime)
+
+    history = why_did_this_shift(runtime, settled_by, "grant-ok")
+
+    assert history.reconciliations, (
+        "the walk already rendered reconciliations; nothing ever wrote one"
+    )
+    targets = {r["reconciled_into"]["id"] for r in history.reconciliations}
+    assert targets == {settled_by}
+
+
+def test_the_reconciliation_records_which_rule_settled_it(runtime) -> None:
+    """Not `newer_asserted_at`: the supersession is what the timestamp decided,
+    and the reconciliation is the consequence. A reader should be able to tell
+    which of the two they are looking at."""
+    _settle(runtime)
+
+    rules = {e.rule for e in runtime.mutations.recent(OWNER) if e.rule}
+    assert "supersession_settles_conflict" in rules
+
+    entries = [
+        e for e in runtime.mutations.recent(OWNER) if e.rule == "supersession_settles_conflict"
+    ]
+    for entry in entries:
+        assert entry.kind == "reconcile"
+        assert entry.field_name == "reconciled_into"
+        assert entry.before is None
+        assert entry.after
+        assert entry.reason
+
+
+def test_an_open_conflict_stays_open(runtime) -> None:
+    """The common case, and the right one: an unresolved disagreement is part of
+    the record rather than a defect in it. Nothing settles until something
+    actually decides the matter again."""
+    stored = _claims(runtime.store)
+    assert stored[DYNAMO].reconciled_into is None
+    assert stored[DYNAMO].status is not ClaimStatus.RECONCILED
+
+    history = why_did_this_shift(runtime, stored[REDIS].id, "grant-ok")
+    assert history.reconciliations == []
+    assert history.conflicts, "and the conflict is still reported as a conflict"
