@@ -106,10 +106,55 @@ making it a kind would put session scratchpads in the same index as consolidated
 facts — exactly the distinction the three states exist to draw.
 
 <Info>
-Memory kinds, write-capable grants, the mutation log and the briefing all exist.
-What is not built yet: consolidation of a session's blocks into claims, and the
-TEE action broker.
+Memory kinds, write-capable grants, the mutation log, the briefing and
+consolidation all exist. What is not built yet: the TEE action broker, where an
+agent submits an intent and receives an acknowledgement rather than a credential.
 </Info>
+
+## Consolidation
+
+The one thing that moves working context into long-term memory, and almost
+nothing should move.
+
+<AccordionGroup>
+<Accordion title="A third prompt, not a third model">
+Pointing the activity prompt at a scratchpad produces "the assistant decided
+that the migration will use Postgres" — a claim attributed to nobody, about a
+decision nobody made. So the consolidation prompt asks a different question:
+what did this session *conclude* that outlives it, and of what kind. It says
+outright that most sessions conclude nothing and that an empty list is the
+common answer.
+</Accordion>
+<Accordion title="It may not summarise">
+A consolidator emitting a paragraph per session would turn the memory back into
+a pile of retrievable documents. The output is statements that can be
+superseded, contradicted and reconciled by machinery that already exists.
+</Accordion>
+<Accordion title="The rule-based consolidator never invents a tacit claim">
+In mock mode it recognises explicit cues — `Decision: ...`, `Procedure: ...` —
+and nothing else. A regex cannot tell what a session concluded, and one that
+guessed would write invented claims into a real person's memory under an
+authenticated device id.
+
+It emits **no tacit claims at all**. A tacit claim is an inference about how
+somebody thinks, assembled from watching them; a fixture producing one would be
+unfalsifiable, maximally sensitive, and attributed by a pattern match. A test
+holds that.
+</Accordion>
+<Accordion title="Gated like a direct write, and idempotent">
+Consolidating needs the same `may_write` a direct write does, because the
+outcome is identical: a claim in the person's record. A session is not a licence
+to write; the grant is.
+
+A conclusion is dated to the **session**, not to when consolidation ran, so the
+content-addressed record is the same on a retry — the resolver recognises the
+duplicate and writes nothing. `claims` reports what that call wrote; the
+session's `consolidated_into` is everything it ever produced.
+
+One refused conclusion does not refuse the rest: a grant covering episodes and
+not procedures keeps the episodes and reports what it would not keep.
+</Accordion>
+</AccordionGroup>
 
 ## Why the record of reading is not memory
 

@@ -116,8 +116,12 @@ def test_a_session_is_invisible_to_retrieval(runtime: Runtime) -> None:
     session = _open(runtime)
     _append(runtime, session.id, "the quick brown fox decided on Postgres")
 
+    # Unpacked, because `vector_search` returns (node, score) pairs -- and with
+    # nothing indexed for this owner the result is empty, so an assertion that
+    # only inspects the hits proves nothing on its own. The two reads below are
+    # what actually hold the property.
     hits = runtime.store.vector_search(OWNER, runtime.embedder.embed("Postgres"), top_k=20)
-    assert session.id not in {h.id for h in hits}
+    assert session.id not in {node.id for node, _score in hits}
 
     assert not runtime.store.get_many(OWNER, [session.id])
     assert not runtime.store.neighbour_ids(OWNER, [session.id], hops=2)
