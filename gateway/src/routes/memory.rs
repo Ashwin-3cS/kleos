@@ -214,6 +214,11 @@ fn now_ms() -> u64 {
 /// "authoritative" rests on: the scope is now authoritative because the **owner
 /// signed it**, not because this gateway did. There is no signing key here, so
 /// this process can verify a grant and cannot produce one.
+///
+/// Returns the signing `key_id` alongside the scope. It used to be read, used to
+/// look the key up, and dropped -- so nothing downstream could say *which device*
+/// authorised a read, and `Scope.agent_id`, an unchecked label, was the only
+/// identity the orchestrator ever saw. See ADR 0016.
 pub async fn scope_introspect(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScopeIntrospectRequest>,
@@ -239,8 +244,13 @@ pub async fn scope_introspect(
     )
     .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
 
+    // `claims.key_id` came out of an unverified payload, but reporting it here is
+    // sound by construction: the key it names is the key `verify_grant` just
+    // checked the signature against. A token claiming another key id would have
+    // been verified against that other key, and failed.
     Ok(Json(ScopeIntrospectResponse {
         active: true,
         scope,
+        key_id: claims.key_id,
     }))
 }
