@@ -12,7 +12,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .enums import AffectTone, ClaimStatus, EntityKind, FulfillmentStatus, SourceId
+from .enums import (
+    AffectTone,
+    Authority,
+    ClaimStatus,
+    EntityKind,
+    FulfillmentStatus,
+    MemoryKind,
+    SourceId,
+)
 from .permissions import ObjectAcl
 
 __all__ = [
@@ -57,6 +65,20 @@ class Provenance(BaseModel):
     derived_by: str
     confidence: float = 1.0
     created_at_ms: int
+    # Appended and optional, and ``None`` is a real value rather than a missing
+    # one: every object stored before these existed genuinely has no answer. The
+    # resolver's precedence rule falls back to the source rule exactly when
+    # ``authority`` is absent, so a default here would silently relabel every
+    # claim already in the database.
+    #: What asserted this, as a precedence class. Stamped where agent input
+    #: becomes a candidate, never read from an extractor.
+    authority: Authority | None = None
+    #: The agent label the owner put in the scope they signed. Not
+    #: authenticated -- ``actor_device_id`` is the part that is.
+    actor_agent_id: str | None = None
+    #: The registered device key whose signature the gateway verified.
+    actor_device_id: str | None = None
+    actor_session_id: str | None = None
 
 
 class EncryptedContentRef(BaseModel):
@@ -149,6 +171,11 @@ class Claim(BaseModel):
     #: Everything above is the epistemic axis; this is the lifecycle one.
     commitment: Commitment | None = None
     asserted_at_ms: int
+    #: ``None`` and deliberately not defaulted to ``EPISODIC``: every claim
+    #: written before this field existed genuinely has no kind, and inventing
+    #: one is a lie an indexed column then serves and a grant filter then
+    #: enforces. See the unkinded-object rule in ``permissions.evaluate``.
+    memory_kind: MemoryKind | None = None
     provenance: Provenance
     acl: ObjectAcl
 

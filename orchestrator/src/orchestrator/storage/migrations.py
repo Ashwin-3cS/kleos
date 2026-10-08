@@ -38,6 +38,12 @@ _INDEXES = [
     # Epistemic status, promoted alongside it and indexed for the same reason:
     # the open-commitment read excludes superseded claims by default.
     "CREATE INDEX kleos_claim_status IF NOT EXISTS FOR (n:Claim) ON (n.claim_status)",
+    # Which kind of long-term memory a claim is, promoted for the same reason
+    # the commitment fields are: "what procedures do we have about X" and the
+    # grant filter for a scope that covers procedures and not episodes both have
+    # to be indexed queries rather than scans that hydrate every payload.
+    "CREATE INDEX kleos_claim_memory_kind IF NOT EXISTS "
+    "FOR (n:Claim) ON (n.memory_kind)",
     # The read log. Owner plus time is the only way it is read -- "show me what
     # agents have seen, newest first" -- and the composite index serves both
     # the filter and the ordering. `:AgentRead` carries no `:Memory` label, so

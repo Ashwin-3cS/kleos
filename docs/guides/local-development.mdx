@@ -49,26 +49,48 @@ than failing later as an authentication error against a database that looks
 healthy.
 
 <Tabs>
-<Tab title="Migrate in place (no data lost)">
-```bash
-for n in neo4j redis postgres; do docker rename memorai-$n kleos-$n; done
+<Tab title="Migrate without losing data">
+Change the stored credentials first, using the old ones:
 
-docker exec kleos-neo4j cypher-shell -u neo4j -p memoraidev \
+```bash
+docker exec memorai-neo4j cypher-shell -u neo4j -p memoraidev \
   "ALTER CURRENT USER SET PASSWORD FROM 'memoraidev' TO 'kleosdev'"
 
-docker exec kleos-postgres psql -U memorai -d memorai \
+docker exec memorai-postgres psql -U memorai -d memorai \
   -c "CREATE ROLE kleos LOGIN SUPERUSER PASSWORD 'kleosdev'" \
   -c "CREATE DATABASE kleos OWNER kleos"
-
-docker restart kleos-neo4j
 ```
 
-The restart matters: Neo4j keeps failed-authentication state, so attempts made
-with the old password leave a lockout window that looks exactly like a wrong
-password — and a suite run during it **skips rather than fails**.
+Then replace the containers, keeping the volumes:
 
-The volumes keep their old names, which is cosmetic: a container only uses a
-volume name when it is first created.
+```bash
+docker rm -f memorai-neo4j memorai-redis memorai-postgres
+./scripts/services.sh up
+```
+
+<Warning>
+**Replace the container; do not rename it.** A container's environment *and its
+healthcheck* are fixed when it is created, and `docker rename` changes neither.
+
+A compose-created Neo4j runs `cypher-shell -u neo4j -p <old password>` every
+five seconds. After the password changes, that healthcheck fails forever — and
+because Neo4j rate-limits repeated authentication failures, the database then
+rejects **correct** credentials too, in windows long enough to span a whole test
+run. It reads as a wrong password, intermittently, indefinitely.
+
+`docker restart` clears the lockout only until the next healthcheck. Replacing
+the container is what ends it.
+</Warning>
+
+If `services.sh` created the originals, the volumes are `kleos-*-data` and are
+reused as they are. If compose did, they are `orchestrator_*-data`, and a new
+container starts empty unless you mount them explicitly:
+
+```bash
+docker run -d --name kleos-neo4j -p 127.0.0.1:7688:7687 \
+  -e NEO4J_AUTH=neo4j/kleosdev -v orchestrator_neo4j-data:/data \
+  neo4j:5.26-community
+```
 </Tab>
 <Tab title="Start clean">
 ```bash

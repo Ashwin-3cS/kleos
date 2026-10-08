@@ -95,6 +95,7 @@ def test_struct_fields_match(name: str):
         ("ClaimStatus", schema.ClaimStatus),
         ("FulfillmentStatus", schema.FulfillmentStatus),
         ("AffectTone", schema.AffectTone),
+        ("Authority", schema.Authority),
         # Declared in `memory.rs` beside the other memory enums, and reached
         # for here through `permissions`, which is what consumes it today --
         # `Scope.memory_kinds`. The module it is imported into is not the
