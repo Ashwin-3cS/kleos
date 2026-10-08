@@ -13,8 +13,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..enums import ClaimStatus
+from ..enums import Authority, ClaimStatus
 from ..schema import Candidate, Claim
+from ..storage.mutations import (
+    RULE_AGENT_DELEGATE_SUPERSEDES,
+    RULE_ARRIVED_LATE_BORN_SUPERSEDED,
+    RULE_DUPLICATE_ID,
+    RULE_EQUAL_ASSERTED_AT_CONTRADICTS,
+    RULE_NEWER_ASSERTED_AT,
+    RULE_WEAKER_SOURCE_CONTRADICTS,
+)
 from ..storage.neo4j_store import Neo4jStore
 
 _STOPWORDS = {
@@ -60,13 +68,41 @@ _WEAKER_SOURCES = frozenset({"web"})
 
 
 def _is_weaker(claim: Claim) -> bool:
-    """Whether every source this claim draws on is reference material.
+    """Whether this claim is reference material rather than the person's account.
 
-    ``all`` rather than ``any``: a claim derived from both a page and the person's own
-    note carries their account too, and demoting it would lose that.
+    Reads ``Provenance.authority`` when it is set, because precedence is a
+    property of what asserted a thing rather than of where the bytes came from:
+    an agent the owner granted ``may_supersede_owner`` is a *delegate* and is not
+    weaker, while the same agent without it writes ``Reference`` and is.
+
+    Falls back to the source rule when authority is absent, which is every claim
+    stored before that field existed. That fallback is why ``authority`` is
+    ``Option`` with no default -- a default would relabel the whole existing
+    graph as one class or the other.
+
+    The source rule itself uses ``all`` rather than ``any``: a claim derived from
+    both a page and the person's own note carries their account too, and demoting
+    it would lose that.
     """
+    authority = claim.provenance.authority
+    if authority is not None:
+        return authority is Authority.REFERENCE
     sources = list(claim.acl.sources)
     return bool(sources) and all(s in _WEAKER_SOURCES for s in sources)
+
+
+def _supersession_rule(candidate: Claim) -> str:
+    """Which rule a supersession was decided by.
+
+    A delegate's write is recorded as such rather than as a timestamp
+    comparison, because the timestamp is not what permitted it: an agent's claim
+    only reaches this branch at all when the owner's grant said
+    `may_supersede_owner`. Recording `newer_asserted_at` there would say the
+    clock decided, which is the thing ADR 0014 is careful about.
+    """
+    if candidate.provenance.authority is Authority.DELEGATE:
+        return RULE_AGENT_DELEGATE_SUPERSEDES
+    return RULE_NEWER_ASSERTED_AT
 
 
 def _may_not_supersede(candidate: Claim, stored: Claim) -> bool:
@@ -86,6 +122,26 @@ def _may_not_supersede(candidate: Claim, stored: Claim) -> bool:
     return _is_weaker(candidate) and not _is_weaker(stored)
 
 
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """One resolution decision, with the rule that produced it.
+
+    Deliberately not a `MutationEntry`: the resolver knows which rule fired and
+    against what, and knows nothing about who asked -- the actor arrives at the
+    write node, which is where the grant is. Keeping them apart is what stops
+    the resolver needing to know about grants at all.
+    """
+
+    #: The object whose state this changes.
+    object_id: str
+    #: The other claim involved, when there is one.
+    other_id: str | None
+    #: One of `storage.mutations.RULES`.
+    rule: str
+    #: Prose, for a reader. The rule is for a filter.
+    reason: str
+
+
 @dataclass(slots=True)
 class Resolution:
     """What the resolver decided for one batch of candidates."""
@@ -96,6 +152,15 @@ class Resolution:
     #: (claim id, conflicting claim id) -- unresolved, both stay active-ish
     contradictions: list[tuple[str, str]] = field(default_factory=list)
     duplicates: list[str] = field(default_factory=list)
+    #: Why each of the above happened: which branch fired, and against what.
+    #:
+    #: This is the field that makes "every state change and why" true. The
+    #: reasons existed already -- newer timestamp wins, equal timestamps
+    #: contradict, a late arrival is born superseded, a weaker source may not
+    #: supersede -- but they lived in control flow and were discarded the moment
+    #: the branch returned, so the graph recorded that B replaced A and nothing
+    #: recorded why. The write node turns these into `:Mutation` entries.
+    decisions: list[Decision] = field(default_factory=list)
 
 
 class Resolver:
@@ -130,6 +195,17 @@ class Resolver:
         for claim in candidate.claims:
             if self._store.get(claim.id) is not None:
                 resolution.duplicates.append(claim.id)
+                resolution.decisions.append(
+                    Decision(
+                        object_id=claim.id,
+                        other_id=None,
+                        rule=RULE_DUPLICATE_ID,
+                        reason=(
+                            "already stored: the id is content-addressed, so this is "
+                            "the same statement from the same record"
+                        ),
+                    )
+                )
                 continue
 
             stored = [
@@ -159,21 +235,64 @@ class Resolver:
                     # visible without the weaker source winning.
                     claim.contradicts.append(other.id)
                     resolution.contradictions.append((claim.id, other.id))
+                    resolution.decisions.append(
+                        Decision(
+                            object_id=claim.id,
+                            other_id=other.id,
+                            rule=RULE_WEAKER_SOURCE_CONTRADICTS,
+                            reason=(
+                                "reference material cannot overwrite the person's own "
+                                "account, so the disagreement is recorded instead"
+                            ),
+                        )
+                    )
                     continue
 
                 if claim.asserted_at_ms > other.asserted_at_ms:
                     claim.supersedes.append(other.id)
                     other.status = ClaimStatus.SUPERSEDED
                     resolution.supersessions.append((claim.id, other.id))
+                    resolution.decisions.append(
+                        Decision(
+                            object_id=other.id,
+                            other_id=claim.id,
+                            rule=_supersession_rule(claim),
+                            reason=(
+                                "a later assertion about the same subject replaced it"
+                            ),
+                        )
+                    )
                 elif claim.asserted_at_ms == other.asserted_at_ms:
                     claim.contradicts.append(other.id)
                     claim.status = ClaimStatus.CONTRADICTED
                     resolution.contradictions.append((claim.id, other.id))
+                    resolution.decisions.append(
+                        Decision(
+                            object_id=claim.id,
+                            other_id=other.id,
+                            rule=RULE_EQUAL_ASSERTED_AT_CONTRADICTS,
+                            reason=(
+                                "asserted at the same instant, so neither is the later "
+                                "one and the conflict stays open"
+                            ),
+                        )
+                    )
                 else:
                     # Arrived late but happened earlier: the stored claim
                     # stands, this one is born superseded rather than dropped.
                     claim.status = ClaimStatus.SUPERSEDED
                     resolution.supersessions.append((other.id, claim.id))
+                    resolution.decisions.append(
+                        Decision(
+                            object_id=claim.id,
+                            other_id=other.id,
+                            rule=RULE_ARRIVED_LATE_BORN_SUPERSEDED,
+                            reason=(
+                                "ingested after a claim that was asserted later, so it "
+                                "is stored already superseded rather than dropped"
+                            ),
+                        )
+                    )
 
             prior.append(claim)
             resolution.new_claims.append(claim)

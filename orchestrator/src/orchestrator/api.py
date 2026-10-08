@@ -111,6 +111,14 @@ class ReadLogRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=500)
 
 
+class MutationLogRequest(BaseModel):
+    #: An **owner** session, not a grant. Same rule as the read log, and for a
+    #: sharper reason: a mutation log read across agents tells one agent what
+    #: another has been doing.
+    session_token: str
+    limit: int = Field(default=50, ge=1, le=500)
+
+
 class NeighbourhoodRequest(BaseModel):
     seed_ids: list[str] = Field(min_length=1, max_length=25)
     grant_token: str
@@ -320,6 +328,36 @@ def memory_reads(req: ReadLogRequest) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
     return runtime().read_log.summary(owner_id, limit=req.limit)
+
+
+@app.post("/memory/mutations")
+def memory_mutations(req: MutationLogRequest) -> dict[str, Any]:
+    """Every state change to this owner's memory: what changed, who changed it,
+    and which rule decided.
+
+    **Owner**-authenticated, beside the read log and for the same reason, which
+    is sharper here. The read log tells an owner what one grant was shown; a
+    mutation log read wholesale would tell *an agent* what other agents have
+    been writing -- the activity of every other agent on the same memory, around
+    the permission check rather than through it. So there is no grant-authorised
+    path to this and no MCP tool.
+
+    A briefing does surface mutations, but only for the specific objects the
+    asking agent has just been permitted to see: a per-object disclosure that
+    follows a permission check, not a feed.
+    """
+    try:
+        owner_id = runtime().gateway.introspect_session(req.session_token)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
+    entries = runtime().mutations.recent(owner_id, limit=req.limit)
+    return {
+        "owner_id": owner_id,
+        "mutations": len(entries),
+        "entries": [e.as_dict() for e in entries],
+    }
 
 
 @app.get("/explorer", include_in_schema=False)

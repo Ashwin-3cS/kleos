@@ -199,7 +199,7 @@ class Neo4jStore:
 
     # -- writes ---------------------------------------------------------
 
-    def upsert(self, node: MemoryNode, embedding: list[float]) -> None:
+    def upsert(self, node: MemoryNode, embedding: list[float]) -> bool:
         if self._embedding_dim is not None and len(embedding) != self._embedding_dim:
             raise ValueError(
                 f"embedding for {node.id} has {len(embedding)} dimensions, index expects "
@@ -215,7 +215,9 @@ class Neo4jStore:
         # constraint, which is the loud failure we want.
         cypher = f"""
         MERGE (n:{label} {{id: $id, owner_id: $owner_id}})
+        ON CREATE SET n.created_at_ms = timestamp()
         SET n:Memory,
+            n.changed_at_ms = timestamp(),
             n.payload = $payload,
             n.text = $text,
             n.occurred_at_ms = $occurred_at_ms,
@@ -224,8 +226,9 @@ class Neo4jStore:
             n.acl_entity_kinds = $acl_entity_kinds,
             n.embedding = $embedding,
             {_promoted_set("n")}
+        RETURN n.created_at_ms = n.changed_at_ms AS created
         """
-        self._run(
+        rows = self._run(
             cypher,
             **_promoted(node),
             id=node.id,
@@ -238,8 +241,33 @@ class Neo4jStore:
             acl_entity_kinds=[k.value for k in node.acl.entity_kinds],
             embedding=embedding,
         )
+        # Whether this call created the node or rewrote one that was already
+        # there. The caller needs it to avoid recording a creation five times
+        # for an entity mentioned in five records -- the same overcount
+        # `IngestionResult` already refuses to make.
+        #
+        # `changed_at_ms` is also the change timestamp the schema never had:
+        # `asserted_at_ms` is when the thing was asserted and
+        # `Provenance.created_at_ms` is when the extractor ran, and neither says
+        # when the row last moved.
+        return bool(rows and rows[0]["created"])
 
-    def link(self, owner_id: str, from_id: str, rel: str, to_id: str) -> bool:
+    #: Edge types whose creation is itself a state change, and which therefore
+    #: carry who made it. Only these two: `MENTIONS`, `ABOUT` and `CITES` are
+    #: statements of structure that follow from the object's own content, not
+    #: decisions about the record.
+    _ATTRIBUTED_EDGES = frozenset({"SUPERSEDES", "CONTRADICTS"})
+
+    def link(
+        self,
+        owner_id: str,
+        from_id: str,
+        rel: str,
+        to_id: str,
+        *,
+        actor=None,
+        rule: str | None = None,
+    ) -> bool:
         """Creates ``(from)-[:rel]->(to)``, both ends inside one owner.
 
         Owner-scoped like every traversal here, and for the same reason: an
@@ -258,14 +286,41 @@ class Neo4jStore:
         """
         if not rel.isidentifier():
             raise ValueError(f"illegal relationship type {rel!r}")
+        # `ON CREATE` only, so a re-link never rewrites who did it first. A
+        # supersession asserted twice was decided once, and `MERGE` would
+        # otherwise let the second writer quietly take credit.
+        #
+        # A denormalisation, deliberately: `:Mutation` is the authority, and
+        # these properties exist so `why_did_this_shift` can render "superseded
+        # by device 1" without a second query per step. They are also why the
+        # neighbourhood read keeps returning edge *types* and nothing else --
+        # it drops rather than withholds, so edge properties there would be a
+        # new disclosure surface.
+        attributed = rel in self._ATTRIBUTED_EDGES and actor is not None
+        on_create = (
+            " ON CREATE SET r.at_ms = timestamp(), "
+            "r.actor_agent_id = $actor_agent_id, "
+            "r.actor_device_id = $actor_device_id, "
+            "r.rule = $rule"
+            if attributed
+            else ""
+        )
+        params: dict[str, Any] = {
+            "owner_id": owner_id,
+            "from_id": from_id,
+            "to_id": to_id,
+        }
+        if attributed:
+            params["actor_agent_id"] = actor.agent_id
+            params["actor_device_id"] = actor.device_id
+            params["rule"] = rule
         rows = self._run(
             f"MATCH (a:Memory {{id: $from_id, owner_id: $owner_id}}), "
             f"(b:Memory {{id: $to_id, owner_id: $owner_id}}) "
-            f"MERGE (a)-[r:{rel}]->(b) "
+            f"MERGE (a)-[r:{rel}]->(b)"
+            f"{on_create} "
             f"RETURN count(r) AS n",
-            owner_id=owner_id,
-            from_id=from_id,
-            to_id=to_id,
+            **params,
         )
         return bool(rows and rows[0]["n"])
 
@@ -291,6 +346,11 @@ class Neo4jStore:
         if not rows:
             return None
         claim = Claim.model_validate_json(rows[0]["payload"])
+        # The prior snapshot, read back from the store rather than reconstructed
+        # from what the caller believed was there. It is what makes a mutation
+        # entry's `before` a fact instead of an assumption, and it costs one
+        # parse of a payload already in hand.
+        prior = claim.model_copy(deep=True)
         mutate(claim)
         self._run(
             "MATCH (c:Claim {id: $id, owner_id: $owner_id}) SET c.payload = $payload, "
@@ -300,19 +360,64 @@ class Neo4jStore:
             payload=claim.model_dump_json(),
             **_promoted(claim),
         )
-        return claim
+        return prior, claim
 
-    def set_claim_status(self, owner_id: str, claim_id: str, status: str) -> None:
+    def set_claim_status(
+        self,
+        owner_id: str,
+        claim_id: str,
+        status: str,
+        *,
+        actor,
+        reason: str,
+        rule: str,
+    ) -> None:
         """Moves the *epistemic* axis only. Fulfillment is untouched: a
-        commitment that was reassigned is superseded and still open."""
+        commitment that was reassigned is superseded and still open.
+
+        ``actor``, ``reason`` and ``rule`` are keyword-only and have **no
+        defaults**, so an unattributed status change does not type-check. The
+        same shape as `link` refusing an unscoped write rather than warning
+        about one: the caller cannot forget, because there is nothing to forget
+        -- the call does not compile without it.
+        """
+        from .mutations import KIND_STATUS, MutationEntry
 
         def mutate(claim: Claim) -> None:
             claim.status = ClaimStatus(status)
 
-        self._mutate_claim(owner_id, claim_id, mutate)
+        result = self._mutate_claim(owner_id, claim_id, mutate)
+        if result is None:
+            return
+        prior, claim = result
+        if prior.status is claim.status:
+            # Nothing moved. Recording it would put a change in the log that did
+            # not happen, and the resolver legitimately re-asserts a supersession
+            # it has already applied.
+            return
+        self.append_mutation(
+            MutationEntry.for_actor(
+                actor,
+                owner_id=owner_id,
+                object_id=claim_id,
+                kind=KIND_STATUS,
+                field_name="status",
+                before=prior.status.value,
+                after=claim.status.value,
+                reason=reason,
+                rule=rule,
+            )
+        )
 
     def set_fulfillment(
-        self, owner_id: str, claim_id: str, fulfillment: str, settled_at_ms: int | None = None
+        self,
+        owner_id: str,
+        claim_id: str,
+        fulfillment: str,
+        settled_at_ms: int | None = None,
+        *,
+        actor,
+        reason: str,
     ) -> Claim | None:
         """Moves the *lifecycle* axis only, leaving ``status`` alone.
 
@@ -329,7 +434,30 @@ class Neo4jStore:
                 None if state is FulfillmentStatus.OPEN else settled_at_ms
             )
 
-        return self._mutate_claim(owner_id, claim_id, mutate)
+        from .mutations import KIND_FULFILLMENT, MutationEntry
+
+        result = self._mutate_claim(owner_id, claim_id, mutate)
+        if result is None:
+            return None
+        prior, claim = result
+        # No `rule` here, and that is the distinction: the resolver's rules are
+        # about what the record now believes, while a fulfillment move is
+        # something that happened in the world. There is no branch that decided
+        # it -- someone says the thing was done.
+        if prior.commitment.fulfillment is not claim.commitment.fulfillment:
+            self.append_mutation(
+                MutationEntry.for_actor(
+                    actor,
+                    owner_id=owner_id,
+                    object_id=claim_id,
+                    kind=KIND_FULFILLMENT,
+                    field_name="commitment.fulfillment",
+                    before=prior.commitment.fulfillment.value,
+                    after=claim.commitment.fulfillment.value,
+                    reason=reason,
+                )
+            )
+        return claim
 
     def replace_payload(self, node: MemoryNode) -> None:
         """Rewrites one object in place. The owner comes from the node itself,
@@ -715,6 +843,61 @@ class Neo4jStore:
             limit=int(limit),
         )
         return [row_to_entry(row) for row in rows]
+
+    # -- the mutation log -----------------------------------------------
+    #
+    # Beside the read log, off `:Memory` for the same reason, and the second
+    # thing in this database that cannot be regenerated from source material.
+    # See `storage/mutations.py`.
+
+    _MUTATION_COLUMNS = (
+        "m.id AS id, m.owner_id AS owner_id, m.object_id AS object_id, "
+        "m.kind AS kind, m.field AS field, m.before AS before, m.after AS after, "
+        "m.actor_agent_id AS actor_agent_id, m.actor_device_id AS actor_device_id, "
+        "m.actor_session_id AS actor_session_id, m.reason AS reason, "
+        "m.rule AS rule, m.grant_fp AS grant_fp, m.at_ms AS at_ms"
+    )
+
+    def append_mutation(self, entry) -> None:
+        """Appends one mutation entry. Raises if it cannot be written."""
+        from .mutations import entry_to_row
+
+        self._run("CREATE (m:Mutation) SET m = $row", row=entry_to_row(entry))
+
+    def recent_mutations(self, owner_id: str, limit: int = 50) -> list:
+        from .mutations import row_to_entry
+
+        rows = self._run(
+            "MATCH (m:Mutation {owner_id: $owner_id}) "
+            f"RETURN {self._MUTATION_COLUMNS} "
+            "ORDER BY m.at_ms DESC, m.id DESC LIMIT $limit",
+            owner_id=owner_id,
+            limit=int(limit),
+        )
+        return [row_to_entry(row) for row in rows]
+
+    def mutations_for_objects(self, owner_id: str, object_ids: list[str]) -> list:
+        """Every recorded change to these objects, oldest first.
+
+        Oldest first, unlike `recent_mutations`: this is read as a history of one
+        object rather than as a feed, and a history reads forwards.
+        """
+        from .mutations import row_to_entry
+
+        rows = self._run(
+            "MATCH (m:Mutation {owner_id: $owner_id}) WHERE m.object_id IN $ids "
+            f"RETURN {self._MUTATION_COLUMNS} "
+            "ORDER BY m.at_ms ASC, m.id ASC",
+            owner_id=owner_id,
+            ids=list(object_ids),
+        )
+        return [row_to_entry(row) for row in rows]
+
+    def wipe_mutations(self, owner_id: str) -> None:
+        """For tests and an explicit owner request, like `wipe_read_log`. Not a
+        side effect of re-ingesting: re-deriving a claim does not un-happen the
+        change that was made to the one it replaced."""
+        self._run("MATCH (m:Mutation {owner_id: $owner_id}) DELETE m", owner_id=owner_id)
 
     # -- agent sessions -------------------------------------------------
     #

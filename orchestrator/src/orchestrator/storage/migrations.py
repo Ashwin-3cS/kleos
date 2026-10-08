@@ -22,6 +22,8 @@ _CONSTRAINTS = [
     "FOR (n:AgentRead) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT kleos_agent_session_id IF NOT EXISTS "
     "FOR (n:AgentSession) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT kleos_mutation_id IF NOT EXISTS "
+    "FOR (n:Mutation) REQUIRE n.id IS UNIQUE",
 ]
 
 _INDEXES = [
@@ -64,6 +66,15 @@ _INDEXES = [
     # the session id is the whole access path.
     "CREATE INDEX kleos_session_block_session IF NOT EXISTS "
     "FOR (n:SessionBlock) ON (n.owner_id, n.session_id, n.index)",
+    # The mutation log, read two ways: an owner's changes newest first, and
+    # every change to one object -- which is what a briefing surfaces for the
+    # objects an agent was just permitted to see. Off `:Memory`, like the read
+    # log, so the system's record of its own changes can never be retrieved as
+    # memory.
+    "CREATE INDEX kleos_mutation_owner_at IF NOT EXISTS "
+    "FOR (n:Mutation) ON (n.owner_id, n.at_ms)",
+    "CREATE INDEX kleos_mutation_object IF NOT EXISTS "
+    "FOR (n:Mutation) ON (n.owner_id, n.object_id)",
 ]
 
 # Every stored node also carries the :Memory label so one vector index covers

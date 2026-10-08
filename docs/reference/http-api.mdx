@@ -43,6 +43,7 @@ absence.
 | `POST /memory/context` | sync | grant | the citation chain around one object, across sources |
 | `POST /memory/neighbourhood` | sync | grant | nodes and typed edges within `hops` of seeds, permission-filtered |
 | `POST /memory/reads` | sync | **owner session** | what agents have actually read |
+| `POST /memory/mutations` | sync | **owner session** | every state change, who made it, and which rule decided |
 | `GET /explorer` | static | — | the read-only graph explorer |
 
 <Warning>

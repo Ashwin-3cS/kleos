@@ -49,17 +49,21 @@ and fails on an unscoped query, with an explicit allow-list for the two that
 genuinely cannot be scoped in the database — each carrying its reason.
 
 <Note>
-**One exception to "rebuildable", stated because it changes what has to be
-backed up:** the agent read log cannot be regenerated from anything. It is the
-only such thing in this database. Agent sessions are the second — they are the
-only trace of a context window that no longer exists.
+**The exceptions to "rebuildable", stated because they change what has to be
+backed up.** The agent read log cannot be regenerated from anything: it records
+what was disclosed. Neither can the mutation log: it records what changed and on
+what basis, and re-deriving a claim does not recover the reason the claim it
+replaced was replaced. Agent sessions are the third — the only trace of a
+context window that no longer exists.
 </Note>
 
 ### What is deliberately off the `:Memory` label
 
-`:AgentRead`, `:AgentSession` and `:SessionBlock`. The vector index and every
-traversal key on that label, so staying off it is what keeps the harness's record
-of its own activity out of retrieval entirely.
+`:AgentRead`, `:AgentSession`, `:SessionBlock` and `:Mutation`. The vector index
+and every traversal key on that label, so staying off it is what keeps the
+harness's record of its own activity out of retrieval entirely — and one
+parametrised test covers all four, because the way this breaks is a convenient
+`SET n:Memory` added by someone who wanted a node to show up in the explorer.
 
 ### No full-text index
 
