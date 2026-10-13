@@ -26,14 +26,15 @@ under-measure the design.
 
 ## The result
 
-34 records, 6 labelled questions, `top_k=5`:
+36 records, 8 labelled questions, `top_k=5`:
 
 | metric | resolved | resolved+history | plain-rag |
 | --- | --- | --- | --- |
-| recall | 87% | **100%** | 93% |
+| recall | 75% | 75% | **80%** |
 | cited | 100% | 100% | 0% |
+| attributed (who decided) | **100%** | **100%** | 0% |
 | unmarked stale assertions | 0% | **0%** | 50% |
-| forbidden records returned | 33% | 33% | 50% |
+| forbidden records returned | 25% | 25% | 38% |
 
 And the three things worth knowing, two of which are losses:
 
@@ -53,6 +54,17 @@ Both Harbour questions return a record that is a wrong answer, under every
 system.
 </Accordion>
 </AccordionGroup>
+
+<Warning>
+**Two findings, neither tuned away.** The procedure question scores 0% under
+*every* system: memory kinds filter at permission time and nothing in the query
+path prefers a procedure, so a procedural question competes with lexically
+similar facts about the same project and loses. And adding two records to a
+34-record corpus took a previously-passing question from 100% to 0% — resolution
+stayed visibly correct, a four-claim chain deep, while hashed-token retrieval
+returned filler. `top_k` was deliberately not raised: tuning a parameter until a
+metric recovers is how a measurement stops being one.
+</Warning>
 
 <Warning>
 **The numbers are not quotable.** Both systems run on the same embeddings, which

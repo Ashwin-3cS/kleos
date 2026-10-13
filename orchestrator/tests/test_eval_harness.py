@@ -239,3 +239,88 @@ def test_the_report_warns_when_embeddings_are_not_semantic(runtime: Runtime) -> 
     text = format_report(evaluate(runtime))
     assert "hashed-token" in text
     assert "absolute numbers are not" in text
+
+
+# -- the attribution axis ------------------------------------------------
+
+
+def test_attribution_is_scored_only_where_it_is_asked_for() -> None:
+    """A one-sided metric averaged over questions that do not ask for it would
+    dilute into a meaningless number, and its denominator would move whenever a
+    question is added for some other reason."""
+    from orchestrator.eval.harness import QuestionResult, SystemScore, _aggregate
+
+    def result(qid: str, attributed: bool | None) -> QuestionResult:
+        return QuestionResult(
+            question_id=qid,
+            category="x",
+            system="s",
+            recall=1.0,
+            precision=1.0,
+            returned=1,
+            attributed=attributed,
+        )
+
+    results = [result("a", True), result("b", None), result("c", None)]
+    score = _aggregate("s", results)
+    assert isinstance(score, SystemScore)
+    assert score.attribution_questions == 1
+    assert score.attributed_rate == 1.0, "one of one, not one of three"
+
+
+def test_a_question_that_does_not_ask_records_no_attribution() -> None:
+    """`None` rather than `False`: not applicable is a different answer from
+    "could not"."""
+    from orchestrator.eval.harness import _score
+    from orchestrator.eval.questions import QUESTIONS
+
+    asking = next(q for q in QUESTIONS if q.expect_attribution)
+    not_asking = next(q for q in QUESTIONS if not q.expect_attribution)
+
+    scored = _score(
+        not_asking,
+        system="resolved",
+        returned_records=set(),
+        returned_count=0,
+        unmarked_stale=set(),
+        cited=True,
+        answered=True,
+        attributed=True,
+    )
+    assert scored.attributed is None
+
+    scored = _score(
+        asking,
+        system="resolved",
+        returned_records=set(),
+        returned_count=0,
+        unmarked_stale=set(),
+        cited=True,
+        answered=True,
+        attributed=True,
+    )
+    assert scored.attributed is True
+
+
+def test_the_agent_records_are_on_their_own_source() -> None:
+    """A grant covering the person's notes must not thereby cover what their
+    agent decided -- which is the real `agent` source's whole reason, and the
+    corpus has to mirror it or the eval measures a shape the product does not
+    have."""
+    from orchestrator.eval import corpus as c
+
+    agentish = [r for r in c.RECORDS if r.connector == c.AGENT]
+    assert len(agentish) >= 2
+    assert c.AGENT not in (c.NOTES, c.CHAT, c.TRACKER)
+
+
+def test_the_procedure_question_forbids_the_storage_decisions() -> None:
+    """Forbidden rather than stale, and the distinction is the point: a storage
+    decision is not an older answer to "what is the deploy procedure". It is not
+    an answer to it at all."""
+    from orchestrator.eval import corpus as c
+    from orchestrator.eval.questions import QUESTIONS
+
+    question = next(q for q in QUESTIONS if q.id == "lantern-deploy-procedure")
+    assert (c.LANTERN_NEO4J.connector, c.LANTERN_NEO4J.external_id) in question.forbidden
+    assert question.stale == ()

@@ -35,6 +35,14 @@ baseline, and no amount of embedding quality would change it.
 
 **forbidden rate.** Records that are a wrong answer rather than an old one.
 
+**attributed rate.** Whether the answer can say *which device* decided. Scored
+only over the questions that ask for it, because averaging a one-sided metric
+across the rest would dilute it into a meaningless number. One-sided by
+construction, like `cited`: a vector index returns chunks and there is nothing in
+a chunk that names the device that wrote it. Measured on the **device** and not
+on the agent label, because the label is a string the owner typed into a scope
+and scoring on it would reward echoing a name nobody checked.
+
 **cited rate.** Whether every returned object carries a citation back to a
 source event. Also structural for the baseline, and also worth stating: a chunk
 of text is its own provenance, which is not the same thing as a chain.
@@ -57,13 +65,14 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from ..enums import EntityKind, Sensitivity
+from ..enums import Authority, EntityKind, Sensitivity
 from ..gateway_client import ResolvedGrant
 from ..graphs.history import why_did_this_shift
 from ..graphs.ingestion import run_ingestion
 from ..graphs.query import run_query
 from ..graphs.runtime import Runtime
 from ..permissions import Scope
+from ..storage.mutations import Actor
 from ..storage.reads import grant_fingerprint
 from . import corpus as c
 from .baseline import PlainRag
@@ -74,6 +83,10 @@ log = logging.getLogger(__name__)
 #: One owner for the whole eval, namespaced so a run cannot collide with a dev
 #: owner in the same database.
 OWNER = "owner-eval-harness"
+#: The device the eval's agent-authored records are attributed to. A fixed
+#: value, because a run has to score the same corpus every time -- and because a
+#: generated one would make the attribution metric pass for the wrong reason.
+EVAL_DEVICE = "device-eval-1a2b3c"
 #: Small relative to the corpus on purpose. At top_k=8 over 16 records both
 #: systems scored ~95% recall by returning half of everything, which measures
 #: nothing -- recall@k approaches 1 as k approaches N however bad the ranking is.
@@ -93,6 +106,10 @@ class QuestionResult:
     unmarked_stale: list[str] = field(default_factory=list)
     forbidden_returned: list[str] = field(default_factory=list)
     cited: bool = False
+    #: Whether the answer could name the device that decided. Only scored for a
+    #: question that declares it matters; `None` means not applicable, which is
+    #: different from `False` and keeps the rate honest.
+    attributed: bool | None = None
     answered: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -108,6 +125,9 @@ class SystemScore:
     unmarked_stale_rate: float = 0.0
     forbidden_rate: float = 0.0
     cited_rate: float = 0.0
+    #: Over the questions that ask for attribution, not over all of them.
+    attributed_rate: float = 0.0
+    attribution_questions: int = 0
     answered_rate: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
@@ -177,11 +197,19 @@ def prepare(runtime: Runtime, *, wipe: bool = True) -> dict[str, int]:
 
     written: dict[str, int] = {}
     for source in c.SOURCES:
+        # The agent source is ingested as an agent would write it: under a
+        # delegate grant, attributed to a device. Without that, the attribution
+        # metric would measure the fixture rather than the product -- and the
+        # records would resolve as the person's own account, which is the exact
+        # distinction `Authority` exists to keep.
+        agentish = source == c.AGENT
         result = run_ingestion(
             runtime,
             OWNER,
             source=source,
             thread_id=f"eval:{source}",
+            actor=Actor(agent_id="agent-eval", device_id=EVAL_DEVICE) if agentish else None,
+            authority=Authority.DELEGATE if agentish else None,
         )
         if result.errors:
             raise RuntimeError(f"eval corpus failed to ingest from {source}: {result.errors}")
@@ -238,6 +266,23 @@ def _stale_marked(runtime: Runtime, object_ids: list[str]) -> set[str]:
     return marked
 
 
+def _attributed(runtime: Runtime, object_ids: list[str]) -> bool:
+    """Whether any disclosed object names the device that produced it.
+
+    The **device**, not the agent label: `Provenance.actor_agent_id` is a string
+    the owner typed into a scope before signing it, so scoring on that would
+    reward a system for echoing a name nobody checked. The device id is the
+    registered key whose signature the gateway verified, and it is the only part
+    of an agent's identity worth measuring.
+    """
+    if not object_ids:
+        return False
+    return any(
+        bool(stored.node.provenance.actor_device_id)
+        for stored in runtime.store.get_many(OWNER, object_ids)
+    )
+
+
 def run_resolved(runtime: Runtime, question: Question) -> QuestionResult:
     scope = _scope(**question.scope_overrides)
     answer = run_query(
@@ -268,6 +313,7 @@ def run_resolved(runtime: Runtime, question: Question) -> QuestionResult:
         unmarked_stale=unmarked_stale,
         cited=bool(object_ids)
         and all(citation.source for citation in answer.citations),
+        attributed=_attributed(runtime, object_ids),
         answered=answer.answered,
     )
 
@@ -343,6 +389,7 @@ def run_resolved_with_history(runtime: Runtime, question: Question) -> QuestionR
         returned_count=len(records),
         unmarked_stale=unmarked_stale,
         cited=bool(object_ids),
+        attributed=_attributed(runtime, object_ids),
         answered=answer.answered,
     )
 
@@ -373,6 +420,9 @@ def run_baseline(rag: PlainRag, question: Question) -> QuestionResult:
         returned_count=len(result["records"]),
         unmarked_stale=unmarked_stale,
         cited=False,
+        # Zero by construction, like `cited`: a vector index returns chunks of
+        # text and there is nothing in a chunk that says which device wrote it.
+        attributed=False,
         answered=bool(result["records"]),
     )
 
@@ -386,6 +436,7 @@ def _score(
     unmarked_stale: set[tuple[str, str]],
     cited: bool,
     answered: bool,
+    attributed: bool | None = None,
 ) -> QuestionResult:
     relevant = set(question.relevant)
     hits = returned_records & relevant
@@ -406,6 +457,7 @@ def _score(
             f"{a}:{b}" for a, b in (returned_records & set(question.forbidden))
         ),
         cited=cited,
+        attributed=attributed if question.expect_attribution else None,
         answered=answered,
     )
 
@@ -420,6 +472,15 @@ def _aggregate(system: str, results: list[QuestionResult]) -> SystemScore:
         unmarked_stale_rate=sum(1 for r in results if r.unmarked_stale) / n,
         forbidden_rate=sum(1 for r in results if r.forbidden_returned) / n,
         cited_rate=sum(1 for r in results if r.cited) / n,
+        # Over the questions that *ask* for attribution, not over all of them.
+        # Averaging across the rest would dilute a one-sided metric into a
+        # meaningless one and make the denominator move whenever a question is
+        # added for some other reason.
+        attributed_rate=(
+            sum(1 for r in results if r.attributed)
+            / max(1, sum(1 for r in results if r.attributed is not None))
+        ),
+        attribution_questions=sum(1 for r in results if r.attributed is not None),
         answered_rate=sum(1 for r in results if r.answered) / n,
     )
 
@@ -489,7 +550,7 @@ def format_report(report: dict[str, Any]) -> str:
     lines.append("")
 
     systems = ["resolved", "resolved+history", "plain-rag"]
-    header = f"{'metric':<22}" + "".join(f"{name:>18}" for name in systems) + f"{'delta':>10}"
+    header = f"{'metric':<24}" + "".join(f"{name:>18}" for name in systems) + f"{'delta':>10}"
     lines.append(header)
     lines.append("-" * len(header))
     scores = {name: report["systems"][name] for name in systems}
@@ -498,6 +559,7 @@ def format_report(report: dict[str, Any]) -> str:
         ("precision", "precision", True),
         ("answered_rate", "answered", True),
         ("cited_rate", "cited", True),
+        ("attributed_rate", "attributed (who decided)", True),
         ("unmarked_stale_rate", "unmarked stale", False),
         ("forbidden_rate", "forbidden returned", False),
     ):
@@ -506,7 +568,7 @@ def format_report(report: dict[str, Any]) -> str:
         # right there beside it for anyone who wants the narrower comparison.
         delta = scores["resolved+history"][key] - scores["plain-rag"][key]
         arrow = "" if abs(delta) < 1e-9 else (" +" if (delta > 0) == better_high else " -")
-        row = f"{label:<22}" + "".join(f"{scores[n][key]:>17.0%} " for n in systems)
+        row = f"{label:<24}" + "".join(f"{scores[n][key]:>17.0%} " for n in systems)
         lines.append(f"{row}{delta:>+8.0%}{arrow}")
 
     lines.append("")

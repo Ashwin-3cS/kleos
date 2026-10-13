@@ -1111,14 +1111,15 @@ harness that prints a verdict and exits non-zero if the bet does not pay.
 cd orchestrator && .venv/bin/python -m orchestrator.eval
 ```
 
-34 records, 6 labelled questions, `top_k=5`:
+36 records, 8 labelled questions, `top_k=5`:
 
 | metric | resolved | resolved+history | plain-rag |
 |---|---|---|---|
-| recall | 87% | **100%** | 93% |
+| recall | 75% | 75% | **80%** |
 | cited | 100% | 100% | 0% |
+| attributed (who decided) | **100%** | **100%** | 0% |
 | unmarked stale assertions | 0% | **0%** | 50% |
-| forbidden records returned | 33% | 33% | 50% |
+| forbidden records returned | 25% | 25% | 38% |
 
 Resolution helps, and the useful part is *where it does not*:
 
@@ -1126,11 +1127,47 @@ Resolution helps, and the useful part is *where it does not*:
   answers "which database does Lantern use" with all three decisions and nothing
   to say which one holds, because nothing in the text of a superseded decision
   says it was superseded. That is structural; no embedder fixes it.
-- **The query graph alone retrieves less than the baseline** (87% vs 93%). The
-  gain comes from the supersession read and from marking superseded claims, not
-  from ranking. Worth knowing before anyone tunes weights.
+- **The query graph does not out-retrieve the baseline** (75% vs 80%). The gain
+  comes from the supersession read and from marking superseded claims, not from
+  ranking. Worth knowing before anyone tunes weights.
 - **Graph proximity costs precision across projects.** Both Harbour questions
   return a record that is a wrong answer, under every system.
+- **Attribution is the one axis where the gap is total.** 100% against 0%,
+  because a vector index returns chunks and there is nothing in a chunk that
+  names the device that wrote it. Read it the way `cited` has to be read: "the
+  resolved path can do this and plain retrieval structurally cannot", not as a
+  quality score. Scored on the **device** rather than the agent label, because
+  the label is a string the owner typed into a scope and rewarding a system for
+  echoing it would measure nothing.
+
+### Two things the harness found when the harness grew
+
+Both are findings rather than failures, and neither was tuned away.
+
+**Memory kinds are a permission axis and not a retrieval axis.** The new
+`lantern-deploy-procedure` question -- "what is the procedure for deploying
+Lantern?" -- scores **0% under every system, including both resolved paths**.
+`Scope.memory_kinds` filters at permission time and nothing in the query path
+asks for a procedure or prefers one, so "how Lantern is deployed" and "what
+Lantern stores data in" compete as two lexically similar facts about the same
+project and the storage decisions win. The storage records are listed as
+*forbidden* for that question rather than stale, because they are not an older
+answer to it -- they are not an answer to it at all. Fixing this means a
+kind-aware retrieval path, which is a change to ranking rather than to the
+schema, and it is not done.
+
+**Adding two records to a 34-record corpus broke a question that used to pass.**
+`lantern-storage-history` went from 100% to **0%** on both resolved paths.
+Resolution was not at fault and is visibly correct -- the chain is four claims
+deep, agent → Neo4j → Postgres → Sqlite, each superseding the last. *Retrieval*
+returned filler records and a commitment instead, because hashed-token
+embeddings have no semantics and a 6% larger corpus was enough to move the
+nearest neighbours. `top_k` was deliberately **not** raised to make it pass:
+tuning a parameter until a metric recovers is how a measurement stops being one.
+
+That is the clearest argument yet for the item below that has been open since
+step 0. The eval's *deltas* are still meaningful, because both systems share the
+embedder; its absolute numbers were always fragile and are now demonstrably so.
 
 The numbers are **not quotable**: both systems run on hashed-token embeddings,
 which is the right control (embedding quality held identical, so the delta
