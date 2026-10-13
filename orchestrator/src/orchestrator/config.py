@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         default_factory=list, validation_alias="ENABLED_TOOLS"
     )
 
-    #: Bounds on one agent session (ADR 0016). Guards, not tuning.
+    #: Bounds on one agent session (ADR 0018). Guards, not tuning.
     #:
     #: 400 blocks and not 660: `MAX_PATCHES_PER_QUILT` is 660 in
     #: `storage/blobs.py`, and a session that overran it would silently split

@@ -992,7 +992,7 @@ class Neo4jStore:
     # Beside the read log, and off `:Memory` for the same reason. A session holds
     # an agent's working context; if it were retrievable as memory, one agent's
     # scratchpad would surface in another agent's answers through the very check
-    # that is supposed to separate them. See `storage/sessions.py` and ADR 0016.
+    # that is supposed to separate them. See `storage/sessions.py` and ADR 0018.
 
     def append_session(self, session) -> None:
         """Records an opened session. Raises if it cannot be written."""

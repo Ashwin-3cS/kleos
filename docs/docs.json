@@ -85,7 +85,14 @@
               "adr/0012-embed-locally-with-a-real-model",
               "adr/0013-a-push-path-for-what-the-person-says",
               "adr/0014-following-what-the-person-referred-to",
-              "adr/0015-two-names-for-one-thing"
+              "adr/0015-two-names-for-one-thing",
+              "adr/0016-agent-identity-is-the-device-that-signed-the-grant",
+              "adr/0017-an-agent-writes-under-a-grant-that-says-it-may",
+              "adr/0018-memory-kinds-and-short-term-as-a-state",
+              "adr/0019-every-state-change-is-a-record",
+              "adr/0020-reading-a-sealed-body-under-a-grant",
+              "adr/0021-the-briefing-and-why-reading-is-not-remembering",
+              "adr/0022-sensitive-actions-are-brokered-in-the-tee"
             ]
           }
         ]
