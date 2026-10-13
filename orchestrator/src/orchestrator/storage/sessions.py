@@ -39,6 +39,9 @@ the scratchpad can be large.
 id is an unauthenticated string two agents could collide on, by accident or on
 purpose, and attribution is the entire point of the feature.
 
+**Short-term is a *state*, not a kind of long-term memory** -- the whole of ADR
+0018's second half, and why there is no `ShortTerm` member of `MemoryKind`.
+
 **A session cannot outlive the grant that opened it.** Mirrors how
 `verify_grant` clamps a grant's own expiry: a session that survived its grant
 would be a way to keep using a capability after it lapsed.
