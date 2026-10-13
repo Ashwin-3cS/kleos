@@ -444,11 +444,19 @@ supersession read, which is what the product can actually answer with. Reporting
 only the second would be a rigged comparison; only the first would under-measure
 the design.
 
-Current result: recall 100% vs 93%, cited 100% vs 0%, unmarked stale assertions
-0% vs 50% -- but the query graph *alone* retrieves less than the baseline, so the
-gain is the marking and the supersession walk rather than the ranking. Both
-systems run on hashed-token embeddings, which makes the delta meaningful and the
-absolute numbers not. See the root README and ADR 0006.
+Current result: cited 100% vs 0%, attributed 100% vs 0%, unmarked stale
+assertions 0% vs 50% -- but the query graph does not out-retrieve the baseline
+(75% vs 80%), so the gain is the marking, the supersession walk and the
+attribution rather than the ranking.
+
+Two findings worth reading before trusting any absolute number here. The
+procedure question scores 0% under *every* system, because memory kinds filter
+at permission time and nothing in the query path prefers a procedure. And adding
+two records to a 34-record corpus moved hashed-token nearest neighbours enough to
+take a previously-passing question to 0% -- resolution stayed correct, retrieval
+did not. Both are in the root README under "Two things the harness found when the
+harness grew". Both systems run on hashed-token embeddings, which makes the delta
+meaningful and the absolute numbers not. See the root README and ADR 0006.
 
 ## Stubs
 

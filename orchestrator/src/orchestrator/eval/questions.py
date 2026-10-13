@@ -1,7 +1,11 @@
 """The labelled question set.
 
-Four categories, from the plan: who decided X, what changed and why, what do I
-owe whom, what did I know on date D.
+Six categories: who decided X, what changed and why, what do I owe whom, what
+did I know on date D, **who decided what holds now** and **what procedure do we
+use**. The last two came with the agent harness, and they exist because the
+features that landed with it -- attribution to an authenticated device, and
+memory kinds -- were otherwise shipping on a passing suite rather than on a
+measurement. By this project's own exit-test discipline that is not enough.
 
 **Ground truth is declared against source records, not object ids.** Two
 reasons. The ids are derived (`stable_id` over owner, connector and external
@@ -46,6 +50,15 @@ class Question:
     forbidden: tuple[tuple[str, str], ...] = ()
     #: Narrows the grant for this question, e.g. a time window.
     scope_overrides: dict = field(default_factory=dict)
+    #: Whether the answer should be able to say *who* decided this.
+    #:
+    #: A new axis, and a one-sided one by construction: a plain vector index
+    #: returns chunks of text and cannot name a device, so it scores zero here
+    #: exactly as it does on `cited`. That is not a rigged comparison as long as
+    #: it is read as "the resolved path can do this and plain retrieval
+    #: structurally cannot" rather than as a quality score -- the same reading
+    #: `cited` already requires.
+    expect_attribution: bool = False
     #: Why this question is in the set, for whoever reads a regression later.
     rationale: str = ""
 
@@ -55,6 +68,47 @@ def _r(record: c.Record) -> tuple[str, str]:
 
 
 QUESTIONS: tuple[Question, ...] = (
+    Question(
+        id="lantern-decided-by-whom",
+        category="who_decided_now",
+        text="Which storage decision holds for project Lantern, and who made it?",
+        relevant=(_r(c.LANTERN_AGENT_RETHINK),),
+        stale=(
+            _r(c.LANTERN_SQLITE),
+            _r(c.LANTERN_POSTGRES),
+            _r(c.LANTERN_NEO4J),
+        ),
+        forbidden=(_r(c.HARBOUR_REDIS),),
+        expect_attribution=True,
+        rationale=(
+            "The harness's own question, and the one the briefing is built to answer. "
+            "Four statements about the same subject, the newest written by an agent "
+            "under a delegate grant -- so the answer has to pick the current one *and* "
+            "be able to say which device decided it. The first half a resolved record "
+            "can do and a vector index cannot; the second half nothing can do without "
+            "attribution on the write, which is what this measures."
+        ),
+    ),
+    Question(
+        id="lantern-deploy-procedure",
+        category="what_procedure",
+        text="What is the procedure for deploying project Lantern?",
+        relevant=(_r(c.LANTERN_DEPLOY_PROCEDURE),),
+        forbidden=(
+            _r(c.LANTERN_NEO4J),
+            _r(c.LANTERN_AGENT_RETHINK),
+            _r(c.HARBOUR_ONBOARDING),
+        ),
+        rationale=(
+            "Memory kinds, measured rather than asserted. 'How Lantern is deployed' "
+            "and 'what Lantern stores data in' are both durable facts about the same "
+            "project, phrased alike and lexically close to each other -- so a system "
+            "with no notion of *kind* has to answer a procedural question with "
+            "whatever is nearest, and the storage decisions are deliberately listed "
+            "as forbidden rather than stale. They are not an older answer to this "
+            "question. They are not an answer to it at all."
+        ),
+    ),
     Question(
         id="lantern-current-storage",
         category="who_decided",

@@ -43,8 +43,12 @@ from ..schema import RawRecord
 NOTES = "eval_notes"
 CHAT = "eval_chat"
 TRACKER = "eval_tracker"
+#: What an agent concluded while working for this owner. Separate source id for
+#: the reason the real `agent` source is separate: a grant covering the person's
+#: notes must not thereby cover what their coding assistant decided.
+AGENT = "eval_agent"
 
-SOURCES = (NOTES, CHAT, TRACKER)
+SOURCES = (NOTES, CHAT, TRACKER, AGENT)
 
 _DAY = 86_400_000
 #: 2026-01-05T00:00:00Z. Fixed, not "now", so every run scores the same corpus:
@@ -164,6 +168,46 @@ LANTERN_NEO4J = Record(
 )
 
 # -- a commitment, then reassigned ---------------------------------------
+
+# -- what an agent decided --------------------------------------------------
+#
+# Two records on the `eval_agent` source, which the harness ingests with an
+# authenticated device and `Authority.DELEGATE`. They exist to measure the two
+# things the harness could not measure before: whether an answer can say *who*
+# decided something, and whether a procedure can be retrieved as a procedure
+# rather than as one more fact about the project.
+
+LANTERN_AGENT_RETHINK = Record(
+    connector=AGENT,
+    external_id="agent-storage-rethink",
+    title="Storage decision revisited after the index work",
+    body=(
+        "Benchmarked the traversal queries against both options end to end.\n\n"
+        "Mina decided that project Lantern will use Neo4j with a native vector "
+        "index for durable storage."
+    ),
+    occurred_at_ms=_at(40),
+    participants=("Mina",),
+    cites=(f"{NOTES}:lantern-storage-final",),
+    assertion="project Lantern will use Neo4j with a native vector index",
+)
+
+LANTERN_DEPLOY_PROCEDURE = Record(
+    connector=AGENT,
+    external_id="agent-deploy-procedure",
+    title="How Lantern gets deployed",
+    body=(
+        "Wrote this down after getting the order wrong twice.\n\n"
+        "Mina recorded that project Lantern will deploy by running the schema "
+        "migration before restarting the worker."
+    ),
+    occurred_at_ms=_at(41),
+    participants=("Mina",),
+    assertion=(
+        "project Lantern will deploy by running the schema migration before "
+        "restarting the worker"
+    ),
+)
 
 MIGRATION_RAFI = Record(
     connector=TRACKER,
@@ -410,6 +454,8 @@ RECORDS: tuple[Record, ...] = (
     HARBOUR_ONBOARDING,
     TRAVERSAL_EVIDENCE,
     LANTERN_NEO4J,
+    LANTERN_AGENT_RETHINK,
+    LANTERN_DEPLOY_PROCEDURE,
     MIGRATION_RAFI,
     MIGRATION_TEO,
     *_FILLER,
