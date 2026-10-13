@@ -68,6 +68,14 @@ class IngestionState(TypedDict, total=False):
     decisions: Annotated[list[dict], _extend]
     #: Who caused this run. Absent means the owner's own pipeline.
     actor: dict
+    #: Why, in the caller's words, when a caller stated one.
+    #:
+    #: A connector pulling a mailbox has no reason beyond "this was in the
+    #: mailbox", and "extracted from a record" is a true and useless thing to
+    #: say. An agent recording a decision *does* state one, and that sentence is
+    #: what the next agent's briefing quotes -- so it has to reach the mutation
+    #: the briefing reads, not only the body of the event.
+    reason: str
     #: The precedence class every object extracted in this run carries. Absent
     #: means the owner's own sources, which leave `Provenance.authority` unset so
     #: the resolver's fallback keeps working on them.
@@ -420,7 +428,11 @@ def build_ingestion_graph(runtime: Runtime):
                             field_name="status",
                             before=None,
                             after=claim.status.value,
-                            reason=born.reason if born else "extracted from a record",
+                            reason=(
+                            born.reason
+                            if born
+                            else state.get("reason") or "extracted from a record"
+                        ),
                             rule=born.rule if born else None,
                         )
                     )
@@ -670,6 +682,7 @@ def run_ingestion(
     actor: Actor | None = None,
     authority: Authority | None = None,
     declared: dict[str, str] | None = None,
+    reason: str = "",
 ) -> IngestionResult:
     """Runs the ingestion graph.
 
@@ -699,6 +712,7 @@ def run_ingestion(
             **({"actor": asdict(actor)} if actor else {}),
             **({"authority": authority.value} if authority else {}),
             **({"declared": declared} if declared else {}),
+            **({"reason": reason} if reason else {}),
         },
         config=config,
     )

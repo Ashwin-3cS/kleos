@@ -89,3 +89,22 @@ def test_only_one_tool_writes() -> None:
         )
     }
     assert not suspicious, f"these look like write paths: {suspicious}"
+
+
+def test_a_refusal_is_returned_rather_than_raised() -> None:
+    """An exception crossing MCP reaches the agent as "Error executing tool
+    record_decision" with the reason stripped, which is indistinguishable from a
+    bug -- and the whole point of carrying deny reasons is that a decline is a
+    real answer.
+
+    Asserted on the source, because the behaviour only differs over the
+    transport: an in-process caller sees the exception intact either way, which
+    is exactly why this went unnoticed until a real client was pointed at it.
+    """
+    import inspect
+
+    source = inspect.getsource(mcp_server.record_decision)
+    assert "except WriteRefused" in source, (
+        "record_decision must catch its refusal and return it"
+    )
+    assert '"refused": True' in source

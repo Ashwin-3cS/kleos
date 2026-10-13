@@ -156,7 +156,12 @@ def brief_before_acting(
     # stays permission-blind and the check stays its own node inside it.
     answer = run_query(runtime, intent, grant_token, top_k=top_k)
 
-    disclosed = [c.object_id for c in answer.citations]
+    # Deduplicated, order preserved. A citation list can name the same object
+    # twice -- retrieval scores an object once per pass and the assembler cites
+    # what it was given -- and every line downstream is per object, so a repeat
+    # becomes the same advisory twice in an agent's context window. Which is the
+    # one resource this read exists to spend carefully.
+    disclosed = list(dict.fromkeys(c.object_id for c in answer.citations))
     claims = _claims_among(runtime, scope.owner_id, disclosed)
 
     conflicts = _conflicts(runtime, claims, grant_token)
@@ -307,9 +312,16 @@ def _advisories(
     """
     by_object: dict[str, Attribution] = {}
     for attribution in attributions:
-        # The latest change to each object: a briefing is about what holds now.
+        # The latest *substantive* change to each object, not simply the latest.
+        #
+        # Labelling a claim with its memory kind is a `payload` mutation that
+        # lands after the write, so "the most recent change" is reliably the
+        # relabel -- and an advisory then says an agent "amended" a decision it
+        # had in fact just recorded. True of the row and false about what
+        # happened, which is the worse kind of wrong for a line an agent reads
+        # and acts on.
         current = by_object.get(attribution.object_id)
-        if current is None or attribution.at_ms >= current.at_ms:
+        if current is None or _outranks(attribution, current):
             by_object[attribution.object_id] = attribution
 
     lines: list[str] = []
@@ -317,7 +329,12 @@ def _advisories(
         who = by_object.get(claim.id)
         if who is None:
             continue
-        lines.append(_advisory_line(claim, who))
+        line = _advisory_line(claim, who)
+        if line not in lines:
+            # Two claims can render the same sentence -- a restatement that the
+            # resolver linked, say -- and the second copy tells the agent
+            # nothing it did not already read.
+            lines.append(line)
 
     for history in conflicts:
         for step in history.get("steps", []):
@@ -329,6 +346,31 @@ def _advisories(
                     "read it."
                 )
     return lines
+
+
+#: How substantive each kind of change is, for choosing which one an advisory
+#: describes. A relabel ranks below everything, because it is bookkeeping about a
+#: claim rather than a change to what the record says.
+_KIND_RANK = {
+    "payload": 0,
+    "fulfillment": 1,
+    "create": 2,
+    "status": 3,
+    "contradict": 4,
+    "reconcile": 5,
+    "supersede": 6,
+}
+
+
+def _outranks(candidate: Attribution, current: Attribution) -> bool:
+    """Whether `candidate` is the change an advisory should describe.
+
+    Substance first, recency second. Two relabels in a row still pick the later
+    one; a relabel never displaces the write it followed.
+    """
+    rank = (_KIND_RANK.get(candidate.kind, 2), candidate.at_ms)
+    against = (_KIND_RANK.get(current.kind, 2), current.at_ms)
+    return rank >= against
 
 
 def _advisory_line(claim: Claim, who: Attribution) -> str:
@@ -346,12 +388,14 @@ def _advisory_line(claim: Claim, who: Attribution) -> str:
 
     verb = {
         "create": "recorded",
+        # Deliberately plain: an agent reading this needs to know a decision was
+        # made, not which internal write recorded it.
+        "payload": "relabelled",
         "status": "changed the status of",
         "supersede": "superseded",
         "contradict": "contradicted",
         "reconcile": "reconciled",
         "fulfillment": "updated the fulfillment of",
-        "payload": "amended",
     }.get(who.kind, "changed")
 
     line = f"{actor} {verb} “{statement}”"

@@ -49,7 +49,7 @@ from mcp.server.mcpserver import MCPServer
 
 from .graphs.act import request_action as act
 from .graphs.brief import brief_before_acting as brief
-from .graphs.decide import consolidate_session
+from .graphs.decide import WriteRefused, consolidate_session
 from .graphs.decide import record_decision as decide
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
@@ -291,16 +291,29 @@ def record_decision(
     difference being whether it may replace one of the owner's own decisions or
     only contradict it, visibly, with both sides kept.
     """
-    recorded = decide(
-        _get_runtime(),
-        grant_token,
-        statement,
-        reason,
-        session_id=session_id,
-        memory_kind=memory_kind,
-        sensitive=sensitive,
-    )
-    return recorded.as_dict()
+    try:
+        recorded = decide(
+            _get_runtime(),
+            grant_token,
+            statement,
+            reason,
+            session_id=session_id,
+            memory_kind=memory_kind,
+            sensitive=sensitive,
+        )
+    except WriteRefused as refused:
+        # **Returned, not raised.** An exception crossing MCP reaches the agent
+        # as "Error executing tool record_decision" with the reason stripped, so
+        # a refusal becomes indistinguishable from a bug -- and the whole point
+        # of carrying deny reasons is that a decline is a real answer. Found by
+        # driving a real client; an in-process test calls the function and sees
+        # the exception intact, which is exactly the layer it cannot check.
+        return {
+            "refused": True,
+            "reason": refused.reason,
+            "detail": str(refused),
+        }
+    return {"refused": False, **recorded.as_dict()}
 
 
 # -- acting -------------------------------------------------------------
