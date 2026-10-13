@@ -361,3 +361,18 @@ def test_the_advisory_quotes_the_reason_the_agent_gave(runtime: Runtime) -> None
     advisories = " ".join(brief_before_acting(runtime, INTENT, "device-2").advisories)
     assert BECAUSE in advisories
     assert "extracted from a record" not in advisories
+
+
+def test_the_owners_own_ingestion_is_not_rendered_as_an_unchecked_agent(
+    runtime: Runtime,
+) -> None:
+    """A connector pulling the person's mailbox has no device because there is no
+    device. Rendering that as "label only, not authenticated" inverts how much a
+    reader should trust it -- this is the most trustworthy writer in the system,
+    not an agent whose name nobody checked."""
+    briefing = brief_before_acting(runtime, INTENT, "device-2")
+
+    advisories = " ".join(briefing.advisories)
+    assert "'owner' (label only" not in advisories
+    if advisories:
+        assert "the owner's own ingestion" in advisories or DEVICE_1[:12] in advisories

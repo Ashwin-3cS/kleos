@@ -512,7 +512,23 @@ see the memory layer work against the real Rust stack:
 9. `POST /memory/neighbourhood` returns the nodes and typed edges around
    that claim, and the same call under a grant that cannot read confidential
    material comes back with objects and edges missing and a count saying so.
-   `GET /explorer` serves the page that draws it, including the read-log panel.
+10. Revoking a device key invalidates every grant it signed, immediately -- the
+    first lever this system has for withdrawing a live capability.
+11. A **second** device is registered, so "which agent decided this" is a real
+    question rather than a simulated one. Device 1 gets a grant that may write
+    and may supersede the owner; device 2 gets one that only reads.
+12. Device 2 briefs before acting. Every advisory names the owner's own
+    ingestion, because no agent has decided anything yet.
+13. Device 1 records a decision through `POST /memory/decide`, which supersedes
+    one of the corpus's own, under `agent_delegate_supersedes`.
+14. **Device 2 briefs again and is told what device 1 decided** -- naming the
+    device, device-authenticated, with the reason device 1 gave. This is the
+    product, against the real Rust stack.
+15. The owner reads both logs: `POST /memory/reads` groups by grant and names
+    the device behind each; `POST /memory/mutations` shows which rule moved what.
+16. An action the grant does not name is refused at the gateway.
+17. `GET /explorer` serves the page that draws any of it, including the read-log
+    panel.
 
 ## EC2 / Nitro deploy path
 
