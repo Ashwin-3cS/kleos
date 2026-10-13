@@ -221,6 +221,12 @@ def record_decision(
         # The statement is taken as given rather than rediscovered by the
         # extractor. See `_declared_claim`.
         declared={record.external_id: _as_statement(statement)},
+        # The agent's own words, carried to the mutation the briefing quotes.
+        # Without this the create entry falls back to "extracted from a record"
+        # and every advisory reads "because extracted from a record" -- true of
+        # the row, useless to the agent reading it, and the single thing the
+        # briefing exists to carry.
+        reason=reason,
     )
 
     # The kind is applied after resolution, on what actually landed. Setting it

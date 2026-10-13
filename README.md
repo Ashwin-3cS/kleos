@@ -1202,6 +1202,41 @@ outcome. See ADR 0006.
   grants and OAuth state. ADR 0004.
 - **`scripts/services.sh`** for environments with no `docker compose` plugin.
 
+### What a real client found
+
+`test_mcp_server.py` asserts the tool surface by importing the module and
+calling `list_tools()`. That is worth having -- it caught the server being
+unimportable at all -- but a transport nothing has spoken to is a transport
+nothing has tested, and everything between `mcp.run()` and a tool body was
+unexercised. `scripts/mcp_smoke.py` is a real client, no model in the loop, and
+its fifth step is the product: device 1 records a decision, device 2 reconnects
+under its own grant, asks nothing about device 1, and is told what it decided
+and why.
+
+Four defects, none of them findable from inside the process:
+
+- **A refusal did not survive the transport.** `record_decision` raised
+  `WriteRefused`, and the client received "Error executing tool
+  record_decision" with the reason stripped -- indistinguishable from a bug,
+  when the entire point of carrying deny reasons is that a decline is a real
+  answer. It returns the refusal now.
+- **The briefing quoted a placeholder instead of the agent's reason.** The
+  reason reached the event body and not the mutation the briefing reads, so
+  every advisory said `because "extracted from a record"`. That sentence is the
+  one thing a briefing exists to carry.
+- **The advisory described the relabel rather than the decision.** Labelling a
+  claim with its memory kind is a `payload` mutation that lands after the write,
+  so "the most recent change" was reliably the relabel and the line read
+  "amended" for a decision just recorded -- true of the row, false about what
+  happened.
+- **The same advisory could appear several times**, because a citation list can
+  name one object twice and every line downstream is per object. Duplicated
+  context in the one resource the read exists to spend carefully.
+
+The SDK's own rename (`isError` to `is_error`) was a fifth, and it is the
+cheapest illustration of the point: an in-process test calls the function and
+never touches the result envelope.
+
 ### Step 0 still open
 
 - **Live LLM extraction and a real embedding model**, on a consenting owner's

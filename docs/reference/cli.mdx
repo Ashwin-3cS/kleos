@@ -27,6 +27,7 @@ log.
 | `scripts/run_local.sh [--with-orchestrator]` | enclave + gateway in mock mode; optionally the services too |
 | `scripts/smoke_test.sh` | mock tokens and the mock OAuth connect flow |
 | `scripts/orchestrator_smoke.sh` | identity → ingest → grant → query → decline → shift → neighbourhood → read log |
+| `scripts/mcp_smoke.py` | drives the MCP server from a **real client**: two devices, a decision, and the briefing that tells the second what the first decided |
 | `scripts/build_enclave.sh` | stagex/docker build producing a reproducible `.eif` |
 | `scripts/deploy.sh` | ship the `.eif` and gateway binary to `DEPLOY_HOST` |
 | `scripts/parent_forwarder.sh` | host-side VSOCK↔TCP bridging, both directions |

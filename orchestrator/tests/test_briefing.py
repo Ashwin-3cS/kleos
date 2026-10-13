@@ -318,3 +318,46 @@ def test_the_session_rides_into_the_log(runtime: Runtime) -> None:
     composite = [e for e in runtime.read_log.recent(OWNER) if e.kind == "brief"]
     assert composite
     assert composite[0].session_id == session.id
+
+
+# -- what the real MCP client found -------------------------------------
+#
+# Three defects, all in the rendering rather than in the reads, and all invisible
+# to an in-process test because they are about what an agent *reads*.
+
+
+def test_an_advisory_is_not_repeated(runtime: Runtime) -> None:
+    """A citation list can name the same object twice, and every line downstream
+    is per object -- so a repeat became the same advisory twice in an agent's
+    context window, which is the one resource this read exists to spend
+    carefully."""
+    record_decision(runtime, "device-1", DEVICE_1_SAYS, BECAUSE)
+
+    briefing = brief_before_acting(runtime, INTENT, "device-2")
+    assert len(briefing.advisories) == len(set(briefing.advisories))
+
+
+def test_the_advisory_describes_the_decision_not_the_relabel(
+    runtime: Runtime,
+) -> None:
+    """Labelling a claim with its memory kind is a `payload` mutation that lands
+    after the write, so "the most recent change" was reliably the relabel -- and
+    the advisory said an agent "amended" a decision it had just recorded. True of
+    the row and false about what happened."""
+    record_decision(runtime, "device-1", DEVICE_1_SAYS, BECAUSE)
+
+    advisories = " ".join(brief_before_acting(runtime, INTENT, "device-2").advisories)
+    assert "recorded" in advisories
+    assert "amended" not in advisories
+    assert "relabelled" not in advisories
+
+
+def test_the_advisory_quotes_the_reason_the_agent_gave(runtime: Runtime) -> None:
+    """The reason reached the event body and not the mutation the briefing reads,
+    so every advisory said 'because "extracted from a record"' -- the single
+    thing a briefing exists to carry, replaced by a placeholder."""
+    record_decision(runtime, "device-1", DEVICE_1_SAYS, BECAUSE)
+
+    advisories = " ".join(brief_before_acting(runtime, INTENT, "device-2").advisories)
+    assert BECAUSE in advisories
+    assert "extracted from a record" not in advisories
