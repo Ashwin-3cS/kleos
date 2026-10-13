@@ -59,6 +59,7 @@ from ..enums import ClaimStatus
 from ..permissions import Scope
 from ..schema import Claim
 from ..storage.bodies import load_body
+from ..storage.mutations import Actor
 from .audit import record_read
 from .history import why_did_this_shift
 from .query import run_query
@@ -68,6 +69,10 @@ log = logging.getLogger(__name__)
 
 #: Enough of a decision to recognise it in a one-line advisory.
 _ADVISORY_CHARS = 120
+
+#: What the owner's own ingestion is recorded as. Named here so the rendering
+#: below can tell it apart from an agent whose label nobody checked.
+PIPELINE_ACTOR = Actor.pipeline().agent_id
 
 
 @dataclass(slots=True)
@@ -383,6 +388,13 @@ def _advisory_line(claim: Claim, who: Attribution) -> str:
             f"device {who.actor_device_id[:12]} (labelled {who.actor_agent_id!r}, "
             "device-authenticated)"
         )
+    elif who.actor_agent_id == PIPELINE_ACTOR:
+        # The owner's own ingestion -- a connector pulling their mailbox, their
+        # own typing. It has no device because there is no device, and rendering
+        # that as "label only, not authenticated" inverts how much a reader
+        # should trust it: this is the most trustworthy writer in the system, not
+        # an agent whose name nobody checked.
+        actor = "the owner's own ingestion"
     else:
         actor = f"{who.actor_agent_id!r} (label only, not authenticated)"
 

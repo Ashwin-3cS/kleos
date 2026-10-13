@@ -22,6 +22,7 @@ from .connectors.direct import TEXT as DIRECT_TEXT
 from .connectors.direct import build_record, is_push_source
 from .connectors.registry import REGISTRY
 from .graphs.brief import brief_before_acting
+from .graphs.decide import WriteRefused, record_decision
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.ingestion import run_ingestion
 from .graphs.neighbourhood import neighbourhood
@@ -29,6 +30,7 @@ from .graphs.query import run_query
 from .graphs.runtime import Runtime
 from .jobs.queue import get_queue
 from .jobs.tasks import ingest_source
+from .storage.sessions import SessionError
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +121,17 @@ class BriefRequest(BaseModel):
     session_id: str | None = None
     top_k: int = Field(default=8, ge=1, le=50)
     include_body: bool = False
+
+
+class DecideRequest(BaseModel):
+    grant_token: str
+    #: The decision as a durable assertion, not a deliberation.
+    statement: str = Field(min_length=1, max_length=2000)
+    #: Required, not optional: the next agent's briefing is built out of it.
+    reason: str = Field(min_length=1, max_length=2000)
+    session_id: str | None = None
+    memory_kind: str = "episodic"
+    sensitive: bool = False
 
 
 class MutationLogRequest(BaseModel):
@@ -358,6 +371,38 @@ def memory_brief(req: BriefRequest) -> dict[str, Any]:
         top_k=req.top_k,
         include_body=req.include_body,
     ).as_dict()
+
+
+@app.post("/memory/decide", status_code=201)
+def memory_decide(req: DecideRequest) -> dict[str, Any]:
+    """Record what an agent decided, under a grant that says it may.
+
+    The HTTP sibling of the `record_decision` MCP tool, and the only
+    grant-authorised *write* this service serves -- `POST /remember` is the
+    owner's own push path and authenticates differently.
+
+    A refusal comes back as `201` with `refused: true` rather than as a `403`.
+    The same choice the MCP tool makes and for the same reason: a decline is a
+    real answer, and the deny reason is the useful part of it. A status code
+    alone cannot say "your grant may write, but not as that source".
+    """
+    try:
+        recorded = record_decision(
+            runtime(),
+            req.grant_token,
+            req.statement,
+            req.reason,
+            session_id=req.session_id,
+            memory_kind=req.memory_kind,
+            sensitive=req.sensitive,
+        )
+    except WriteRefused as refused:
+        return {"refused": True, "reason": refused.reason, "detail": str(refused)}
+    except SessionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"refused": False, **recorded.as_dict()}
 
 
 @app.post("/memory/mutations")

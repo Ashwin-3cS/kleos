@@ -230,8 +230,125 @@ curl -s -o /dev/null -w "HTTP %{http_code} (expect 401)\n" \
   -d "{\"grant_token\": \"$SPARE_GRANT\"}"
 rm -f "$SPARE_KEY"
 
+# -- the harness, against the real stack -------------------------------------
+#
+# Everything above is one agent reading. What follows is the part several agents
+# need, and it is deliberately run against the Rust gateway rather than against a
+# stand-in: `scripts/mcp_smoke.py` already proves the same flow over MCP with a
+# local grant resolver, so what this adds is the half that resolver stands in for
+# -- a second registered device, real signature verification, and a capability
+# the gateway actually enforces.
+
 echo
-echo "== 11. the explorer page is served =="
+echo "== 11. a second device, so \"which agent decided this\" is a real question =="
+DEVICE_2_KEY="$ROOT_DIR/.local/device2.key"
+[ -f "$DEVICE_2_KEY" ] || "$SIGNER" keygen --key "$DEVICE_2_KEY" >/dev/null
+PUBKEY_2=$("$SIGNER" pubkey --key "$DEVICE_2_KEY")
+curl -sf -X POST "$GATEWAY_URL/auth/device/register" \
+  -H 'content-type: application/json' \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  -d "{\"public_key_b64\": \"$PUBKEY_2\", \"label\": \"smoke-device-2\"}" \
+  | jq -c '{key_id, label}'
+
+DEVICE_1_ID=$("$SIGNER" key-id --key "$DEVICE_KEY")
+DEVICE_2_ID=$("$SIGNER" key-id --key "$DEVICE_2_KEY")
+echo "device 1: $DEVICE_1_ID"
+echo "device 2: $DEVICE_2_ID"
+
+# Device 1 may write and may replace the owner's own decisions. Device 2 only
+# reads. Both are capabilities the owner signed; neither is anything the gateway
+# could have granted itself.
+WRITER_GRANT=$("$SIGNER" sign --key "$DEVICE_KEY" --scope - --ttl-secs 3600 <<JSON
+{"agent_id": "claude-code",
+ "owner_id": "$OWNER_ID",
+ "sources": ["mock", "agent"],
+ "entity_kinds": ["person", "project", "artifact", "organization", "topic"],
+ "not_before_ms": null, "not_after_ms": null,
+ "max_sensitivity": "confidential", "expires_at_ms": null,
+ "may_write": true, "write_sources": ["agent"], "may_supersede_owner": true,
+ "memory_kinds": ["episodic", "procedural", "tacit"]}
+JSON
+)
+READER_GRANT=$("$SIGNER" sign --key "$DEVICE_2_KEY" --scope - --ttl-secs 3600 <<JSON
+{"agent_id": "chatgpt",
+ "owner_id": "$OWNER_ID",
+ "sources": ["mock", "agent"],
+ "entity_kinds": ["person", "project", "artifact", "organization", "topic"],
+ "not_before_ms": null, "not_after_ms": null,
+ "max_sensitivity": "confidential", "expires_at_ms": null,
+ "memory_kinds": ["episodic", "procedural", "tacit"]}
+JSON
+)
+echo -n "introspecting device 2's grant -> "
+curl -sf -X POST "$GATEWAY_URL/memory/scope/introspect" -H 'content-type: application/json' \
+  -d "{\"grant_token\": \"$READER_GRANT\"}" | jq -c '{agent: .scope.agent_id, key_id}'
+
+echo
+echo "== 12. device 2 briefs before acting -- only the corpus to go on =="
+#      The mock corpus already supersedes its own storage decision, so there is
+#      something to warn about before any agent writes. What is missing at this
+#      point is an *agent* in the picture: every advisory names the owner's own
+#      ingestion.
+curl -sf -X POST "$ORCH_URL/memory/brief" -H 'content-type: application/json' \
+  -d "{\"intent\": \"about to pick a datastore for project Atlas\", \"grant_token\": \"$READER_GRANT\"}" \
+  | jq -c '{answered, advisories}'
+
+echo
+echo "== 13. device 1 records a decision that contradicts the corpus =="
+# Through the orchestrator, which checks `may_write` against the scope the
+# gateway verified. A grant without it is refused by name rather than ignored.
+curl -sf -X POST "$ORCH_URL/memory/brief" -H 'content-type: application/json' \
+  -d "{\"intent\": \"recording the datastore decision\", \"grant_token\": \"$WRITER_GRANT\"}" \
+  > /dev/null
+python3 - "$ORCH_URL" "$WRITER_GRANT" <<'PY'
+import json, sys, urllib.request
+
+orch, grant = sys.argv[1], sys.argv[2]
+body = json.dumps(
+    {
+        "grant_token": grant,
+        "statement": "project Atlas will use Neo4j for durable storage.",
+        "reason": "graph proximity is a hard requirement and the relational option cannot do it",
+        "memory_kind": "episodic",
+    }
+).encode()
+req = urllib.request.Request(
+    f"{orch}/memory/decide", data=body, headers={"content-type": "application/json"}
+)
+try:
+    with urllib.request.urlopen(req) as response:
+        print(json.dumps(json.load(response), indent=2)[:400])
+except urllib.error.HTTPError as exc:
+    print(f"HTTP {exc.code}: {exc.read().decode()[:200]}")
+PY
+
+echo
+echo "== 14. device 2 briefs again, and is told what device 1 decided =="
+curl -sf -X POST "$ORCH_URL/memory/brief" -H 'content-type: application/json' \
+  -d "{\"intent\": \"about to pick a datastore for project Atlas\", \"grant_token\": \"$READER_GRANT\"}" \
+  | jq -r '.advisories[]? // "(nothing to warn about)"'
+
+echo
+echo "== 15. the owner reads both logs: what was seen, and what was changed =="
+echo -n "reads by device    -> "
+curl -sf -X POST "$ORCH_URL/memory/reads" -H 'content-type: application/json' \
+  -d "{\"session_token\": \"$SESSION_TOKEN\", \"limit\": 50}" \
+  | jq -c '[.grants[] | {agent_id, device_id, reads}]'
+echo -n "changes with rules -> "
+curl -sf -X POST "$ORCH_URL/memory/mutations" -H 'content-type: application/json' \
+  -d "{\"session_token\": \"$SESSION_TOKEN\", \"limit\": 10}" \
+  | jq -c '[.entries[] | select(.rule != null) | {kind, rule, device: .actor_device_id}] | unique'
+
+echo
+echo "== 16. an action the grant does not name (expect a refusal) =="
+# The broker's own refusals are covered by gateway/ and enclave/ tests; what this
+# proves is that the capability is enforced where the grant is verified.
+curl -s -o /dev/null -w "POST /memory/act -> HTTP %{http_code} (expect 401)\n" \
+  -X POST "$GATEWAY_URL/memory/act" -H 'content-type: application/json' \
+  -d "{\"grant_token\": \"$READER_GRANT\", \"action_id\": \"attest.digest\", \"args\": {\"digest\": \"abc\"}}"
+
+echo
+echo "== 17. the explorer page is served =="
 curl -sf -o /dev/null -w "GET /explorer -> %{http_code} (%{size_download} bytes)\n" "$ORCH_URL/explorer"
 echo "Open $ORCH_URL/explorer and paste a grant token to browse the same data."
 
