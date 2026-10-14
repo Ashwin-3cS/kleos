@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import get_settings
@@ -22,7 +23,7 @@ from .connectors.direct import TEXT as DIRECT_TEXT
 from .connectors.direct import build_record, is_push_source
 from .connectors.registry import REGISTRY
 from .graphs.brief import brief_before_acting
-from .graphs.decide import WriteRefused, record_decision
+from .graphs.decide import WriteRefused, consolidate_session, record_decision
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.ingestion import run_ingestion
 from .graphs.neighbourhood import neighbourhood
@@ -43,6 +44,32 @@ def runtime() -> Runtime:
     if _runtime is None:
         raise HTTPException(status_code=503, detail="orchestrator runtime is not ready")
     return _runtime
+
+
+def require_owner(session_token: str) -> str:
+    """Resolves an **owner** session to its owner id, or refuses with a 401.
+
+    Extracted from the two byte-identical blocks that used to sit inline in the
+    read-log and mutation-log handlers, before the dashboard made it four. The
+    duplication was not the problem so much as what it invited: four copies of an
+    authentication check drift, and the one that drifts is the one nobody reads.
+
+    The orchestrator holds no signing key, so this is a round trip to the gateway
+    (`/auth/session/introspect`). That is the point rather than the cost -- the
+    service that verifies owner sessions is the one that issues them.
+
+    A grant token is **refused here**, loudly, and there is a test for it. The two
+    auth modes take a string that looks the same and mean entirely different
+    things: a grant says "this agent may read these objects", a session says "this
+    is the person". Confusing them in this direction would hand an agent the
+    owner's own view of what every other agent has been doing.
+    """
+    try:
+        return runtime().gateway.introspect_session(session_token)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
 
 
 @asynccontextmanager
@@ -140,6 +167,34 @@ class MutationLogRequest(BaseModel):
     #: another has been doing.
     session_token: str
     limit: int = Field(default=50, ge=1, le=500)
+
+
+class SessionLogRequest(BaseModel):
+    #: An **owner** session. Listing sessions across agents is the same
+    #: disclosure shape as the mutation log: it tells whoever asks what every
+    #: other agent has been working on.
+    session_token: str
+    #: The gateway-verified device, not the `agent_id` label. Optional: without
+    #: it, every device.
+    device_id: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class ActionLogRequest(BaseModel):
+    #: An **owner** session. What was done in the world on the owner's behalf is
+    #: the owner's record.
+    session_token: str
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class ConsolidateRequest(BaseModel):
+    #: A grant that says `may_write` **and** `may_unseal`: the blocks are sealed,
+    #: and turning them into claims is a write. Grant-authenticated rather than
+    #: owner-authenticated even when the owner pressed the button, so that one
+    #: gate decides every claim-producing write and every such write carries a
+    #: grant fingerprint. See ADR 0023.
+    grant_token: str
+    session_id: str
 
 
 class NeighbourhoodRequest(BaseModel):
@@ -344,12 +399,7 @@ def memory_reads(req: ReadLogRequest) -> dict[str, Any]:
     gateway, and there is no grant-authorised path to it and no MCP tool.
     See ADR 0005.
     """
-    try:
-        owner_id = runtime().gateway.introspect_session(req.session_token)
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
+    owner_id = require_owner(req.session_token)
     return runtime().read_log.summary(owner_id, limit=req.limit)
 
 
@@ -421,18 +471,102 @@ def memory_mutations(req: MutationLogRequest) -> dict[str, Any]:
     asking agent has just been permitted to see: a per-object disclosure that
     follows a permission check, not a feed.
     """
-    try:
-        owner_id = runtime().gateway.introspect_session(req.session_token)
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
+    owner_id = require_owner(req.session_token)
     entries = runtime().mutations.recent(owner_id, limit=req.limit)
     return {
         "owner_id": owner_id,
         "mutations": len(entries),
         "entries": [e.as_dict() for e in entries],
     }
+
+
+@app.post("/memory/sessions")
+def memory_sessions(req: SessionLogRequest) -> dict[str, Any]:
+    """What each of this owner's agents has been working on, and whether it has
+    been distilled into memory yet.
+
+    **Owner**-authenticated, with the mutation log's reasoning: a listing across
+    sessions tells whoever asks what every other agent has been doing. The
+    harness itself never needs this -- an agent addresses the session it already
+    holds -- so there is no grant path and no MCP tool.
+
+    Holds no block content. A session node is an index into the blob store by
+    design, so this answers "how much, from whom, distilled or not" without
+    unsealing anything. The answer to "what did it actually say" is consolidation,
+    which is a write and is gated as one.
+    """
+    owner_id = require_owner(req.session_token)
+    sessions = runtime().sessions.recent(
+        owner_id, limit=req.limit, device_id=req.device_id
+    )
+    return {
+        "owner_id": owner_id,
+        "device_id": req.device_id,
+        "sessions": len(sessions),
+        # The freshness signal, computed here rather than left to the client:
+        # `consolidated_at_ms is None` is the only thing that distinguishes
+        # "never distilled" from "distilled, concluded nothing", and a client
+        # inferring it from an empty claim list would get the common case wrong.
+        "undistilled": sum(
+            1 for s in sessions if s.consolidated_at_ms is None and s.block_count
+        ),
+        "entries": [s.as_dict() for s in sessions],
+    }
+
+
+@app.post("/memory/actions")
+def memory_actions(req: ActionLogRequest) -> dict[str, Any]:
+    """Every action an agent asked the enclave to perform, and what came back.
+
+    **Owner**-authenticated, beside the read and mutation logs, and the most
+    consequential of the three: a read discloses and a mutation changes the
+    record, but an action sent mail or posted a comment. It cannot be undone by
+    rewriting a row, which is why the record of it is append-only and why a
+    failed attempt is in here too -- "tried and failed" is a different fact from
+    "never tried".
+
+    Carries no arguments, because an action's arguments are the content it acted
+    on. What is here is the digest, which makes a repeat recognisable without
+    being readable.
+    """
+    owner_id = require_owner(req.session_token)
+    entries = runtime().actions.recent(owner_id, limit=req.limit)
+    return {
+        "owner_id": owner_id,
+        "actions": len(entries),
+        "entries": [e.as_dict() for e in entries],
+    }
+
+
+@app.post("/memory/consolidate", status_code=201)
+def memory_consolidate(req: ConsolidateRequest) -> dict[str, Any]:
+    """Turn what a session concluded into memory, and leave the rest alone.
+
+    The second state transition, over HTTP: blocks are *stored* until this runs,
+    and only what it writes becomes *searchable*. Almost nothing should.
+
+    **Grant**-authenticated, including when the owner triggered it from the
+    dashboard -- the dashboard signs a short-lived grant with the owner's own
+    device key rather than reaching for an owner-authority path. One gate decides
+    every claim-producing write, and every such write carries a `grant_fp`. The
+    cost is that the grant is a powerful one (write plus unseal across every
+    kind), which is why it is minted per click and expires in under a minute.
+    See ADR 0023.
+
+    A refusal comes back as `201` with `refused: true`, as `/memory/decide` does.
+    And `errors` matters as much as `claims`: consolidation refuses *per
+    conclusion*, so a grant narrower than what the consolidator found produces a
+    partial result that would otherwise read as a clean run.
+    """
+    try:
+        consolidated = consolidate_session(runtime(), req.grant_token, req.session_id)
+    except WriteRefused as refused:
+        return {"refused": True, "reason": refused.reason, "detail": str(refused)}
+    except SessionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"refused": False, **consolidated.as_dict()}
 
 
 @app.get("/explorer", include_in_schema=False)
@@ -444,6 +578,45 @@ def explorer() -> FileResponse:
     hosted without moving both of those off this machine.
     """
     return FileResponse(_STATIC / "explorer.html", media_type="text/html")
+
+
+#: Where `ui/` builds to. Committed, so running Kleos needs Python and nothing
+#: else -- Node is a development dependency of the UI, not of the service.
+_UI = _STATIC / "ui"
+
+if (_UI / "index.html").exists():
+    # Mounted rather than routed one file at a time, because Vite emits hashed
+    # asset names and a hand-written `FileResponse` per file cannot know them.
+    # Mounted *before* the catch-all below, since the first match wins and the
+    # catch-all would otherwise answer every asset request with the index page.
+    app.mount("/ui/assets", StaticFiles(directory=_UI / "assets"), name="ui-assets")
+
+
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/{path:path}", include_in_schema=False)
+def dashboard(path: str = "") -> FileResponse:
+    """The owner's dashboard: access policy, memory, and what agents have done.
+
+    One page for every path under `/ui`, because it routes client-side. That is
+    also what makes `/ui/oauth/land` work: it is the provider's redirect target,
+    configured as `GOOGLE_REDIRECT_URI`, and the page reads `code` and `state`
+    off its own query string. The redirect therefore lands on **this** origin
+    rather than on the gateway's, which is the whole reason the browser can read
+    the session token at all. See ADR 0023.
+
+    Served from the orchestrator, like the explorer, and for a sharper reason: it
+    holds the owner's device key and talks to owner-authenticated routes. Being
+    same-origin with those routes is what keeps this service free of a CORS
+    allow-list, which would be the one change most likely to make them reachable
+    from somewhere else.
+    """
+    index = _UI / "index.html"
+    if not index.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="the dashboard is not built; run `npm ci && npm run build` in ui/",
+        )
+    return FileResponse(index, media_type="text/html")
 
 
 def main() -> None:

@@ -94,6 +94,16 @@ class AgentSession:
     #: this session actually commit to memory" is one property read. Empty until
     #: it is consolidated, and empty forever for a session that decided nothing.
     consolidated_into: list[str] = field(default_factory=list)
+    #: When consolidation last ran over this session, whether or not it concluded
+    #: anything. `None` means it has never run.
+    #:
+    #: This exists because `consolidated_into` **cannot** say that. An empty list
+    #: means either "not distilled yet" or "distilled, and concluded nothing" --
+    #: and the second is the common and correct outcome, so the ambiguity covers
+    #: most sessions. An owner asking "is device 1's work folded in yet?" is
+    #: asking exactly the question the list cannot answer, which is why the
+    #: dashboard needed a timestamp rather than a cleverer read of the list.
+    consolidated_at_ms: int | None = None
     id: str = ""
 
     def __post_init__(self) -> None:
@@ -216,8 +226,17 @@ class SessionStore:
         self._store.close_session(owner_id, session_id, now)
         return session
 
-    def recent(self, owner_id: str, limit: int = 50) -> list[AgentSession]:
-        return self._store.recent_sessions(owner_id, limit)
+    def recent(
+        self, owner_id: str, limit: int = 50, device_id: str | None = None
+    ) -> list[AgentSession]:
+        """This owner's sessions, newest first, optionally for one device.
+
+        Had no caller until the dashboard: the harness only ever addressed a
+        session it already held the id of. Listing is an *owner* question -- "what
+        have my agents been working on" -- which is why it surfaces behind an
+        owner session and not behind a grant.
+        """
+        return self._store.recent_sessions(owner_id, limit, device_id=device_id)
 
     # -- the blocks ----------------------------------------------------
 

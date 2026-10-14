@@ -42,6 +42,7 @@ to diverge. ADR 0013's reasoning, applied to a different writer.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -422,6 +423,14 @@ def consolidate_session(
         # produce" is one property read rather than a traversal. Additive: a
         # second consolidation of the same session adds to what the first found.
         runtime.store.set_session_consolidation(scope.owner_id, session_id, written)
+
+    # Unconditional, and outside the `if written` above. "Consolidation ran and
+    # concluded nothing" is the common outcome and a different fact from "has
+    # never run"; only the timestamp can tell them apart, because the claim list
+    # is empty either way.
+    runtime.store.mark_session_consolidated(
+        scope.owner_id, session_id, int(time.time() * 1000)
+    )
 
     log.info(
         "consolidate.session id=%s blocks=%d conclusions=%d claims=%d refused=%d",
