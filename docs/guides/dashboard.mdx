@@ -70,7 +70,14 @@ Each key shows one of three states:
 |---|---|
 | **verified** | the key id this browser derived matches the one the gateway holds |
 | **not registered** | generated here, registration has not succeeded yet — retry |
-| **revoked** | the gateway will refuse every grant it signed |
+| **cannot receive sealed** | registered, signing fine, but with no X25519 key — re-register to add one |
+| **revoked** | the gateway will refuse every grant it signed, and will not seal anything to it |
+
+Each key is really two keypairs: Ed25519 signs grants, X25519 receives content
+the enclave seals back to this device. They are separate because a signature key
+cannot be encrypted to. Both private halves are generated in your browser and
+neither can be read by the page. See
+[ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device).
 
 <Warning>
 **A registered key this browser does not hold** gets a prominent warning, and it

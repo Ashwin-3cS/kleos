@@ -37,6 +37,18 @@ curl -s localhost:8080/auth/device/register \
   -d "{\"public_key_b64\": \"$PUBKEY\", \"label\": \"laptop\"}"
 ```
 
+<Note>
+A device that will be **sent** content, rather than only signing for it, also
+registers an X25519 key as `encryption_key_b64`. Ed25519 signs and cannot be
+encrypted to, so the two are separate keypairs — see
+[ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device). The
+response's `can_receive_sealed` says whether the gateway recorded one.
+
+Optional, and omitting it is a working state rather than a broken one: the
+device signs grants and reads exactly as it would otherwise. Revoking the device
+key withdraws both halves at once.
+</Note>
+
 The `label` is display only and never trusted. The `key_id` is derived from the
 public key, so the same material cannot be claimed by two owners.
 
