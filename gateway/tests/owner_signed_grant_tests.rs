@@ -109,6 +109,99 @@ async fn register(state: &Arc<AppState>, owner: &str, kp: &Ed25519KeyPair) -> St
 }
 
 #[tokio::test]
+async fn a_device_registers_a_second_key_for_receiving_sealed_results() {
+    // ADR 0024. Ed25519 signs and cannot be encrypted to, so a device that is
+    // going to be sent an assembly registers an X25519 key as well.
+    let state = state();
+    let kp = Ed25519KeyPair::generate(&mut rand::thread_rng());
+    let (status, body) = call(
+        &state,
+        post(
+            "/auth/device/register",
+            Some(&session_for("owner-1")),
+            json!({
+                "public_key_b64": B64.encode(kp.public().as_bytes()),
+                "encryption_key_b64": B64.encode([7u8; 32]),
+                "label": "laptop",
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["can_receive_sealed"], json!(true));
+}
+
+#[tokio::test]
+async fn registering_without_one_still_works_and_says_it_cannot_receive() {
+    // Every device registered before the field existed is in this state. It keeps
+    // signing grants and reading exactly as it did; what it cannot do is be sent
+    // a sealed assembly, and an owner needs to be able to see which of their
+    // devices are in that state before anything depends on it.
+    let state = state();
+    let kp = Ed25519KeyPair::generate(&mut rand::thread_rng());
+    let (status, body) = call(
+        &state,
+        post(
+            "/auth/device/register",
+            Some(&session_for("owner-1")),
+            json!({"public_key_b64": B64.encode(kp.public().as_bytes())}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["can_receive_sealed"], json!(false));
+}
+
+#[tokio::test]
+async fn the_signing_key_is_refused_as_an_encryption_key() {
+    // Not a size mistake but a category one: it means the client believes one
+    // keypair does both jobs. Accepting it would seal every result to a key whose
+    // private half cannot decrypt, and the failure would surface far from here --
+    // as an assembly the device simply cannot open.
+    let state = state();
+    let kp = Ed25519KeyPair::generate(&mut rand::thread_rng());
+    let encoded = B64.encode(kp.public().as_bytes());
+    let (status, body) = call(
+        &state,
+        post(
+            "/auth/device/register",
+            Some(&session_for("owner-1")),
+            json!({"public_key_b64": encoded, "encryption_key_b64": encoded}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("must not be the signing key"), "{body}");
+}
+
+#[tokio::test]
+async fn an_encryption_key_of_the_wrong_size_is_refused_at_registration() {
+    // Checked here rather than at first use: a key of the wrong size would
+    // otherwise register cleanly and fail every sealed assembly afterwards, with
+    // the error surfacing nowhere near the mistake.
+    let state = state();
+    let kp = Ed25519KeyPair::generate(&mut rand::thread_rng());
+    let (status, body) = call(
+        &state,
+        post(
+            "/auth/device/register",
+            Some(&session_for("owner-1")),
+            json!({
+                "public_key_b64": B64.encode(kp.public().as_bytes()),
+                "encryption_key_b64": B64.encode([7u8; 16]),
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("32 bytes"), "{body}");
+}
+
+#[tokio::test]
 async fn there_is_no_route_that_mints_a_grant() {
     // The route that used to exist. Its absence is the feature.
     let state = state();

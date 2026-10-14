@@ -35,6 +35,19 @@ pub struct DeviceKey {
     /// Derived from the public key; see `shared::key_id_for`.
     pub key_id: String,
     pub public_key: Vec<u8>,
+    /// Raw X25519 public key, for sealing results back to this device.
+    ///
+    /// A **second** key rather than a reuse of the one above, because Ed25519 is
+    /// a signature scheme and cannot be encrypted to. Converting one to X25519 is
+    /// possible, fiddly, and widely advised against, so the device registers
+    /// both. See ADR 0024.
+    ///
+    /// `None` for every device registered before this field existed. Those
+    /// devices keep signing grants and reading exactly as they did; what they
+    /// cannot do is receive a sealed assembly, and the refusal says so rather
+    /// than failing somewhere deeper. Optional for that reason alone -- a new
+    /// registration should always carry one.
+    pub encryption_key: Option<Vec<u8>>,
     /// Whatever the owner called this device. Display only, never trusted.
     pub label: String,
     pub registered_at_ms: i64,
@@ -45,6 +58,18 @@ pub struct DeviceKey {
 impl DeviceKey {
     pub fn is_revoked(&self) -> bool {
         self.revoked_at_ms.is_some()
+    }
+
+    /// Where a sealed result for this device can be sent, if anywhere.
+    ///
+    /// A revoked key gets nothing, checked here rather than at each call site:
+    /// revocation has to mean the device stops receiving as well as stops
+    /// signing, and the two are easy to treat separately by accident.
+    pub fn sealing_target(&self) -> Option<&[u8]> {
+        if self.is_revoked() {
+            return None;
+        }
+        self.encryption_key.as_deref()
     }
 }
 
@@ -158,6 +183,7 @@ mod tests {
             owner_id: owner.into(),
             key_id: key_id.into(),
             public_key: vec![1, 2, 3],
+            encryption_key: Some(vec![4, 5, 6]),
             label: "laptop".into(),
             registered_at_ms: 1_000,
             revoked_at_ms: None,
@@ -223,6 +249,56 @@ mod tests {
         store.register(&key("owner-1", "k1")).await.unwrap();
         let found = store.get("k1").await.unwrap().unwrap();
         assert_eq!(found.owner_id, "owner-1");
+    }
+
+    #[tokio::test]
+    async fn re_registering_cannot_swap_the_encryption_key() {
+        // The key id is derived from the *signing* key alone, so the same device
+        // could re-register naming a different X25519 key. If that replaced the
+        // stored one, anyone who could forge an owner session could redirect
+        // every future sealed assembly to a key they hold -- without touching the
+        // signing key, so the owner's own key-id check would still agree.
+        //
+        // `ON CONFLICT DO NOTHING` is what prevents it, and this is the test that
+        // says so. Not a property of the column; a property of the write.
+        let store = InMemoryDeviceKeyStore::default();
+        store.register(&key("owner-1", "k1")).await.unwrap();
+
+        let mut attacker = key("owner-1", "k1");
+        attacker.encryption_key = Some(vec![9, 9, 9]);
+        let stored = store.register(&attacker).await.unwrap();
+
+        assert_eq!(stored.encryption_key, Some(vec![4, 5, 6]));
+    }
+
+    #[tokio::test]
+    async fn a_revoked_key_is_no_longer_a_sealing_target() {
+        // Revocation has to mean the device stops *receiving* as well as stops
+        // signing. The two are easy to treat separately by accident -- the grant
+        // check and the sealing check are in different files -- so the rule lives
+        // on the row rather than at each call site.
+        let store = InMemoryDeviceKeyStore::default();
+        store.register(&key("owner-1", "k1")).await.unwrap();
+        assert!(store.get("k1").await.unwrap().unwrap().sealing_target().is_some());
+
+        store.revoke("owner-1", "k1", 2_000).await.unwrap();
+
+        assert!(store.get("k1").await.unwrap().unwrap().sealing_target().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_device_registered_before_the_column_existed_still_works() {
+        // The reason the field is Option. Such a device keeps signing grants and
+        // reading exactly as it did; it simply cannot be sent a sealed assembly,
+        // and that is refusable rather than broken.
+        let store = InMemoryDeviceKeyStore::default();
+        let mut old = key("owner-1", "k-old");
+        old.encryption_key = None;
+        store.register(&old).await.unwrap();
+
+        let stored = store.get("k-old").await.unwrap().unwrap();
+        assert!(!stored.is_revoked(), "it is a perfectly valid signing key");
+        assert!(stored.sealing_target().is_none());
     }
 
     #[tokio::test]
