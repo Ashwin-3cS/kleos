@@ -53,12 +53,24 @@ const STORE = "device-keys";
 
 /** One key this browser holds, as stored. */
 export interface StoredKey {
-  /** Derived locally from the public key, never taken from the server. */
+  /** Derived locally from the **signing** key, never taken from the server. */
   keyId: string;
   /** What the owner calls the agent this key signs for. Display only. */
   label: string;
   publicKey: Uint8Array;
   privateKey: CryptoKey;
+  /**
+   * The X25519 half, for receiving assemblies sealed by the enclave.
+   *
+   * A second keypair rather than a reuse of the one above, because Ed25519 is a
+   * signature scheme and cannot be encrypted to. Converting one to the other is
+   * possible, fiddly and widely advised against. See ADR 0024.
+   *
+   * Optional on the type because a key created by an older build has none; a new
+   * one always gets both, in the same transaction, so the pair cannot half-exist.
+   */
+  encryptionPublicKey?: Uint8Array;
+  encryptionPrivateKey?: CryptoKey;
   createdAtMs: number;
 }
 
@@ -83,7 +95,11 @@ export class UnsupportedBrowser extends Error {
 export async function isSupported(): Promise<boolean> {
   if (!globalThis.crypto?.subtle || !globalThis.indexedDB) return false;
   try {
+    // Both, because a browser with one and not the other would register happily
+    // and then be unable to receive anything -- a half-working state discovered
+    // at the first sealed read rather than at setup.
     await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]);
     return true;
   } catch {
     return false;
@@ -129,20 +145,30 @@ function transact<T>(
 export async function createKey(label: string): Promise<StoredKey> {
   if (!(await isSupported())) throw new UnsupportedBrowser();
 
-  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, false, [
-    "sign",
-    "verify",
-  ])) as CryptoKeyPair;
-  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const [signing, sealing] = (await Promise.all([
+    crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]),
+    // `deriveBits` rather than `decrypt`: X25519 is key agreement, so the actual
+    // unsealing is a shared secret derived against the enclave's ephemeral public
+    // key and then used symmetrically. The private half still never leaves.
+    crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]),
+  ])) as [CryptoKeyPair, CryptoKeyPair];
+
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", signing.publicKey));
+  const encryptionPublicKey = new Uint8Array(
+    await crypto.subtle.exportKey("raw", sealing.publicKey),
+  );
 
   const stored: StoredKey = {
-    // Derived here. The register response will also state a key id, and
-    // comparing the two is the only check that makes the registration list
-    // meaningful -- see `grants.ts::keyIdFor`.
+    // Derived here, and from the **signing** key alone. Deriving it from both
+    // would change every existing key id and break the one check this UI adds
+    // over the CLI -- see `grants.ts::keyIdFor`. The binding between the two
+    // halves is the registration row, which cannot be rewritten.
     keyId: keyIdFor(publicKey),
     label,
     publicKey,
-    privateKey: pair.privateKey,
+    privateKey: signing.privateKey,
+    encryptionPublicKey,
+    encryptionPrivateKey: sealing.privateKey,
     createdAtMs: Date.now(),
   };
   await transact("readwrite", (store) => store.add(stored));

@@ -51,12 +51,20 @@ async function json<T>(response: Response): Promise<T> {
 
 /** What `keys.ts::createKey` does, minus IndexedDB, which node has no business with. */
 async function generate() {
-  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, false, [
-    "sign",
-    "verify",
-  ])) as CryptoKeyPair;
-  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-  return { publicKey, privateKey: pair.privateKey, keyId: keyIdFor(publicKey) };
+  const [signing, sealing] = (await Promise.all([
+    crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]),
+    crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]),
+  ])) as [CryptoKeyPair, CryptoKeyPair];
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", signing.publicKey));
+  const encryptionPublicKey = new Uint8Array(
+    await crypto.subtle.exportKey("raw", sealing.publicKey),
+  );
+  return {
+    publicKey,
+    privateKey: signing.privateKey,
+    encryptionPublicKey,
+    keyId: keyIdFor(publicKey),
+  };
 }
 
 describe("the dashboard's signing path, live", () => {
@@ -82,7 +90,11 @@ describe("the dashboard's signing path, live", () => {
     const key = await generate();
 
     // 3. Registered. The public key crosses; nothing else can.
-    const registered = await json<{ key_id: string; label: string }>(
+    const registered = await json<{
+      key_id: string;
+      label: string;
+      can_receive_sealed: boolean;
+    }>(
       await fetch(`${GATEWAY}/auth/device/register`, {
         method: "POST",
         headers: {
@@ -91,10 +103,17 @@ describe("the dashboard's signing path, live", () => {
         },
         body: JSON.stringify({
           public_key_b64: b64Encode(key.publicKey),
+          encryption_key_b64: b64Encode(key.encryptionPublicKey),
           label: "live-test",
         }),
       }),
     );
+
+    // Both halves landed. Ed25519 signs grants; X25519 is where the enclave will
+    // seal an assembly back to. Asserted at registration because a device missing
+    // the second half registers fine, signs fine and reads fine, and fails only
+    // when something first tries to send it sealed content.
+    expect(registered.can_receive_sealed).toBe(true);
 
     // 4. **The check the dashboard adds over the CLI.** Registration is
     //    authorised by a session the host signs, so a host that forged one could
