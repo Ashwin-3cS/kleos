@@ -32,7 +32,15 @@ CREATE TABLE IF NOT EXISTS kleos_device_keys (
     revoked_at_ms     BIGINT
 );
 CREATE INDEX IF NOT EXISTS kleos_device_keys_owner
-    ON kleos_device_keys (owner_id, registered_at_ms DESC)
+    ON kleos_device_keys (owner_id, registered_at_ms DESC);
+
+-- Added for ADR 0024: where a sealed assembly is sent back to this device.
+-- Nullable, and it stays nullable: every key registered before this column
+-- existed has no X25519 half, and those devices must keep signing grants and
+-- reading exactly as before. A NOT NULL with a default would invent a public key
+-- nobody holds the private half of, which is worse than an absent one -- the
+-- absent one is refusable, the invented one seals results into a void.
+ALTER TABLE kleos_device_keys ADD COLUMN IF NOT EXISTS encryption_key BYTEA
 ";
 
 /// A connection per operation rather than a pool, for the same reason as the
@@ -76,6 +84,7 @@ fn row_to_key(row: &tokio_postgres::Row) -> DeviceKey {
         key_id: row.get("key_id"),
         owner_id: row.get("owner_id"),
         public_key: row.get("public_key"),
+        encryption_key: row.get("encryption_key"),
         label: row.get("label"),
         registered_at_ms: row.get("registered_at_ms"),
         revoked_at_ms: row.get("revoked_at_ms"),
@@ -93,12 +102,14 @@ impl DeviceKeyStore for PostgresDeviceKeyStore {
         client
             .execute(
                 "INSERT INTO kleos_device_keys \
-                 (key_id, owner_id, public_key, label, registered_at_ms, revoked_at_ms) \
-                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (key_id) DO NOTHING",
+                 (key_id, owner_id, public_key, encryption_key, label, \
+                  registered_at_ms, revoked_at_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (key_id) DO NOTHING",
                 &[
                     &key.key_id,
                     &key.owner_id,
                     &key.public_key,
+                    &key.encryption_key,
                     &key.label,
                     &key.registered_at_ms,
                     &key.revoked_at_ms,

@@ -229,8 +229,16 @@ pub struct ActRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct DeviceRegisterRequest {
-    /// Raw Ed25519 public key, base64.
+    /// Raw Ed25519 public key, base64. Signs grants.
     pub public_key_b64: String,
+    /// Raw X25519 public key, base64. Receives sealed assemblies.
+    ///
+    /// Optional on the wire so a client written before ADR 0024 still registers,
+    /// and so a device that only ever signs is expressible. A device without one
+    /// reads exactly as it always did; what it cannot do is be sent a sealed
+    /// result, and that refusal names the reason.
+    #[serde(default)]
+    pub encryption_key_b64: Option<String>,
     #[serde(default)]
     pub label: String,
 }
@@ -241,6 +249,14 @@ pub struct DeviceKeyView {
     pub label: String,
     pub registered_at_ms: i64,
     pub revoked_at_ms: Option<i64>,
+    /// Whether this device can be sent a sealed assembly.
+    ///
+    /// The flag rather than the key itself. A public key is not secret and
+    /// echoing it would be harmless, but the client already holds its own and the
+    /// only question it needs answered here is whether the server agrees it has
+    /// one -- which is also what tells an owner that a device registered before
+    /// ADR 0024 needs re-registering.
+    pub can_receive_sealed: bool,
 }
 
 impl From<&crate::store::device_keys::DeviceKey> for DeviceKeyView {
@@ -250,6 +266,7 @@ impl From<&crate::store::device_keys::DeviceKey> for DeviceKeyView {
             label: key.label.clone(),
             registered_at_ms: key.registered_at_ms,
             revoked_at_ms: key.revoked_at_ms,
+            can_receive_sealed: key.sealing_target().is_some(),
         }
     }
 }
@@ -273,10 +290,42 @@ pub async fn device_register(
         )));
     }
 
+    // Same length check, same reason, and a separate one rather than a shared
+    // helper: these are different algorithms that happen to agree on 32 bytes,
+    // and a shared check would read as though that were a fact about key sizes
+    // rather than a coincidence.
+    let encryption_key = match req.encryption_key_b64.as_deref() {
+        None => None,
+        Some(encoded) => {
+            let bytes = B64.decode(encoded.as_bytes()).map_err(|e| {
+                GatewayError::BadRequest(format!("encryption_key_b64 is not base64: {e}"))
+            })?;
+            if bytes.len() != 32 {
+                return Err(GatewayError::BadRequest(format!(
+                    "an X25519 public key is 32 bytes, got {}",
+                    bytes.len()
+                )));
+            }
+            if bytes == public_key {
+                // Not a size mistake but a category one: sending the signing key
+                // twice means the device believes one keypair does both jobs. It
+                // does not, and a registration that accepted it would seal every
+                // result to a key whose private half cannot decrypt.
+                return Err(GatewayError::BadRequest(
+                    "the encryption key must not be the signing key: Ed25519 signs and \
+                     X25519 receives, and they are separate keypairs"
+                        .into(),
+                ));
+            }
+            Some(bytes)
+        }
+    };
+
     let key = crate::store::device_keys::DeviceKey {
         owner_id: session.owner_id,
         key_id: shared::key_id_for(&public_key),
         public_key,
+        encryption_key,
         label: req.label.chars().take(64).collect(),
         registered_at_ms: now_ms() as i64,
         revoked_at_ms: None,
