@@ -1,0 +1,184 @@
+---
+title: "The dashboard"
+description: "Issuing, inspecting and revoking access from a screen — with the signing key in your browser."
+---
+
+The dashboard is served by the orchestrator at
+[`/ui`](http://127.0.0.1:8090/ui). Three screens: **Access** issues grants,
+**Memory** shows what the agents have been working on, **Activity** is the
+record of what each grant did.
+
+<Note>
+The signing key stays in your browser. The server composes nothing and signs
+nothing — see [ADR 0023](/adr/0023-the-owners-key-lives-in-the-browser) and
+[ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway). That is why nobody
+running the host can issue themselves a grant, and it is also why the dashboard
+needs a browser with Ed25519 in WebCrypto: Chrome 137+, Safari 17+, Firefox
+130+. There is deliberately no JavaScript fallback.
+</Note>
+
+## Running it
+
+The build output is committed, so a checkout serves the dashboard with no Node
+installed:
+
+```bash
+./scripts/services.sh up
+./scripts/run_local.sh                       # enclave + gateway
+cd orchestrator && .venv/bin/python -m orchestrator.api
+```
+
+Then open `http://127.0.0.1:8090/ui`.
+
+To work on it:
+
+```bash
+cd ui
+npm ci
+npm run dev        # its own port, proxying the orchestrator
+npm test           # format parity + the live path
+npm run build      # writes into orchestrator/.../static/ui, which is committed
+```
+
+## Signing in
+
+**With Google.** Point the gateway's redirect at the dashboard's own origin,
+which is what lets the browser read the session at all:
+
+```bash
+export GOOGLE_REDIRECT_URI=http://127.0.0.1:8090/ui/oauth/land
+```
+
+The flow lands back on `/ui`, the page reads `code` and `state` off its query
+string and completes the exchange against the gateway. If the redirect pointed
+at the gateway instead, the browser would stop on a JSON page that runs no
+script.
+
+**In development.** With the stack in mock mode, sign in as
+`mock_google_alice` — the enclave derives and attests the identity from the
+prefix. No OAuth app, no real mailbox.
+
+## Agent keys
+
+One key per agent, because **there is no per-grant revocation**: revoking a key
+invalidates every grant it ever signed, immediately and server-side. A key per
+agent is what makes "revoke this agent" mean something.
+
+Each key shows one of three states:
+
+| state | meaning |
+|---|---|
+| **verified** | the key id this browser derived matches the one the gateway holds |
+| **not registered** | generated here, registration has not succeeded yet — retry |
+| **revoked** | the gateway will refuse every grant it signed |
+
+<Warning>
+**A registered key this browser does not hold** gets a prominent warning, and it
+is worth understanding why. Registration is authorised by an owner session,
+which the *host* signs — so a host that forged one could register a key of its
+own, and nothing prevents it. The innocent explanations are another browser,
+`kleos-device`, or a gateway running without `SEALED_TOKEN_STORE_URL` (whose
+in-memory key store is rebuilt on restart). Deriving the key id locally and
+comparing is the only thing that distinguishes them.
+</Warning>
+
+Losing the browser is recoverable: registering and revoking are authorised by
+your owner session, not by a key. Clearing site data costs the ability to sign
+*new* grants with those keys — register a fresh one and revoke the stranded
+ones.
+
+## Issuing a grant
+
+The composer groups the fifteen `Scope` fields by what they decide, and its real
+job is the three things that produce a grant which verifies, looks reasonable,
+and reads nothing:
+
+<Warning>
+**Sources and entity kinds are `all`, not `any`.** An object derived from a page
+*and* a note needs both in scope. A narrow list quietly skips the records with
+the most provenance.
+
+**An empty list grants nothing**, not everything. Deny by default.
+
+**`tacit` floors at `confidential`.** An unwritten heuristic about you is an
+inference about you, so a grant naming tacit memory at `personal` reads none of
+it.
+</Warning>
+
+Two of those block issuing rather than warn, because a grant that returns
+nothing is indistinguishable from an empty memory on the agent's side.
+
+`agent_id` is a label you choose and **nothing authenticates it**. The identity
+that is checked is the device key that signs.
+
+"Sign the grant" then shows the scope **the gateway read back** from
+[`/memory/scope/introspect`](/reference/http-api) — signature, registration,
+revocation, expiry and TTL clamp all applied. A preview rendered locally would
+be the UI agreeing with itself.
+
+<Tip>
+The token is shown once. It is the entire capability, so treat it like a
+password. TTLs are capped at 30 days by this screen as a matter of policy —
+nothing clamps a grant's lifetime server-side, so another client can sign a
+longer one.
+</Tip>
+
+The list of issued grants is kept **in this browser only**. Kleos stores no
+grant table — a grant is a signed token — so a grant issued elsewhere will not
+appear, and nothing in that list proves a grant is still live. The authoritative
+answers are the key list and the Activity screen.
+
+## Memory, and the button that is not a sync
+
+There is nothing to sync. Kleos has no per-device memory store: an agent that
+decides something writes it into the one graph as it decides, so every other
+agent is current before it asks.
+
+What *is* manual is narrower. A session's blocks — the agent's working notes,
+file contents, tool output — are **stored** and deliberately not
+**searchable**: sealed as blobs, with no embedding and no `:Memory` label, so no
+retrieval can reach them. Distilling them into claims is the one transition that
+needs a decision, and it stays manual because an automatic one would mean the
+system inventing claims about you out of scratch work nobody asked it to read.
+
+```
+:SessionBlock   stored      sealed, no embedding      one agent's scratch work
+                   |  "Distil into memory"
+:Claim          searchable  :Memory + embedding       every agent can find it
+```
+
+A session reads **distilled** once consolidation has run, even when it concluded
+nothing — which is the common and correct outcome. "Stored only" means it has
+never run.
+
+Pressing the button signs a grant with your own key, valid for 45 seconds,
+carrying write and unseal across every memory kind. That is deliberate: it keeps
+one gate for every claim-producing write instead of giving the dashboard a back
+door, and between clicks no token exists that could write to your memory. The
+result reports what it *refused* as prominently as what it kept, because
+consolidation declines per conclusion and a narrow grant otherwise produces a
+partial run that reads as a clean one.
+
+## Activity
+
+Three logs, append-only, none of them carrying the `:Memory` label — the
+system's record of its own activity can never be retrieved as memory, which is
+what stops one agent's reads becoming another agent's briefing.
+
+- **What was read**, grouped by grant rather than by agent, because the grant is
+  the capability: one agent holding two grants is two authorisations.
+- **What changed, and why** — the prior value, the new one, the reason, and the
+  `rule` that decided. A superseded claim is not overwritten.
+- **What was done** — actions the enclave performed. The arguments are not here:
+  an action's arguments are the content it acted on, so what is kept is a digest,
+  which makes a repeat recognisable without being readable.
+
+All three are owner-authenticated, with no grant path and no MCP tool. A
+cross-agent log tells agent B what agent C has been doing, which is a disclosure
+channel around the permission check rather than a record of it.
+
+## The CLI is still there
+
+Nothing was removed. [Grants and devices](/guides/grants-and-devices) documents
+the `kleos-device` path, which is what to use on a browser without Ed25519, in
+CI, or from a script.

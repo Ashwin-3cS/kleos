@@ -107,23 +107,29 @@ export function Memory({ owner, onExpired }: { owner: Owner; onExpired: () => vo
       });
 
       const result = await consolidate(token, session.id);
+      const kept = result.claims?.length ?? 0;
       if (result.refused) {
+        // A backstop. Consolidation declines per conclusion, so a refusal
+        // normally arrives in `errors` below and never reaches here.
         setOutcome({
           sessionId: session.id,
-          text: `Refused: ${result.reason}. The key signing this needs to be registered and not revoked.`,
+          text: `Refused outright: ${result.reason}. The key signing this must be registered and not revoked.`,
           kind: "bad",
         });
       } else if (result.errors?.length) {
-        // Not folded away. Consolidation refuses per conclusion, so this is a
-        // real partial result that would otherwise read as a clean run.
+        // **Where a refusal actually lands**, and never folded away. Kept none
+        // of one is a failed run that would otherwise read as a clean one.
         setOutcome({
           sessionId: session.id,
           text:
-            `Kept ${result.claims?.length ?? 0} of ${(result.claims?.length ?? 0) + result.errors.length}. ` +
-            `Refused: ${result.errors.join("; ")}`,
-          kind: "warn",
+            `Kept ${kept} of ${kept + result.errors.length}. ` +
+            (kept === 0
+              ? `Nothing was written — ${result.errors.join("; ")}. The grant this ` +
+                `was signed with does not cover what the session concluded.`
+              : `Refused: ${result.errors.join("; ")}`),
+          kind: kept === 0 ? "bad" : "warn",
         });
-      } else if ((result.claims?.length ?? 0) === 0) {
+      } else if (kept === 0) {
         setOutcome({
           sessionId: session.id,
           text: `Read ${result.blocks ?? 0} block(s) and concluded nothing. That is the usual outcome — working notes are mostly not decisions.`,
@@ -132,7 +138,7 @@ export function Memory({ owner, onExpired }: { owner: Owner; onExpired: () => vo
       } else {
         setOutcome({
           sessionId: session.id,
-          text: `Kept ${result.claims?.length} conclusion(s): ${(result.conclusions ?? [])
+          text: `Kept ${kept} conclusion(s): ${(result.conclusions ?? [])
             .map((c) => `${c.kind} — ${c.statement}`)
             .join(" | ")}`,
           kind: "ok",

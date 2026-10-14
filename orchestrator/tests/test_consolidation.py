@@ -392,3 +392,112 @@ def test_the_edge_does_not_make_a_session_reachable(runtime: Runtime) -> None:
 
     reached = runtime.store.neighbour_ids(OWNER, result.claims, hops=3)
     assert session.id not in reached
+
+
+# -- over HTTP, which is how the dashboard reaches it --------------------
+
+
+def test_the_http_route_distils_a_real_session(runtime: Runtime, monkeypatch) -> None:
+    """The dashboard's button, end to end, with nothing stubbed but the gateway.
+
+    `test_dashboard_routes.py` asserts the route's *contract* -- a refusal is a
+    201 with a reason, a partial run reports its errors -- by replacing
+    `consolidate_session` outright. That leaves the thing the owner actually
+    presses untested: a real session, with real sealed blocks, reaching real
+    claims through the HTTP edge.
+
+    Which matters because the dashboard does not consolidate under an owner
+    session. It signs a short-lived grant with the owner's own device key and
+    comes in through this grant-authenticated route, so that one gate decides
+    every claim-producing write and every such write carries a grant
+    fingerprint. That path has one more layer than the MCP one, and this is the
+    layer. See ADR 0023.
+    """
+    from fastapi.testclient import TestClient
+
+    from orchestrator import api as api_module
+
+    session = _session(runtime)
+    _append(
+        runtime,
+        session.id,
+        "Decision: project Lantern uses Neo4j because the traversals settle it.",
+    )
+
+    monkeypatch.setattr(api_module, "_runtime", runtime)
+    with TestClient(api_module.app) as client:
+        monkeypatch.setattr(api_module, "_runtime", runtime)
+        response = client.post(
+            "/memory/consolidate",
+            json={"grant_token": "writer", "session_id": session.id},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["refused"] is False
+    assert body["claims"], f"nothing was written: {body}"
+    assert body["errors"] == []
+    assert body["blocks"] == 1
+
+    after = runtime.sessions.get(OWNER, session.id)
+    assert after.consolidated_at_ms is not None
+    assert after.consolidated_into == body["claims"]
+
+    # And the claim is retrievable, which is the whole transition: the block was
+    # stored and unsearchable a moment ago.
+    # `vector_search` returns (node, score) pairs, not nodes. Worth the unpack
+    # rather than a `hit.id`: a truthiness assertion over tuples passes
+    # vacuously, which has happened in this suite before.
+    hits = runtime.store.vector_search(
+        OWNER, runtime.embedder.embed("what do we use for durable storage"), top_k=25
+    )
+    found = {node.id for node, _score in hits}
+    assert found & set(body["claims"]), (
+        "the consolidated claim has to be reachable by retrieval -- that is the "
+        f"difference between stored and searchable. found: {found}"
+    )
+
+
+def test_a_read_only_grant_writes_nothing_and_says_which_conclusion_it_dropped(
+    runtime: Runtime, monkeypatch
+) -> None:
+    """A session is not a licence to write; the grant is.
+
+    **And the refusal arrives as `errors`, not as `refused`.** Written expecting
+    the opposite, which was wrong in a way worth recording: `consolidate_session`
+    catches `WriteRefused` *per conclusion* so that a grant covering episodes but
+    not procedures keeps the episodes. Nothing escapes, so the route's top-level
+    refusal branch never fires for this case.
+
+    Which means a client that reports `refused` and ignores `errors` tells the
+    owner a wholly refused consolidation succeeded. The useful signal is "kept
+    none of one", and this pins it so a future refactor that moves the gate
+    earlier has to notice it is changing the contract.
+    """
+    from fastapi.testclient import TestClient
+
+    from orchestrator import api as api_module
+
+    session = _session(runtime)
+    _append(runtime, session.id, "Decision: use Neo4j because the traversals settle it.")
+
+    monkeypatch.setattr(api_module, "_runtime", runtime)
+    with TestClient(api_module.app) as client:
+        monkeypatch.setattr(api_module, "_runtime", runtime)
+        response = client.post(
+            "/memory/consolidate",
+            json={"grant_token": "reader", "session_id": session.id},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["claims"] == [], "a read-only grant must write nothing"
+    assert body["errors"], "and must say so rather than looking like a clean run"
+    assert "write_not_permitted" in " ".join(body["errors"])
+    assert body["blocks"] == 1, "it still read the block; it just could not keep it"
+
+    # And **not** stamped as distilled, because it was not. The work is still
+    # pending under a grant that permits it, so a timestamp here would show the
+    # owner a distilled session holding nothing -- indistinguishable from one
+    # that genuinely concluded nothing -- and they would never retry.
+    assert runtime.sessions.get(OWNER, session.id).consolidated_at_ms is None

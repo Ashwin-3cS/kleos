@@ -424,13 +424,20 @@ def consolidate_session(
         # second consolidation of the same session adds to what the first found.
         runtime.store.set_session_consolidation(scope.owner_id, session_id, written)
 
-    # Unconditional, and outside the `if written` above. "Consolidation ran and
-    # concluded nothing" is the common outcome and a different fact from "has
-    # never run"; only the timestamp can tell them apart, because the claim list
-    # is empty either way.
-    runtime.store.mark_session_consolidated(
-        scope.owner_id, session_id, int(time.time() * 1000)
-    )
+    # Outside the `if written` above, because "ran and concluded nothing" is the
+    # common outcome and a different fact from "has never run" -- and only a
+    # timestamp can tell them apart, since the claim list is empty either way.
+    #
+    # But *not* unconditional. A run that refused every conclusion and kept none
+    # did not do its job: the work is still pending, under a grant that permits
+    # it. Stamping that would show the owner a distilled session with nothing in
+    # it, indistinguishable from one that genuinely concluded nothing, so they
+    # would never retry -- a failure in the wrong direction. A partial run is
+    # stamped, because the part that could be kept was.
+    if written or not errors:
+        runtime.store.mark_session_consolidated(
+            scope.owner_id, session_id, int(time.time() * 1000)
+        )
 
     log.info(
         "consolidate.session id=%s blocks=%d conclusions=%d claims=%d refused=%d",
