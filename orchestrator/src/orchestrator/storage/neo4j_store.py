@@ -120,7 +120,8 @@ _SESSION_COLUMNS = (
     "s.device_id AS device_id, s.grant_fp AS grant_fp, "
     "s.opened_at_ms AS opened_at_ms, s.expires_at_ms AS expires_at_ms, "
     "s.closed_at_ms AS closed_at_ms, s.block_count AS block_count, "
-    "s.byte_len AS byte_len, s.consolidated_into AS consolidated_into"
+    "s.byte_len AS byte_len, s.consolidated_into AS consolidated_into, "
+    "s.consolidated_at_ms AS consolidated_at_ms"
 )
 
 
@@ -137,6 +138,7 @@ def _session_to_row(session) -> dict:
         "block_count": int(session.block_count),
         "byte_len": int(session.byte_len),
         "consolidated_into": list(session.consolidated_into),
+        "consolidated_at_ms": session.consolidated_at_ms,
     }
 
 
@@ -155,6 +157,11 @@ def _row_to_session(row: dict):
         block_count=int(row["block_count"] or 0),
         byte_len=int(row["byte_len"] or 0),
         consolidated_into=list(row["consolidated_into"] or []),
+        consolidated_at_ms=(
+            int(row["consolidated_at_ms"])
+            if row.get("consolidated_at_ms") is not None
+            else None
+        ),
     )
 
 
@@ -1016,13 +1023,28 @@ class Neo4jStore:
         )
         return _row_to_session(rows[0]) if rows else None
 
-    def recent_sessions(self, owner_id: str, limit: int = 50) -> list:
+    def recent_sessions(
+        self, owner_id: str, limit: int = 50, device_id: str | None = None
+    ) -> list:
+        """This owner's sessions, newest first, optionally for one device.
+
+        The device filter is what makes the dashboard's "what has device 1 been
+        doing" a query rather than fetch-everything-and-filter-in-Python, and it
+        keys on the gateway-verified `device_id` rather than on the `agent_id`
+        label, for the reason ADR 0016 gives: the label is what the owner typed.
+        """
+        where = (
+            "{owner_id: $owner_id}"
+            if device_id is None
+            else "{owner_id: $owner_id, device_id: $device_id}"
+        )
         rows = self._run(
-            "MATCH (s:AgentSession {owner_id: $owner_id}) "
+            f"MATCH (s:AgentSession {where}) "
             f"RETURN {_SESSION_COLUMNS} "
             "ORDER BY s.opened_at_ms DESC, s.id DESC LIMIT $limit",
             owner_id=owner_id,
             limit=int(limit),
+            **({} if device_id is None else {"device_id": device_id}),
         )
         return [_row_to_session(row) for row in rows]
 
@@ -1066,6 +1088,25 @@ class Neo4jStore:
             owner_id=owner_id,
             id=session_id,
             ids=list(claim_ids),
+        )
+
+    def mark_session_consolidated(
+        self, owner_id: str, session_id: str, at_ms: int
+    ) -> None:
+        """Stamps when consolidation last ran, **whether or not it wrote anything**.
+
+        Separate from `set_session_consolidation` precisely because that one is
+        called only when there are claims to record. A session that concluded
+        nothing is the common outcome and still has to read as distilled, or the
+        dashboard tells the owner to keep pressing a button that has already done
+        its work.
+        """
+        self._run(
+            "MATCH (s:AgentSession {owner_id: $owner_id, id: $id}) "
+            "SET s.consolidated_at_ms = $at_ms",
+            owner_id=owner_id,
+            id=session_id,
+            at_ms=int(at_ms),
         )
 
     def append_session_block(self, owner_id: str, block) -> None:

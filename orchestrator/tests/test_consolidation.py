@@ -3,8 +3,10 @@
 Consolidation is the one thing that moves working context into memory, and
 almost nothing should move. So these tests are mostly about restraint.
 
-Not yet wired: `close_session(consolidate=True)` still raises. What exists is
-the consolidator and the path that reads a session's blocks back.
+Reachable three ways: `close_session(consolidate=True)` over MCP,
+`POST /memory/consolidate`, and the owner's dashboard -- which goes through that
+same HTTP route under a short-lived grant it signs itself, so there is still one
+gate and every claim-producing write still carries a grant fingerprint.
 """
 
 from __future__ import annotations
@@ -263,7 +265,63 @@ def test_an_ordinary_session_leaves_nothing_behind(runtime: Runtime) -> None:
     assert result.claims == []
     assert result.errors == []
     assert result.blocks == 1
-    assert runtime.sessions.get(OWNER, session.id).consolidated_into == []
+
+    after = runtime.sessions.get(OWNER, session.id)
+    assert after.consolidated_into == []
+    # But it *ran*, and the record has to say so. This is the distinction the
+    # dashboard's freshness signal rests on: concluding nothing is the common and
+    # correct outcome, and a session that reads as "never distilled" forever
+    # would have the owner pressing a button that has already done its work.
+    assert after.consolidated_at_ms is not None
+
+
+def test_a_session_that_has_never_been_consolidated_says_so(runtime: Runtime) -> None:
+    """The other half of the pair above, and the reason the timestamp exists at
+    all: `consolidated_into` is `[]` in both states, so it cannot tell them
+    apart."""
+    session = _session(runtime)
+    _append(runtime, session.id, "opened a file and read it")
+
+    before = runtime.sessions.get(OWNER, session.id)
+    assert before.consolidated_at_ms is None
+    assert before.consolidated_into == []
+
+
+def test_consolidating_another_agents_session_is_possible_and_deliberate(
+    runtime: Runtime,
+) -> None:
+    """Pinned rather than fixed, because the dashboard makes it reachable.
+
+    `sessions.get` and `block_texts` scope by `owner_id` alone -- nothing checks
+    that the grant's agent is the agent whose session it is. That is *required*
+    for the owner's dashboard, which consolidates a session some other agent
+    opened, and it has always been true for any grant holding `may_write` and
+    `may_unseal`.
+
+    So this is a test that states the intent instead of leaving it to be
+    discovered. If per-agent session scoping is ever wanted, this is the test that
+    fails and the place that explains what it would break.
+    """
+    session = runtime.sessions.open_session(
+        owner_id=OWNER,
+        agent_id="some-other-agent",
+        device_id="device-elsewhere",
+        grant_fp="fp-not-ours",
+        ttl_secs=600,
+    )
+    _append(
+        runtime,
+        session.id,
+        "Decision: project Lantern uses Neo4j because the traversals settle it.",
+    )
+
+    result = consolidate_session(runtime, "writer", session.id)
+
+    assert result.claims, "the owner's grant consolidates a session it did not open"
+    # And the claim is attributed to the consolidating grant, not to the agent
+    # whose session it was. The route back to that agent is the session id and
+    # the CONSOLIDATED_FROM edge, not the claim's device.
+    assert result.session_id == session.id
 
 
 def test_consolidating_twice_adds_nothing(runtime: Runtime) -> None:

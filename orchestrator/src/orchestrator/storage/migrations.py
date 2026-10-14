@@ -62,6 +62,11 @@ _INDEXES = [
     # agent's working context into another agent's answers. See ADR 0016.
     "CREATE INDEX kleos_agent_session_owner_at IF NOT EXISTS "
     "FOR (n:AgentSession) ON (n.owner_id, n.opened_at_ms)",
+    # The dashboard's freshness question -- "which of this device's sessions have
+    # never been distilled" -- filters on this, so it is an index rather than a
+    # scan over every session the owner ever opened.
+    "CREATE INDEX kleos_agent_session_consolidated IF NOT EXISTS "
+    "FOR (n:AgentSession) ON (n.consolidated_at_ms)",
     "CREATE INDEX kleos_agent_session_grant IF NOT EXISTS "
     "FOR (n:AgentSession) ON (n.grant_fp)",
     # A block belongs to exactly one session and is only ever read in order, so
