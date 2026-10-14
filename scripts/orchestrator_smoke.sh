@@ -358,6 +358,12 @@ curl -sf -X POST "$ORCH_URL/memory/sessions" -H 'content-type: application/json'
   -d "{\"session_token\": \"$SESSION_TOKEN\", \"limit\": 20}" \
   | jq -c '{sessions, undistilled, devices: [.entries[].device_id] | unique}'
 
+# Expect zeroes here, and that is not the step passing vacuously by accident:
+# a session is opened by an agent over MCP and there is no HTTP route that opens
+# one, so this walkthrough has none to list. What this proves is the route, its
+# shape and its auth. That it reports *correctly* with data in it is
+# `scripts/mcp_smoke.py` and `tests/test_dashboard_routes.py`, which open real
+# sessions and assert the freshness count.
 echo -n "actions taken      -> "
 curl -sf -X POST "$ORCH_URL/memory/actions" -H 'content-type: application/json' \
   -d "{\"session_token\": \"$SESSION_TOKEN\", \"limit\": 20}" \
