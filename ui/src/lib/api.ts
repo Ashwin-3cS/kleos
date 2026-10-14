@@ -235,9 +235,11 @@ export function readLog(sessionToken: string): Promise<Record<string, unknown>> 
  * that one gate decides every claim-producing write and every such write carries
  * a grant fingerprint.
  *
- * `errors` matters as much as `claims` -- consolidation refuses per conclusion,
- * so a grant narrower than what was found yields a partial result that reads as
- * a clean run unless the caller looks.
+ * **`errors` is where a refusal arrives, not `refused`.** Consolidation declines
+ * per conclusion so a grant covering episodes but not procedures keeps the
+ * episodes -- which means `refused` stays false even when every conclusion was
+ * turned away. A client reading `refused` alone reports a wholly refused run as
+ * a success.
  */
 export function consolidate(
   grantToken: string,

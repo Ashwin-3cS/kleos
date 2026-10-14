@@ -27,7 +27,12 @@ Short-term working context, stored sealed and deliberately not searchable until
 consolidated.
 </Card>
 <Card title="MCP server" icon="plug">
-Six read and session tools over stdio.
+Nine tools over stdio: reads, session state, the briefing, one write, and the
+action broker. Driven from a real client by `scripts/mcp_smoke.py`.
+</Card>
+<Card title="Owner dashboard" icon="sliders">
+Issue, inspect and revoke grants from a screen, with the signing key held in the
+browser. Plus what each agent has been working on, and what every grant did.
 </Card>
 <Card title="One real connector" icon="file-import">
 ChatGPT, via the person's own data export. It ingests real data today.
@@ -36,8 +41,13 @@ ChatGPT, via the person's own data export. It ingests real data today.
 
 ## What does not exist
 
-No web app, no SDK, no smart contracts. Google and GitHub have consent and a
-sealed refresh-token store but no `fetch` yet.
+No SDK, no smart contracts. Google and GitHub have consent and a sealed
+refresh-token store but no `fetch` yet.
+
+No **per-grant revocation**: revoking a device key invalidates every grant it
+ever signed, which is the only lever there is. The dashboard works around it by
+registering one key per agent, and that is a convention rather than an
+enforcement. Nothing clamps a grant's TTL server-side either.
 
 ## Mocked
 

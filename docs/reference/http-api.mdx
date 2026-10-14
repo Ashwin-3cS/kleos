@@ -48,7 +48,11 @@ absence.
 | `POST /memory/decide` | sync (201) | grant with `may_write` | record what an agent decided, and why. A refusal returns `refused: true` with its reason rather than a status code, because a decline is a real answer |
 | `POST /memory/reads` | sync | **owner session** | what agents have actually read |
 | `POST /memory/mutations` | sync | **owner session** | every state change, who made it, and which rule decided |
+| `POST /memory/consolidate` | sync (201) | grant with `may_write` **and** `may_unseal` | turn one session's stored blocks into searchable claims. `errors` matters as much as `claims`: consolidation declines per conclusion, so a narrow grant yields a partial run |
+| `POST /memory/sessions` | sync | **owner session** | what each agent has been working on, and whether it has been distilled. Holds no block content |
+| `POST /memory/actions` | sync | **owner session** | every action the enclave performed, including the ones that failed. Carries a digest, never the arguments |
 | `GET /explorer` | static | — | the read-only graph explorer |
+| `GET /ui` | static | — | the owner's dashboard. Every path under it serves the same page, including `/ui/oauth/land` |
 
 <Warning>
 `POST /ingest` and `POST /remember` take `owner_id` from the **request body** and

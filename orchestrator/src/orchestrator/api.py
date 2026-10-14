@@ -553,10 +553,13 @@ def memory_consolidate(req: ConsolidateRequest) -> dict[str, Any]:
     kind), which is why it is minted per click and expires in under a minute.
     See ADR 0023.
 
-    A refusal comes back as `201` with `refused: true`, as `/memory/decide` does.
-    And `errors` matters as much as `claims`: consolidation refuses *per
-    conclusion*, so a grant narrower than what the consolidator found produces a
-    partial result that would otherwise read as a clean run.
+    **A refusal arrives in `errors`, not in `refused`.** Consolidation declines
+    *per conclusion* so that a grant covering episodes but not procedures keeps
+    the episodes, which means nothing escapes to the handler and `refused` stays
+    false even when every conclusion was turned away. The branch below is a
+    backstop for a future gate that fires earlier; the signal a client has to
+    read today is `errors`, and one that reports `refused` alone will tell the
+    owner a wholly refused run succeeded.
     """
     try:
         consolidated = consolidate_session(runtime(), req.grant_token, req.session_id)

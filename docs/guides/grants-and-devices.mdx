@@ -7,6 +7,15 @@ A grant is signed by a key the **owner** holds. The gateway verifies it and has
 no way to produce one. See
 [ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway).
 
+<Tip>
+This is the command-line path, and it is what to use in CI, from a script, or on
+a browser without Ed25519 in WebCrypto. For everything else [the
+dashboard](/guides/dashboard) does the same five steps on one screen — and adds
+one check the CLI cannot: it derives the key id locally and compares it against
+what the gateway returns, which is the only way to notice a key substituted by a
+host that forged an owner session.
+</Tip>
+
 ## 1. Create a device key
 
 ```bash
@@ -67,7 +76,13 @@ still distinguishable in the read log.
 <Tip>
 Keep TTLs short. There is no revocation list — the only immediate revocation is
 `POST /auth/device/revoke`, which invalidates **every** grant that key ever
-signed.
+signed. Nothing clamps a TTL server-side either, so a short one is a decision
+the signer makes and not a rule.
+
+That is why [the dashboard](/guides/dashboard) registers **one key per agent**:
+it makes "revoke this agent" expressible with the lever that exists. A
+convention, not an invariant — the gateway accepts one key signing for many
+agents. See [ADR 0023](/adr/0023-the-owners-key-lives-in-the-browser).
 </Tip>
 
 ## 5. Check what it resolves to

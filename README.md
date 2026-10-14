@@ -97,10 +97,11 @@ the Python orchestration service (ingestion, query, history and neighbourhood
 graphs, Neo4j-backed hybrid retrieval, query-time permissions); agent sessions
 as short-term memory; consolidation into kinded claims; the agent read log and
 the mutation log; the blob read path for sealed bodies; a read-only graph
-explorer; an MCP server with eight tools including one write and the briefing;
-and one real connector -- ChatGPT, via the person's own data export.
+explorer; an MCP server with nine tools including one write, the briefing and
+the action broker; an owner dashboard that signs grants in the browser; and one
+real connector -- ChatGPT, via the person's own data export.
 
-**What does not.** No web app, no SDK, no smart contracts. The TEE action
+**What does not.** No SDK, no smart contracts. The TEE action
 broker exists -- an agent submits an intent and receives an acknowledgement,
 never a credential -- but **only one action is wired**: `attest.digest`, which
 needs no provider credential and is there to prove the shape. The two that
@@ -563,8 +564,10 @@ orchestrator/ Python orchestration service (LangGraph + LlamaIndex); not in the 
               graphs/     ingestion, query, history, neighbourhood
               storage/    Neo4j, the sealed-blob store, the agent read log
               eval/       the labelled corpus and the RAG comparison
-              static/     the graph explorer, one file, no build step
+              static/     the graph explorer (one file, no build) and the built dashboard
               also owns docker-compose.yml for neo4j/redis/postgres
+ui/           the owner's dashboard (Vite + React + TS); builds into static/ui,
+              which is committed, so running Kleos needs no Node
 docs/adr/     one architecture decision per file, immutable once accepted
 scripts/      build/run/deploy/smoke-test plumbing, plus services.sh
 ```
@@ -764,6 +767,62 @@ anything it says so in a banner above the drawing, with the counts and the
 reasons -- because "you can see exactly what an agent can see" is the
 product, and a filtered subgraph drawn as if it were the whole graph would
 be the one lie the tool must not tell.
+
+### The owner's dashboard, and the key that stays in the browser
+
+`GET /ui` serves the screen that was missing: **Access** issues, inspects and
+revokes grants, **Memory** shows what each agent has been working on, and
+**Activity** is the record of what every grant read, changed and did. Built
+assets are committed, so a checkout serves it with no Node installed.
+
+The constraint is the interesting part. A grant is signed by a key the *owner*
+holds and the gateway cannot mint one (ADR 0011) -- so a dashboard where the
+server signs would collapse every confidentiality claim here to "trust the
+host". The signing therefore happens in the browser, as a non-extractable
+WebCrypto Ed25519 key in IndexedDB: the page can sign with a key it can never
+read. That makes this a local-crypto application that happens to have forms
+rather than an admin panel, and it means **no JavaScript crypto fallback** --
+one would work everywhere and would put the private key in ordinary readable
+memory, weakening the one property the screen exists to uphold, on the browsers
+least likely to be current.
+
+The dashboard also adds a check the CLI cannot. `key_id` is a BLAKE2b digest of
+the public key, and `/auth/device/register` returns it -- so the UI could simply
+believe the server's arithmetic about the owner's own key. It must not:
+registration is authorised by an owner session, and owner sessions are signed by
+the host, so **a host that forges one can register a key of its own.** Nothing
+prevents that. What detects it is a client that derives the id locally and
+compares, against the register response and against every row of
+`/auth/device/keys` -- revoked ones included, so a substitution cannot hide
+behind a filter.
+
+Revocation is per key and there is none per grant, so the dashboard registers
+**one key per agent**: "revoke this agent" then means revoking its key, which
+kills every grant that key ever signed. A convention this client follows, not an
+invariant the gateway enforces -- and said as much on the screen rather than
+implied by it.
+
+The composer's real job is the three semantics that otherwise produce a grant
+which verifies, looks reasonable and reads nothing: `sources` and `entity_kinds`
+are **all, not any**; an empty list grants **nothing**; and `tacit` floors at
+`confidential`, so naming it at `personal` reads none of it. Two of the three
+block issuing rather than warn, because on the agent's side an empty answer is
+indistinguishable from an empty memory. The preview is a round trip through
+`/memory/scope/introspect` -- the gateway's reading, clamp applied -- because one
+rendered locally would be the UI agreeing with itself.
+
+Because the signer is now a second implementation of `shared/src/grants.rs`, the
+format is pinned the way the Python/Rust schema mirror already is: by making the
+other side check. `ui/scripts/sign-fixture.mjs` is an independent reading of the
+wire format, `shared/tests/browser_grant_parity.rs` verifies its token with the
+real `verify_grant`, and `grants.test.ts` asserts the module the browser
+*actually runs* produces that same token byte for byte. The third is the one
+that matters: without it the Rust test only proves the fixture script is right,
+and the fixture script is not what runs in anyone's browser. `live.test.ts` then
+drives the whole path against the running stack -- generate, register, sign,
+introspect, query, revoke, and watch the same token stop working.
+
+See `docs/guides/dashboard.mdx` and ADR 0023.
 
 **They are permission-checked with the same structure as the query graph**:
 traverse blind, then a separate node runs `permits(scope, acl, now_ms)` per
@@ -1081,14 +1140,15 @@ Typed, with real signatures, failing explicitly rather than silently:
 - **Wallet/domain identity signals** -- unchanged since the scaffold. (OAuth
   code exchange is no longer one: see "The confidentiality model".)
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
-  eight tools over stdio: three reads (`query_memory`, `why_this_shifted`,
+  nine tools over stdio: three reads (`query_memory`, `why_this_shifted`,
   `memory_context_chain`), three for session state (`open_session`,
-  `append_context`, `close_session`), the briefing (`brief_before_acting`) and
-  **one write** (`record_decision`).
-  Still never driven from a real MCP client, which is the first thing roadmap
-  step 2 fixes -- and the gap worth naming here, because `test_mcp_server.py`
-  asserts the tool surface in-process and a transport that nothing has spoken to
-  is a transport nothing has tested.
+  `append_context`, `close_session`), the briefing (`brief_before_acting`),
+  **one write** (`record_decision`) and the action broker (`request_action`).
+  Driven from a real client by `scripts/mcp_smoke.py`, which is what it took to
+  find the four defects an in-process test cannot reach: a refusal that did not
+  survive the transport, a briefing quoting the extractor instead of the agent's
+  own reason, an advisory describing a relabel rather than a decision, and
+  duplicate advisories.
 
   The write is new, and the three absences around it are still deliberate: no
   tool reads without a grant token, there is no neighbourhood tool (see "Seeing

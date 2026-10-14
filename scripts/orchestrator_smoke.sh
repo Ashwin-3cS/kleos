@@ -348,9 +348,45 @@ curl -s -o /dev/null -w "POST /memory/act -> HTTP %{http_code} (expect 401)\n" \
   -d "{\"grant_token\": \"$READER_GRANT\", \"action_id\": \"attest.digest\", \"args\": {\"digest\": \"abc\"}}"
 
 echo
-echo "== 17. the explorer page is served =="
-curl -sf -o /dev/null -w "GET /explorer -> %{http_code} (%{size_download} bytes)\n" "$ORCH_URL/explorer"
-echo "Open $ORCH_URL/explorer and paste a grant token to browse the same data."
+echo "== 17. the owner's view of what the agents have been working on =="
+# Owner-authenticated, like the two logs above: a listing across sessions tells
+# whoever asks what every *other* agent has been doing. `undistilled` is the
+# freshness signal, and it needs `consolidated_at_ms` -- an empty claim list
+# cannot separate "not distilled yet" from "distilled, concluded nothing", and
+# the second is the common case.
+curl -sf -X POST "$ORCH_URL/memory/sessions" -H 'content-type: application/json' \
+  -d "{\"session_token\": \"$SESSION_TOKEN\", \"limit\": 20}" \
+  | jq -c '{sessions, undistilled, devices: [.entries[].device_id] | unique}'
 
+echo -n "actions taken      -> "
+curl -sf -X POST "$ORCH_URL/memory/actions" -H 'content-type: application/json' \
+  -d "{\"session_token\": \"$SESSION_TOKEN\", \"limit\": 20}" \
+  | jq -c '{actions, entries: [.entries[] | {action_id, ok}]}'
+
+echo
+echo "== 18. an owner session is not a grant, and the routes say so =="
+# The two auth modes take a string that looks identical and mean entirely
+# different things. A grant presented to an owner route must fail rather than
+# degrade into a narrower answer: these routes have no object-level filtering to
+# fall back on, so "partly authorised" is not a state they can be in.
+for route in sessions actions reads mutations; do
+  curl -s -o /dev/null -w "  grant -> /memory/$route -> HTTP %{http_code} (expect 401)\n" \
+    -X POST "$ORCH_URL/memory/$route" -H 'content-type: application/json' \
+    -d "{\"session_token\": \"$READER_GRANT\"}"
+done
+
+echo
+echo "== 19. the explorer and the dashboard are served =="
+curl -sf -o /dev/null -w "GET /explorer -> %{http_code} (%{size_download} bytes)\n" "$ORCH_URL/explorer"
+curl -s -o /dev/null -w "GET /ui       -> %{http_code} (%{size_download} bytes)\n" "$ORCH_URL/ui"
+# The provider's redirect target. It has to be served by *this* origin rather
+# than the gateway's, which is the whole reason the browser can read the session
+# token: the gateway's /auth/callback returns JSON and runs no script.
+curl -s -o /dev/null -w "GET /ui/oauth/land -> %{http_code} (expect 200)\n" \
+  "$ORCH_URL/ui/oauth/land?code=x&state=y"
+
+echo
+echo "Open $ORCH_URL/ui to issue a grant without writing one by hand, or"
+echo "$ORCH_URL/explorer to paste a grant token and browse what it can see."
 echo
 echo "Done. Logs: .local/orchestrator.log, .local/worker.log"
