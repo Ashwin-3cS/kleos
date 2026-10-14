@@ -74,6 +74,8 @@ export interface DeviceKeyView {
   label: string;
   registered_at_ms: number;
   revoked_at_ms: number | null;
+  /** Whether the gateway holds an X25519 key for this device. See ADR 0024. */
+  can_receive_sealed: boolean;
 }
 
 /** Issues an owner session from an identity proof. In mock mode: `mock_google_alice`. */
@@ -125,10 +127,15 @@ export function registerDeviceKey(
   session: string,
   publicKeyB64: string,
   label: string,
+  encryptionKeyB64?: string,
 ): Promise<DeviceKeyView> {
   return post(
     `${GATEWAY}/auth/device/register`,
-    { public_key_b64: publicKeyB64, label },
+    {
+      public_key_b64: publicKeyB64,
+      label,
+      ...(encryptionKeyB64 ? { encryption_key_b64: encryptionKeyB64 } : {}),
+    },
     session,
   );
 }

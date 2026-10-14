@@ -110,7 +110,19 @@ export function Access({ owner, onExpired }: { owner: Owner; onExpired: () => vo
         owner.sessionToken,
         b64Encode(key.publicKey),
         key.label,
+        key.encryptionPublicKey ? b64Encode(key.encryptionPublicKey) : undefined,
       );
+      if (key.encryptionPublicKey && !view.can_receive_sealed) {
+        // The gateway took the signing key and dropped the other half. Reported
+        // rather than ignored: the device would register, sign grants and read
+        // normally, and fail only when something tried to send it a sealed
+        // assembly -- which is the furthest possible point from the cause.
+        setError(
+          `Key ${view.key_id} registered, but the gateway did not record its ` +
+            `receiving key. It can sign grants and read, and it cannot be sent ` +
+            `sealed content. Re-register it, or check the gateway is current.`,
+        );
+      }
       if (view.key_id !== key.keyId) {
         // The whole reason this UI derives the key id itself. The gateway
         // disagreeing about the id of a key we just generated means the key it
@@ -275,6 +287,13 @@ function KeyList(props: {
                     </span>
                   ) : row.revoked_at_ms !== null ? (
                     <span className="tag bad">revoked</span>
+                  ) : !row.can_receive_sealed ? (
+                    <span
+                      className="tag warn"
+                      title="registered before this build, or registered without an X25519 key"
+                    >
+                      cannot receive sealed
+                    </span>
                   ) : (
                     <span className="tag ok" title="derived locally and matches the gateway">
                       verified
@@ -352,6 +371,13 @@ function KeyList(props: {
           Generate and register a key
         </button>
       </div>
+      <p className="note">
+        Each key is two keypairs: one signs grants, one receives content sealed
+        back to this device. They are separate because a signature key cannot be
+        encrypted to. A key marked <em>cannot receive sealed</em> was made before
+        that existed &mdash; it still signs and reads, and re-registering gives it
+        the other half.
+      </p>
       <p className="note">
         Losing this browser is recoverable: registering and revoking are
         authorised by your owner session, not by a key. Clearing site data costs
