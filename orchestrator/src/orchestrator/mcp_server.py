@@ -38,7 +38,33 @@ What is exposed, and what is not:
   agent: without `may_supersede_owner` its claim *contradicts* the person's
   rather than replacing it. See ADR 0017 and `graphs/decide.py`.
 
-Run with: ``python -m orchestrator.mcp_server`` (stdio transport).
+## Two transports, and why the choice matters
+
+``python -m orchestrator.mcp_server`` speaks **stdio**, which is what a local
+agent spawns as a subprocess. That is the whole story when the harness and the
+agent are on the same machine.
+
+They are not, for a hosted harness. The point of this layer is that several
+agents on several devices share one graph, and stdio cannot express that: each
+device would run its own orchestrator and they could only "share" memory by all
+pointing at one database over the network, which means shipping database
+credentials to every device and losing the gateway as a boundary. Worse than the
+single-machine story, not better.
+
+So this module also serves **streamable HTTP**, mounted into the orchestrator's
+own FastAPI app at ``/mcp`` when ``MCP_HTTP_ENABLED`` is set.
+
+**Off by default, deliberately.** Turning it on takes a surface reachable only by
+a process on the same machine and makes it reachable by anything that can open a
+socket to the orchestrator. Nothing is disclosed by that -- every tool below takes
+a ``grant_token`` and refuses without one, so there is no ambient authority to
+borrow -- but an unauthenticated caller can still list the tools and probe them,
+and that is a deployment decision rather than a default.
+
+Run with:
+
+    python -m orchestrator.mcp_server                 # stdio, for a local agent
+    MCP_HTTP_ENABLED=1 python -m orchestrator.api     # http, at /mcp
 """
 
 from __future__ import annotations
@@ -70,6 +96,19 @@ def _get_runtime() -> Runtime:
     if _runtime is None:
         _runtime = Runtime.build()
     return _runtime
+
+
+def set_runtime(runtime: Runtime) -> None:
+    """Hands this module a `Runtime` someone else already built.
+
+    Used when the tools are mounted into the orchestrator's FastAPI app rather
+    than run as their own process. Without it the two would each call
+    `Runtime.build()` in the same interpreter, which means two Neo4j driver
+    pools, two Redis connections and -- the one that actually hurts -- two copies
+    of the embedding model resident in memory.
+    """
+    global _runtime
+    _runtime = runtime
 
 
 @mcp.tool()
@@ -356,6 +395,36 @@ def request_action(
         session_id=session_id,
     )
     return result.as_dict()
+
+
+def http_app(path: str = "/", host: str = "127.0.0.1"):
+    """The tools as an ASGI app, for mounting into the orchestrator.
+
+    `path` is the route *inside* this app, so the default of "/" plus a mount at
+    "/mcp" puts the endpoint exactly where a client expects it. Building it at
+    "/mcp" and mounting at "/" would work too and would put the MCP routes in the
+    same table as the memory API, where a future route could shadow one.
+
+    DNS-rebinding protection is left on (the SDK's default). It is the check that
+    stops a page the owner happens to visit from scripting requests to a harness
+    listening on their own machine, which is the realistic attack on a local
+    HTTP server and costs nothing to keep.
+
+    Calling this is also what creates the session manager, which the caller must
+    then run -- see `session_manager` below.
+    """
+    return mcp.streamable_http_app(streamable_http_path=path, host=host)
+
+
+def session_manager():
+    """The session manager for the app `http_app` built.
+
+    Separate because it does not exist until then: the SDK creates it lazily and
+    raises if asked for it first. The host application has to enter its
+    `run()` in its own lifespan, or every request gets a session manager that was
+    never started.
+    """
+    return mcp.session_manager
 
 
 def main() -> None:

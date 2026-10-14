@@ -84,6 +84,19 @@ class Settings(BaseSettings):
     #: free denial of service. See tools/fetch_url.py.
     fetch_timeout_secs: float = Field(default=15.0, validation_alias="FETCH_TIMEOUT_SECS", gt=0)
     fetch_max_bytes: int = Field(default=2_000_000, validation_alias="FETCH_MAX_BYTES", gt=0)
+
+    #: Serve the MCP tools over streamable HTTP at `/mcp`, beside the memory API.
+    #:
+    #: **Off by default, and that is the security decision rather than a
+    #: convenience.** Over stdio the tools are reachable only by a process on the
+    #: same machine. Over HTTP they are reachable by anything that can open a
+    #: socket to this service. Nothing is disclosed by that on its own -- every
+    #: tool takes a grant token and refuses without one, so there is no ambient
+    #: authority to borrow -- but an unauthenticated caller can list and probe
+    #: them, and turning that on should be something an operator did on purpose.
+    #:
+    #: Required for a hosted harness, because stdio cannot reach another device.
+    mcp_http_enabled: bool = Field(default=False, validation_alias="MCP_HTTP_ENABLED")
     fetch_max_redirects: int = Field(default=3, validation_alias="FETCH_MAX_REDIRECTS", ge=0)
     #: Whether an utterance containing a URL causes that URL to be fetched. Off by
     #: default: it reaches the open web on the person's behalf, which should be an

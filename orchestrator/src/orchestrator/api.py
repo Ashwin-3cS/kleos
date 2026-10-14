@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import mcp_server
 from .config import get_settings
 from .connectors.direct import SOURCES as DIRECT_SOURCES
 from .connectors.direct import TEXT as DIRECT_TEXT
@@ -76,14 +77,36 @@ def require_owner(session_token: str) -> str:
 async def lifespan(app: FastAPI):
     global _runtime
     _runtime = Runtime.build()
+    if _MCP_APP is not None:
+        # The tools get the runtime this service already built rather than
+        # building their own: two `Runtime.build()` calls in one interpreter mean
+        # two Neo4j driver pools, two Redis connections and two copies of the
+        # embedding model resident in memory.
+        mcp_server.set_runtime(_runtime)
     try:
-        yield
+        if _MCP_APP is None:
+            yield
+        else:
+            # Mounting a Starlette app does not run its lifespan, and the MCP
+            # session manager is started there. Without this every request
+            # reaches a manager that was never started, which fails per-request
+            # rather than at boot -- the worst place to find out.
+            async with mcp_server.session_manager().run():
+                yield
     finally:
         _runtime.close()
         _runtime = None
 
 
+#: Built at import time, because mounting has to happen before the app serves.
+#: Only the session manager's lifetime belongs in `lifespan`.
+_MCP_APP = mcp_server.http_app() if get_settings().mcp_http_enabled else None
+
 app = FastAPI(title="Kleos orchestrator", version="0.1.0", lifespan=lifespan)
+
+if _MCP_APP is not None:
+    app.mount("/mcp", _MCP_APP)
+    log.info("MCP tools mounted at /mcp (streamable HTTP)")
 
 
 class IngestRequest(BaseModel):
