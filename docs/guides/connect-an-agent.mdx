@@ -3,10 +3,15 @@ title: "Connect an agent"
 description: "Point Claude Code or any MCP client at a person's memory, under a grant."
 ---
 
-Kleos speaks MCP over stdio. An agent connects, asks questions of a person's
-memory, and keeps its own working context there while it does.
+Kleos speaks MCP. An agent connects, asks questions of a person's memory, and
+keeps its own working context there while it does.
 
-## Configure the client
+Two transports, and which one you want depends on where the harness runs.
+
+## Local: stdio
+
+The agent spawns the server as a subprocess. Right when the harness and the agent
+are on the same machine.
 
 ```json
 {
@@ -22,6 +27,45 @@ memory, and keeps its own working context there while it does.
   }
 }
 ```
+
+## Hosted: streamable HTTP
+
+stdio cannot reach another machine, so it cannot express the thing this layer is
+for — several agents on several devices sharing one graph. Each device would run
+its own orchestrator, and they could only "share" memory by all pointing at one
+database over the network, which means database credentials on every device and
+no gateway in between. Worse than the single-machine story, not better.
+
+So the orchestrator can serve the same tools at `/mcp`:
+
+```bash
+MCP_HTTP_ENABLED=1 orchestrator/.venv/bin/python -m orchestrator.api
+```
+
+```json
+{
+  "mcpServers": {
+    "kleos": {
+      "url": "https://your-harness.example.com/mcp/"
+    }
+  }
+}
+```
+
+<Warning>
+**Off by default, and turning it on is a real decision.** Over stdio these tools
+are reachable only by a process on the same machine. Over HTTP they are reachable
+by anything that can open a socket to the orchestrator.
+
+Nothing is disclosed by that on its own — every tool takes a `grant_token` and
+refuses without one, so there is no ambient authority to borrow — but an
+unauthenticated caller can still list the tools and probe them. Put it behind TLS
+and whatever your edge does for rate limiting.
+</Warning>
+
+Both transports run the same scenario in `scripts/mcp_smoke.py`, which is how
+they are kept from drifting: two transports carrying one tool surface fail
+differently, and the symptom is one device behaving unlike another.
 
 <Warning>
 **MCP has no credential channel.** A tool call carries arguments and nothing
