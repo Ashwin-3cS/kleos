@@ -1169,6 +1169,11 @@ Typed, with real signatures, failing explicitly rather than silently:
   owner session and an agent holds a grant, so that is refused up front rather
   than skipped inside the graph where it would read as a partial success.
 
+> **Working on this?** [`PLAN.md`](PLAN.md) is the current thread: what is being
+> built next, the confidentiality architecture it is building toward, and the
+> things that would otherwise have to be re-derived. Settled decisions live in
+> `docs/adr/`.
+
 ## Step 0: hardening, and testing the central bet
 
 Step 0 of "Where this is going" does two things: fix what was known to be
