@@ -1,9 +1,13 @@
 """HTTP client for the Rust gateway.
 
-The orchestrator calls the gateway for exactly three things: proving an
-identity to get an owner session, getting raw content sealed inside the
-enclave, and resolving an agent's grant token into the authoritative scope.
-Nothing else about the memory layer round-trips through Rust.
+The orchestrator calls the gateway for proving an identity to get an owner
+session, getting raw content sealed inside the enclave, resolving an agent's
+grant token into the authoritative scope, and -- since ADR 0024 -- having a
+read *assembled* in the enclave and encrypted to the device that asked.
+
+That last one is different in kind from the rest. Everything else here is a
+request whose answer this process reads. `assemble` is a request whose answer
+this process deliberately cannot read, and relays.
 """
 
 from __future__ import annotations
@@ -37,6 +41,31 @@ class ResolvedGrant:
     #: is never stored anywhere -- an audit log holding live bearer credentials is
     #: a vulnerability wearing an accountability costume (ADR 0005).
     grant_fp: str
+
+
+@dataclass(frozen=True, slots=True)
+class SealedAssembly:
+    """A read answered inside the enclave: a blob, and the structure around it.
+
+    The split is ADR 0024's line, arriving as one object. `sealed` is the
+    answer, encrypted to the device that signed the grant, and nothing in this
+    process can open it. Everything beside it is structure the host already had
+    -- which ids were disclosed, which were denied and why, how many were
+    considered -- and the read log cannot be written without it.
+
+    Frozen for the reason `ResolvedGrant` is: the structural half is what goes
+    into the owner's audit record, and nothing downstream has any business
+    editing it on the way there.
+    """
+
+    #: The `SealedToDevice` envelope, relayed verbatim. Kept as a dict rather
+    #: than parsed into fields: this process is a courier for it, and a courier
+    #: that unpacks the parcel is one more place a format change breaks.
+    sealed: dict
+    disclosed_ids: list[str]
+    denials: list[dict]
+    considered: int
+    attestation: str
 
 
 class SealedContent:
@@ -157,6 +186,40 @@ class GatewayClient:
             },
         )
         return base64.b64decode(body["plaintext_b64"])
+
+    def assemble(
+        self, grant_token: str, question: str, candidates: list[dict]
+    ) -> SealedAssembly:
+        """Has a read assembled inside the enclave, sealed to the asking device.
+
+        What goes up is the candidates this process ranked, **with their content
+        still sealed** -- it has not read them and does not need to. What comes
+        back is a blob it cannot read and the structure it already had.
+
+        Note what is absent from the request: the owner, and the recipient. Both
+        are derived by the gateway from the verified grant. A caller that could
+        name the recipient could ask for the answer sealed to a key it controls,
+        which is the entire design defeated by a field, so there is no field.
+
+        Nor is there a permission verdict. This process computed none: the ACLs
+        travel with the candidates and the enclave decides, because a decision
+        made out here is a decision the operator makes.
+        """
+        body = self._post(
+            "/memory/assemble",
+            {
+                "grant_token": grant_token,
+                "question": question,
+                "candidates": candidates,
+            },
+        )
+        return SealedAssembly(
+            sealed=body["sealed"],
+            disclosed_ids=list(body.get("disclosed_ids", [])),
+            denials=list(body.get("denials", [])),
+            considered=int(body.get("considered", 0)),
+            attestation=body.get("attestation", ""),
+        )
 
     def request_action(
         self, grant_token: str, action_id: str, args: dict

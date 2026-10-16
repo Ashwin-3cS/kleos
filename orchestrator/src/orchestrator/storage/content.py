@@ -113,6 +113,15 @@ class ContentCrypto:
     side of the boundary to take.
     """
 
+    #: Whether stored content is ciphertext in this run.
+    #:
+    #: Read by the query graph to decide where a read is assembled, and that is
+    #: the whole reason it exists as a flag rather than an ``isinstance`` check
+    #: at the call site. The two states are not "encrypted or not" but "there is
+    #: something for the enclave to unseal, or there is nothing to protect" --
+    #: see ADR 0024 and the note in ``graphs/query.py``.
+    seals_content = True
+
     def __init__(self, gateway, grant_token: str | None = None) -> None:
         self._gateway = gateway
         self._grant_token = grant_token
@@ -223,6 +232,8 @@ class NullContentCrypto:
     explicitly, so a run never silently degrades from sealed to plaintext the way
     it would if this were a rescue path for a failed call.
     """
+
+    seals_content = False
 
     def for_grant(self, grant_token: str) -> NullContentCrypto:
         """Nothing is sealed, so there is nothing to authorise. Returns itself so

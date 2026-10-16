@@ -6,18 +6,30 @@ decided, what changed -- sits in Neo4j in the clear. That inverted the
 sensitivity, because for most purposes the resolved record is the more revealing
 artifact.
 
-These tests hold the two properties that close it. Nothing a person said is
-readable from the store, and a read unseals only what it is about to disclose --
-so a denial costs no decryption and a grant that reads nothing causes no
-plaintext to exist in this process at all.
+These tests hold the properties that close it. Nothing a person said is readable
+from the store, and -- since ADR 0024 and the assembly route -- **a read unseals
+nothing in this process at all**.
+
+That second property used to be weaker: a read unsealed exactly what it was
+about to disclose, so the decrypt budget was the disclosure budget. It is now
+zero, because the assembler moved into the enclave. The bound did not tighten;
+the operation left. What remains out here is a courier: rank, hand over the
+still-sealed candidates, relay the blob.
+
+So the tests below are about what this process does *not* do, and about what it
+hands over. Whether the enclave then assembles correctly is tested in Rust
+(`enclave/tests/integration_tests.rs`), where the answer can actually be opened.
 """
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from orchestrator.enums import EntityKind, Sensitivity
-from orchestrator.gateway_client import ResolvedGrant, SealedContent
+from orchestrator.gateway_client import ResolvedGrant, SealedAssembly, SealedContent
+from orchestrator.graphs.brief import SealedBriefingUnsupported, brief_before_acting
 from orchestrator.graphs.ingestion import run_ingestion
 from orchestrator.graphs.query import run_query
 from orchestrator.graphs.runtime import Runtime
@@ -50,6 +62,11 @@ class _CountingSealGateway:
         #: Split by route, so a test can assert *which* credential a read used.
         self.session_unseals = 0
         self.grant_unseals = 0
+        #: Every call to `assemble`, in order, with what was handed over.
+        self.assemblies: list[dict] = []
+        #: What the enclave decides to disclose. `None` means "everything it was
+        #: offered", which is the ordinary case.
+        self.disclosed: list[str] | None = None
 
     # -- the crossing ----------------------------------------------------
 
@@ -83,6 +100,47 @@ class _CountingSealGateway:
         self.unseals += 1
         self.grant_unseals += 1
         return bytes(b ^ 0x5A for b in ciphertext)
+
+    # -- the assembly route (ADR 0024) -----------------------------------
+
+    def assemble(self, grant_token: str, question: str, candidates: list[dict]):
+        """Stands in for gateway + enclave, and records rather than computes.
+
+        Deliberately **not** a reimplementation of the enclave. A fake that
+        unsealed, filtered and formatted would be a second assembler maintained
+        in a test file, and the test would pass whenever the two fakes agreed.
+        What this checks is the orchestrator's actual job in a sealed read: that
+        it hands over the right things, still sealed, and relays what comes back
+        without reading it.
+
+        `disclosed` is settable so a test can make the enclave's verdict differ
+        from the host's -- which is the only way to see which one the read log
+        believes.
+        """
+        self.assemblies.append(
+            {"grant_token": grant_token, "question": question, "candidates": candidates}
+        )
+        offered = [c["node"]["id"] for c in candidates]
+        disclosed = offered if self.disclosed is None else self.disclosed
+        refused = [
+            {"id": i, "reason": "too_sensitive"} for i in offered if i not in disclosed
+        ]
+        return SealedAssembly(
+            sealed={
+                "scheme": "KLEOS_X25519_AES256GCM_V1",
+                "recipient_key_id": "key-under-test",
+                "ephemeral_public_key_b64": "ZXBoZW1lcmFs",
+                "nonce_b64": "bm9uY2U=",
+                # Stands for a blob. Not the plaintext XORed, because a test
+                # that could recover the answer from it would be a test of a
+                # fake rather than of the relay.
+                "ciphertext_b64": "Y2lwaGVydGV4dA==",
+            },
+            disclosed_ids=list(disclosed),
+            denials=refused,
+            considered=len(candidates),
+            attestation="TEST_ATTESTATION",
+        )
 
     # -- the rest of the client surface ----------------------------------
 
@@ -213,22 +271,34 @@ def test_every_content_field_is_sealed_and_nothing_else_is(runtime: Runtime) -> 
     assert {"Event.summary", "Claim.statement", "Entity.name"} <= seen
 
 
-def test_a_query_reads_back_the_plaintext(runtime: Runtime) -> None:
-    """Sealing is only worth anything if the record still answers."""
-    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-query")
+def test_a_read_decrypts_nothing_in_this_process(runtime: Runtime) -> None:
+    """The headline property of ADR 0024, and the blunt way to check it.
+
+    Not "a read decrypts only what it discloses" any more. Zero. The assembler
+    moved into the enclave, so there is nothing left out here that would have a
+    reason to unseal -- and a count of one would mean a path exists that could
+    be reached for all of them.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-no-decrypt")
+
+    runtime.gateway.unseals = 0
     answer = run_query(runtime, "what did we decide about the migration?", TOKEN)
 
-    assert answer.answered
-    assert not is_sealed(answer.text)
-    assert any(phrase in answer.text for phrase in FIXTURE_PHRASES), (
-        "the answer should contain readable content, not ciphertext"
+    assert answer.answered, "the read still answers"
+    assert runtime.gateway.unseals == 0, (
+        f"{runtime.gateway.unseals} objects were decrypted on the host during a read"
     )
 
 
-def test_a_declined_read_decrypts_nothing(runtime: Runtime) -> None:
-    """The property the counting gateway exists for. A grant that reads nothing
-    must cause no unsealing -- otherwise plaintext for objects the agent may not
-    see would exist in this process, one bug away from being returned."""
+def test_a_declined_read_decrypts_nothing_either(runtime: Runtime) -> None:
+    """Same property from the other end, kept as its own test.
+
+    It used to be the interesting case: a denial had to cost no decryption, or
+    plaintext for objects the agent may not see would exist in this process, one
+    bug away from being returned. Now both cases are zero -- but a regression
+    that reintroduced host-side unsealing would most plausibly do it on the
+    path that *does* disclose something, and this is what tells the two apart.
+    """
     run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-denied")
 
     runtime.gateway.unseals = 0
@@ -236,26 +306,144 @@ def test_a_declined_read_decrypts_nothing(runtime: Runtime) -> None:
 
     assert not answer.answered
     assert answer.considered > 0, "objects were retrieved and checked"
-    assert runtime.gateway.unseals == 0, (
-        f"{runtime.gateway.unseals} objects were decrypted for a read that disclosed none"
+    assert runtime.gateway.unseals == 0
+
+
+def test_the_candidates_are_handed_over_still_sealed(runtime: Runtime) -> None:
+    """What the host sends up, and the reason the property above is reachable.
+
+    Checked on the bytes actually posted rather than on the absence of an
+    unseal call: a future refactor could unseal, format, and re-seal before
+    posting, and every count would still read zero.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-handover")
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    assert len(runtime.gateway.assemblies) == 1, "one read, one assembly"
+    candidates = runtime.gateway.assemblies[0]["candidates"]
+    assert candidates, "nothing was offered to the enclave"
+
+    posted = json.dumps(candidates)
+    for phrase in FIXTURE_PHRASES:
+        assert phrase not in posted, f"{phrase!r} was posted in the clear"
+    assert "KSEAL1:" in posted, "the content fields should still be sealed"
+
+
+def test_what_is_handed_over_is_enough_for_the_enclave_to_decide(
+    runtime: Runtime,
+) -> None:
+    """The ACLs travel with the candidates, and the node type does too.
+
+    Both are load-bearing. Without the ACL the enclave cannot evaluate and would
+    have to trust the host's verdict, which is the operator's verdict. Without
+    `object_type` the Rust `MemoryNode` will not deserialise at all, and the
+    failure surfaces as a 400 from a route rather than as anything naming the
+    cause.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-acls")
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    for candidate in runtime.gateway.assemblies[0]["candidates"]:
+        node = candidate["node"]
+        assert node["object_type"] in {"entity", "event", "claim"}
+        acl = node["acl"]
+        assert acl["owner_id"] == OWNER
+        assert acl["sources"] and acl["entity_kinds"]
+        assert acl["sensitivity"] in {"public", "personal", "confidential", "restricted"}
+        assert isinstance(acl["occurred_at_ms"], int)
+
+
+def test_the_request_names_neither_the_owner_nor_the_recipient(
+    runtime: Runtime,
+) -> None:
+    """Both are derived by the gateway from the verified grant.
+
+    A caller that could name the recipient could ask for the answer sealed to a
+    key it controls, so the rule is kept where it cannot be forgotten: there is
+    no field. This asserts the absence, because an absence is the kind of thing
+    a later convenience parameter quietly fills in.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-derived")
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    sent = runtime.gateway.assemblies[0]
+    assert set(sent) == {"grant_token", "question", "candidates"}
+
+
+def test_the_relayed_answer_carries_the_blob_and_no_plaintext(
+    runtime: Runtime,
+) -> None:
+    """What the agent gets back from this process.
+
+    `text` is a self-labelling placeholder rather than an empty string: a client
+    that prints it without noticing `sealed` shows something obviously wrong
+    instead of showing nothing, which is the difference between a bug somebody
+    reports and a bug nobody sees.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-relay")
+    answer = run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    assert answer.is_sealed
+    assert answer.sealed["scheme"] == "KLEOS_X25519_AES256GCM_V1"
+    assert answer.sealed["ciphertext_b64"]
+    assert answer.disclosed_ids, "the structural half is in the clear"
+    # The content half is not here, in either of the two places it used to be.
+    assert answer.citations == []
+    assert answer.text.startswith("KSEALED:")
+
+    # The question is excluded, and that is not a loophole being papered over:
+    # the agent wrote it and the host was handed it, so finding a fixture phrase
+    # there says nothing about what the store disclosed. Everything else in the
+    # reply has to be clean.
+    rendered = json.dumps({k: v for k, v in answer.as_dict().items() if k != "question"})
+    for phrase in FIXTURE_PHRASES:
+        assert phrase not in rendered, f"{phrase!r} came back through the host"
+
+
+def test_the_read_log_records_the_enclaves_verdict_not_the_hosts(
+    runtime: Runtime,
+) -> None:
+    """Which disclosure the owner's audit record believes.
+
+    The host narrows the candidates and the enclave decides; if the log were
+    written from the host's list it would claim disclosures the enclave refused.
+    Made visible by having the enclave disclose *less* than it was offered,
+    which is the direction a host cannot fake.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-log")
+    runtime.store.wipe_read_log(OWNER)
+    runtime.gateway.disclosed = []
+
+    answer = run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    assert not answer.answered, "the enclave disclosed nothing, so nothing was"
+    assert answer.disclosed_ids == []
+    entries = runtime.read_log.recent(OWNER, limit=5)
+    assert entries, "the read was logged"
+    assert all(not e.disclosed_ids for e in entries), (
+        "the log recorded disclosures the enclave refused"
     )
+    # The enclave's refusals reach the agent as well, alongside the host's.
+    assert answer.denied, "a refusal inside the enclave must not vanish"
 
 
-def test_the_decrypt_budget_is_the_disclosure_budget(runtime: Runtime) -> None:
-    """Unsealing is bounded by what the answer contains, not by what retrieval
-    touched."""
-    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-budget")
+def test_the_grant_unseal_route_is_no_longer_the_read_path(
+    runtime: Runtime,
+) -> None:
+    """The route still exists, for `include_body`. A query must not use it.
 
-    runtime.gateway.unseals = 0
-    answer = run_query(runtime, "what did we decide about the migration?", TOKEN, top_k=5)
+    It was added so that reads could unseal under a grant rather than an owner
+    session they do not hold -- which was the right fix for the read path as it
+    was then. ADR 0024 removed the need by moving the unsealing somewhere the
+    host cannot follow, and leaving the old path reachable would be the exposure
+    returning behind a working feature.
+    """
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-grant-route")
+    before = runtime.gateway.grant_unseals
 
-    disclosed = len(answer.citations)
-    assert disclosed > 0
-    # One crossing per content field of each disclosed object, so the bound is a
-    # small multiple of the disclosed count -- never a multiple of `considered`.
-    assert runtime.gateway.unseals <= disclosed * 4, (
-        f"{runtime.gateway.unseals} unseals for {disclosed} disclosed objects"
-    )
+    run_query(runtime, "what did we decide about the migration?", TOKEN)
+
+    assert runtime.gateway.grant_unseals == before
 
 
 def test_supersession_still_resolves_against_sealed_claims(runtime: Runtime) -> None:
@@ -362,27 +550,35 @@ def test_every_node_type_declares_its_content_fields() -> None:
         assert model in CONTENT_FIELDS, f"{model.__name__} has no content fields declared"
 
 
-def test_a_query_can_unseal_under_a_grant(runtime) -> None:
-    """The defect this closes, named.
+def test_a_briefing_refuses_rather_than_reading_the_claims_out_here(
+    runtime: Runtime,
+) -> None:
+    """The one read ADR 0024 did not close, failing loudly instead of quietly.
 
-    Sealing happens during ingestion, which holds an owner session. Unsealing
-    happens during a *read*, which holds a grant and nothing else -- so with
-    `ENCRYPT_CONTENT_AT_REST` on, every query against sealed content failed
-    inside the gateway client with "no owner session", and the setting was
-    unusable. It had never been seen because it defaults off: the smoke script
-    and the eval run without a gateway.
+    A briefing writes its advisories from the claims' own statements, in this
+    process. Relaying a sealed answer does not help: the statements are what the
+    advisory is made of, so composing one would mean unsealing them out here --
+    the query path sealed and the briefing reading the same content through a
+    different door, behind a feature that looks like it moved.
 
-    So the assertion worth making is not that the read works but *which
-    credential it used*.
+    Checked before anything is retrieved, so a refusal costs no read and writes
+    no log entry for a read that did not happen.
     """
-    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-grant-unseal")
-    before = runtime.gateway.grant_unseals
-    answer = run_query(runtime, "what did we decide about the migration?", TOKEN)
+    run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-brief")
+    runtime.store.wipe_read_log(OWNER)
+    runtime.gateway.unseals = 0
 
-    assert answer.answered
-    assert runtime.gateway.grant_unseals > before, (
-        "a read must unseal under the grant it was given, not under an owner "
-        "session it does not have"
+    with pytest.raises(SealedBriefingUnsupported) as refused:
+        brief_before_acting(runtime, "I am about to pick a database", TOKEN)
+
+    # The refusal has to be actionable: which setting, and what does work.
+    message = str(refused.value)
+    assert "ENCRYPT_CONTENT_AT_REST" in message
+    assert "query" in message
+
+    assert runtime.gateway.unseals == 0, "a refusal must not decrypt anything"
+    assert not runtime.read_log.recent(OWNER, limit=5), (
+        "a read that did not happen must not be logged as one"
     )
 
 
