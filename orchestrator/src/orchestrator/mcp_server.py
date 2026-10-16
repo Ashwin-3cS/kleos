@@ -74,6 +74,7 @@ import logging
 from mcp.server.mcpserver import MCPServer
 
 from .graphs.act import request_action as act
+from .graphs.brief import SealedBriefingUnsupported
 from .graphs.brief import brief_before_acting as brief
 from .graphs.decide import WriteRefused, consolidate_session
 from .graphs.decide import record_decision as decide
@@ -288,16 +289,33 @@ def brief_before_acting(
 
     There is deliberately no structure in the result: no adjacency, no node
     lists. An agent that could walk the graph could map a memory it cannot read.
+
+    **Unavailable against a store whose content is sealed at rest.** A briefing
+    writes its advisories from the claims' own text, and since ADR 0024 that
+    text exists only inside the enclave. Comes back as `refused` with the
+    reason, and `query_memory` is the tool that works -- it relays an answer
+    sealed to your device.
     """
-    briefing = brief(
-        _get_runtime(),
-        intent,
-        grant_token,
-        session_id=session_id,
-        top_k=top_k,
-        include_body=include_body,
-    )
-    return briefing.as_dict()
+    try:
+        briefing = brief(
+            _get_runtime(),
+            intent,
+            grant_token,
+            session_id=session_id,
+            top_k=top_k,
+            include_body=include_body,
+        )
+    except SealedBriefingUnsupported as refused:
+        # Returned rather than raised, for the reason `record_decision` gives
+        # below: an exception crossing MCP reaches the agent as "Error executing
+        # tool" with the reason stripped, and an agent that cannot tell a
+        # refusal from a bug retries the bug.
+        return {
+            "refused": True,
+            "reason": "content_sealed_at_rest",
+            "detail": str(refused),
+        }
+    return {"refused": False, **briefing.as_dict()}
 
 
 # -- writing ------------------------------------------------------------

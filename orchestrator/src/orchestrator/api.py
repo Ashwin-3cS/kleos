@@ -23,7 +23,7 @@ from .connectors.direct import SOURCES as DIRECT_SOURCES
 from .connectors.direct import TEXT as DIRECT_TEXT
 from .connectors.direct import build_record, is_push_source
 from .connectors.registry import REGISTRY
-from .graphs.brief import brief_before_acting
+from .graphs.brief import SealedBriefingUnsupported, brief_before_acting
 from .graphs.decide import WriteRefused, consolidate_session, record_decision
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.ingestion import run_ingestion
@@ -435,15 +435,25 @@ def memory_brief(req: BriefRequest) -> dict[str, Any]:
     permission check and writes its own log entry -- plus one entry for the
     composite, which is what lets an owner see *what the agent was about to do*
     rather than only which objects it was shown.
+
+    Returns 409 against a store whose content is sealed at rest: a briefing
+    reads the claims' own text to write its advisories, and since ADR 0024 that
+    text exists only inside the enclave. 409 rather than 501, because the
+    capability is not missing from the build -- it conflicts with the state this
+    deployment is in, and `POST /query` serves the same memory as a sealed
+    answer.
     """
-    return brief_before_acting(
-        runtime(),
-        req.intent,
-        req.grant_token,
-        session_id=req.session_id,
-        top_k=req.top_k,
-        include_body=req.include_body,
-    ).as_dict()
+    try:
+        return brief_before_acting(
+            runtime(),
+            req.intent,
+            req.grant_token,
+            session_id=req.session_id,
+            top_k=req.top_k,
+            include_body=req.include_body,
+        ).as_dict()
+    except SealedBriefingUnsupported as refused:
+        raise HTTPException(status_code=409, detail=str(refused)) from refused
 
 
 @app.post("/memory/decide", status_code=201)

@@ -40,6 +40,23 @@ and not of this read, and in mock mode the embeddings are hashed tokens and
 barely selective at all. A test asserts the behaviour so it is a known shape
 rather than a surprise.
 
+**This read is not sealed yet, and it refuses rather than pretending.** ADR 0024
+moved the query assembler into the enclave, and a briefing cannot simply relay
+what that produces: it reads the disclosed claims' *statements* to write its
+advisories, on the host, in this process. Composing a sealed answer would mean
+reaching into the blob, and there is nothing out here that can open one.
+
+So with `ENCRYPT_CONTENT_AT_REST` on, `brief_before_acting` declines and says
+why. The alternative was to keep unsealing the claims out here, which would
+leave the sharpest host-side read exposure open behind a feature that *looks*
+like it moved -- the query path sealed, the briefing quietly reading the same
+content through a different door. Closing it properly means the advisory logic
+moving into the enclave, which is its own step: the advisories are generated
+text, not a relay, and the enclave's assembler is deliberately formatting only.
+
+Nothing in use depends on the combination today, because content sealing is off
+by default and no deployment holds real memory yet.
+
 **Being briefed is not deciding.** The only trace is a read-log entry. If a
 briefing were itself memory, agent B reading about agent A's decision would
 create a claim that agent C's briefing would surface, which would create another
@@ -66,6 +83,17 @@ from .query import run_query
 from .runtime import Runtime
 
 log = logging.getLogger(__name__)
+
+
+class SealedBriefingUnsupported(RuntimeError):
+    """Raised when a briefing is asked for against sealed content.
+
+    Its own type rather than a `ValueError`, so a caller can tell "you asked for
+    something this build cannot do yet" apart from "your request was malformed".
+    The MCP tool and the HTTP route turn it into a refusal with the reason
+    attached, which is what an agent can act on.
+    """
+
 
 #: Enough of a decision to recognise it in a one-line advisory.
 _ADVISORY_CHARS = 120
@@ -154,6 +182,18 @@ def brief_before_acting(
     if not intent:
         raise ValueError("a briefing needs an intent: what are you about to do?")
 
+    # Checked before anything is read, so a refusal costs no retrieval and
+    # writes no read-log entry for a read that did not happen.
+    if runtime.content.seals_content:
+        raise SealedBriefingUnsupported(
+            "a briefing cannot be assembled while content is sealed at rest: it "
+            "writes its advisories from the claims' own text, which since ADR "
+            "0024 only exists inside the enclave. Use the query tool, which "
+            "relays a sealed answer your device can open, or run with "
+            "ENCRYPT_CONTENT_AT_REST off. Moving the advisory logic into the "
+            "enclave is tracked as its own step."
+        )
+
     resolved = runtime.gateway.introspect_grant(grant_token)
     scope = resolved.scope
 
@@ -161,12 +201,16 @@ def brief_before_acting(
     # stays permission-blind and the check stays its own node inside it.
     answer = run_query(runtime, intent, grant_token, top_k=top_k)
 
-    # Deduplicated, order preserved. A citation list can name the same object
-    # twice -- retrieval scores an object once per pass and the assembler cites
+    # Deduplicated, order preserved. A disclosure list can name the same object
+    # twice -- retrieval scores an object once per pass and the assembler reports
     # what it was given -- and every line downstream is per object, so a repeat
     # becomes the same advisory twice in an agent's context window. Which is the
     # one resource this read exists to spend carefully.
-    disclosed = list(dict.fromkeys(c.object_id for c in answer.citations))
+    #
+    # `disclosed_ids` rather than the citations it used to mine: the two agree on
+    # the unsealed path, and only the former means anything on the sealed one.
+    # Reading it here keeps this composition honest about what it depends on.
+    disclosed = list(dict.fromkeys(answer.disclosed_ids))
     claims = _claims_among(runtime, scope.owner_id, disclosed)
 
     conflicts = _conflicts(runtime, claims, grant_token)

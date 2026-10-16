@@ -15,6 +15,12 @@ Two things are held here, and neither is owned by this file:
   field sealed by this side and unknown to that one is handed to the device
   still sealed: not an error anywhere, just unreadable text in an agent's
   context.
+- **the shape of an assembly request**, by parsing ``shared/src/protocol.rs``.
+  This is the one that has no safety net at all: the orchestrator builds the
+  request as a dict, the gateway parses it into a Rust struct, and a field
+  renamed on either side fails as a 400 from a route with nothing naming the
+  cause. No Python test can catch it, because the fake gateway in
+  ``test_content_at_rest.py`` accepts whatever it is handed.
 
 Parses the Rust rather than importing anything, for the reason
 ``test_schema_parity.py`` gives -- the whole point is that the two definitions
@@ -39,6 +45,7 @@ from orchestrator.storage import content as content_module
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = json.loads((REPO / "shared" / "fixtures" / "assembled_lines.json").read_text())
 RUST_CONTENT = (REPO / "shared" / "src" / "content.rs").read_text()
+RUST_CONTENT_MEMORY = (REPO / "shared" / "src" / "memory.rs").read_text()
 
 
 def _acl() -> ObjectAcl:
@@ -183,3 +190,104 @@ def test_the_marker_is_the_same_string_on_both_sides() -> None:
     match = re.search(r'pub const MARKER: &str = "([^"]+)"', RUST_CONTENT)
     assert match, "shared/src/content.rs no longer declares MARKER"
     assert match.group(1) == content_module.MARKER
+
+
+# -- the shape of an assembly request ------------------------------------
+
+RUST_PROTOCOL = (REPO / "shared" / "src" / "protocol.rs").read_text()
+
+
+def _rust_struct_fields(name: str) -> set[str]:
+    body = RUST_PROTOCOL.split(f"pub struct {name} {{")[1].split("\n}")[0]
+    return set(re.findall(r"^\s*pub (\w+):", body, re.M))
+
+
+def test_a_candidate_is_built_in_the_shape_the_enclave_parses() -> None:
+    """``object_type`` is the serde tag on the Rust ``MemoryNode`` enum.
+
+    Internally tagged, so the node's own fields sit beside it rather than
+    nested. Get the tag name wrong and every assembly is a 400; get the *value*
+    wrong and it is a 400 for one node type only, which is the version that
+    reaches production.
+    """
+    from orchestrator.graphs.query import _candidate_for_enclave
+
+    tag = re.search(r'tag = "(\w+)"\)\]\npub enum MemoryNode', RUST_CONTENT_MEMORY)
+    assert tag, "shared/src/memory.rs no longer tags MemoryNode"
+    tag_name = tag.group(1)
+
+    variants = set(
+        re.findall(
+            r"^\s{4}(\w+)\(",
+            RUST_CONTENT_MEMORY.split("pub enum MemoryNode {")[1].split("\n}")[0],
+            re.M,
+        )
+    )
+    assert variants == {"Entity", "Event", "Claim"}
+
+    for label in variants:
+        built = _candidate_for_enclave({"label": label, "payload": {"id": "x"}, "score": 1.0})
+        assert set(built) == {"node", "score"}
+        assert built["node"][tag_name] == label.lower()
+        # Beside the tag, not nested under it.
+        assert built["node"]["id"] == "x"
+
+
+def test_the_assembly_request_carries_exactly_what_the_gateway_expects() -> None:
+    """The gateway's own body type, not the enclave's.
+
+    `AssembleRequest` is what the *gateway* sends inward and carries the owner
+    and the recipient; `AssembleRequestBody` is what this process sends and must
+    not. Asserting against the wrong one would pass while the orchestrator sent
+    fields a caller is never allowed to set.
+    """
+    gateway_body = (REPO / "gateway" / "src" / "routes" / "memory.rs").read_text()
+    body = gateway_body.split("pub struct AssembleRequestBody {")[1].split("\n}")[0]
+    expected = set(re.findall(r"^\s*pub (\w+):", body, re.M))
+
+    assert expected == {"grant_token", "question", "candidates"}
+
+    sent = _posted_assembly_body()
+    assert sent == expected, (
+        "GatewayClient.assemble posts fields the gateway does not parse, or "
+        "omits ones it requires"
+    )
+
+
+def test_the_orchestrator_cannot_name_the_owner_or_the_recipient() -> None:
+    """The derivation rule, checked as an absence.
+
+    `AssembleRequest` has `owner_id`, `recipient_key_b64` and
+    `recipient_key_id`; the gateway fills all three from the verified grant. If
+    any of them ever appear in what this process posts, a leaked grant can ask
+    for the answer sealed to a key the holder controls.
+    """
+    derived = {"owner_id", "recipient_key_b64", "recipient_key_id"}
+    assert derived <= _rust_struct_fields("AssembleRequest"), (
+        "AssembleRequest no longer carries the derived fields this guards"
+    )
+    assert not (derived & _posted_assembly_body())
+
+
+def _posted_assembly_body() -> set[str]:
+    """The keys `GatewayClient.assemble` actually posts.
+
+    Captured by calling it against a stub rather than read out of the source,
+    so a field added by a later refactor is caught however it got there.
+    """
+    from orchestrator.gateway_client import GatewayClient
+
+    captured: dict = {}
+
+    class _Stub(GatewayClient):
+        def __init__(self) -> None:  # no HTTP client, on purpose
+            pass
+
+        def _post(self, path: str, json: dict, auth: bool = False) -> dict:
+            captured["path"] = path
+            captured["body"] = json
+            return {"sealed": {}, "disclosed_ids": [], "denials": [], "considered": 0}
+
+    _Stub().assemble("grant", "question", [])
+    assert captured["path"] == "/memory/assemble"
+    return set(captured["body"])

@@ -4,6 +4,7 @@
 .env
 orchestrator/.venv/
 orchestrator/**/__pycache__/
+__pycache__/
 orchestrator/*.egg-info/
 orchestrator/src/*.egg-info/
 .pytest_cache/
