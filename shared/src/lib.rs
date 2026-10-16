@@ -1,3 +1,4 @@
+pub mod content;
 pub mod grants;
 pub mod identity;
 pub mod memory;
@@ -20,8 +21,10 @@ pub use permissions::{
 };
 pub use protocol::{
     IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
-    ActionAck, ActionIntent, GrantUnsealRequest, ScopeGrantRequest, ScopeGrantResponse,
+    ActionAck, ActionIntent, AssembleCandidate, AssembleDenial, AssembleRequest, AssembleResponse,
+    AssembledAnswer, AssembledCitation, GrantUnsealRequest, ScopeGrantRequest, ScopeGrantResponse,
     ScopeIntrospectRequest,
     ScopeIntrospectResponse,
     SealDecryptRequest, SealDecryptResponse, SealEncryptRequest, SealEncryptResponse,
+    SealedToDevice,
 };

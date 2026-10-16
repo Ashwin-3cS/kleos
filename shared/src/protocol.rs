@@ -1,4 +1,5 @@
 use crate::identity::OwnerIdentity;
+use crate::memory::MemoryNode;
 use crate::permissions::Scope;
 use serde::{Deserialize, Serialize};
 
@@ -235,4 +236,142 @@ pub struct OAuthExchangeResponse {
     /// expiry at either provider.
     pub access_token_expires_at_ms: Option<u64>,
     pub attestation: String,
+}
+
+// ---------------------------------------------------------------------------
+// Assembly: the enclave unseals, filters, assembles and re-seals (ADR 0024)
+// ---------------------------------------------------------------------------
+
+/// What the host asks the enclave to turn into an answer.
+///
+/// The host has already done the part it can do without reading anything:
+/// ranked on embeddings and structure, both in the clear, and picked the top-k
+/// candidates. It sends them here still sealed. It does **not** send a
+/// permission verdict -- that is computed in here, against the content, which
+/// is the difference between the enclave assembling and the enclave decrypting.
+///
+/// Three fields are set by the gateway from the verified grant and are refused
+/// from a caller: `owner_id`, `recipient_key_b64` and `recipient_key_id`. See
+/// the note on `recipient_key_b64`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssembleRequest {
+    pub owner_id: String,
+    /// The verified scope the grant carried. Verified by the gateway, which is
+    /// the only thing holding a device key registry; re-checking the signature
+    /// in here would need that registry inside the measured image for no gain,
+    /// since the host chooses what reaches this route either way.
+    pub scope: Scope,
+    /// Raw X25519 public key of the device the answer is sealed to, base64.
+    ///
+    /// **Derived, never supplied.** The gateway looks this up from the
+    /// registration row of the key that signed the grant. A caller-supplied
+    /// recipient would mean anyone holding a leaked grant could ask for the
+    /// answer sealed to a key they control, which is the whole system in one
+    /// field. Same rule `owner_id` already follows on every route.
+    pub recipient_key_b64: String,
+    /// The signing key id the recipient was resolved from, echoed back in the
+    /// response so the device can check the answer came back to the key it
+    /// asked with rather than to another of the owner's devices.
+    pub recipient_key_id: String,
+    /// Carried through so the assembled answer can state what it answers.
+    /// Content, so it is inside the sealed payload and not in the response.
+    pub question: String,
+    pub candidates: Vec<AssembleCandidate>,
+}
+
+/// One ranked candidate, as the host holds it: structure in the clear, content
+/// still sealed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssembleCandidate {
+    pub node: MemoryNode,
+    /// The host's ranking score.
+    ///
+    /// Carried for the record and acted on by nothing. The assembled lines keep
+    /// the order the host sent, because the host did the ranking either way --
+    /// re-sorting in here on a number the host computed would look like the
+    /// enclave had an opinion about relevance, and it has none.
+    pub score: f64,
+}
+
+/// What comes back: an opaque blob, plus the structure the host is entitled to.
+///
+/// The split is the ADR 0024 line drawn on one struct. `sealed` is the content
+/// and the host cannot read it. Everything beside it -- which ids were
+/// disclosed, which were denied and why, how many were considered -- is
+/// structure the host already had, and the orchestrator needs it to write the
+/// read log (ADR 0005). Withholding it would not hide anything and would make
+/// the disclosure record unwritable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssembleResponse {
+    pub sealed: SealedToDevice,
+    pub disclosed_ids: Vec<String>,
+    pub denials: Vec<AssembleDenial>,
+    pub considered: usize,
+    /// Covers the enclave public key, the recipient key and the ciphertext, so
+    /// a verifier can tell this assembly happened in here and was sealed to
+    /// that device. Unverified by anything today -- step 3 of the roadmap.
+    pub attestation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssembleDenial {
+    pub id: String,
+    pub reason: crate::permissions::DenyReason,
+}
+
+/// A payload encrypted to one device's X25519 key.
+///
+/// Not [`SealEncryptResponse`], which is the owner's at-rest seal and in mock
+/// mode is a reversible XOR. This one is real AEAD in every build, because
+/// nothing external is missing for it: the recipient key is in a Postgres row
+/// and the ephemeral half is generated here. Keeping it mock would make the
+/// one thing ADR 0024 actually decides untestable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SealedToDevice {
+    /// Self-labelling, in the spirit of `MOCK_SEAL_V1` and `KSEAL1`.
+    pub scheme: String,
+    pub recipient_key_id: String,
+    /// The enclave's single-use X25519 public key for this reply. The device
+    /// agrees against it; nothing else ever uses it again.
+    pub ephemeral_public_key_b64: String,
+    pub nonce_b64: String,
+    pub ciphertext_b64: String,
+}
+
+/// What is inside [`SealedToDevice::ciphertext_b64`] once the device opens it.
+///
+/// Declared here rather than left as free-form JSON because three
+/// implementations have to agree on it: the enclave writes it, the MCP client
+/// reads it, and the dashboard reads it. The shape mirrors the orchestrator's
+/// `QueryAnswer` minus the fields that stayed outside -- `denied` and
+/// `considered` are in the response, in the clear, where the read log needs
+/// them.
+///
+/// **Formatting, not synthesis.** ADR 0024 pins this: a synthesising assembler
+/// would put a model call inside the enclave, because that is where the
+/// plaintext is. The agent has its own model, and citations it can check beat
+/// prose it has to trust.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssembledAnswer {
+    pub question: String,
+    pub answered: bool,
+    pub text: String,
+    pub citations: Vec<AssembledCitation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssembledCitation {
+    pub object_id: String,
+    pub label: String,
+    pub source: String,
+    pub url: Option<String>,
+    pub occurred_at_ms: u64,
+    pub ingested_at_ms: Option<u64>,
 }

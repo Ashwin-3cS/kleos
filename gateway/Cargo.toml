@@ -57,3 +57,7 @@ enclave = { path = "../enclave" }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }
+# Dev-only, and for the same reason: the assemble tests stand in for the
+# receiving device, so they hold a real X25519 private half and open what the
+# enclave sealed. Nothing in the gateway's build encrypts anything.
+x25519-dalek = { version = "2", features = ["static_secrets"] }

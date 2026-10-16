@@ -1,6 +1,6 @@
 use crate::error::GatewayError;
 use shared::{
-    ActionAck, ActionIntent, IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest,
+    ActionAck, ActionIntent, AssembleRequest, AssembleResponse, IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest,
     OAuthExchangeResponse, SealDecryptRequest, SealDecryptResponse, SealEncryptRequest,
     SealEncryptResponse,
 };
@@ -100,6 +100,18 @@ impl EnclaveClient {
     /// operator editing the audit record.
     pub async fn act(&self, intent: &ActionIntent) -> Result<ActionAck, GatewayError> {
         self.post_json("/act", intent).await
+    }
+
+    /// Asks the enclave to answer a query and seal the answer to one device.
+    ///
+    /// The one call on this client whose *response* the gateway cannot read,
+    /// and the gateway does not try: it deserialises the envelope and relays
+    /// the blob. See ADR 0024.
+    pub async fn assemble(
+        &self,
+        req: &AssembleRequest,
+    ) -> Result<AssembleResponse, GatewayError> {
+        self.post_json("/assemble", req).await
     }
 
     async fn post_json<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(

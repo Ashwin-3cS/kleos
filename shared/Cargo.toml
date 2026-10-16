@@ -7,6 +7,8 @@ edition.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+# A sealed content field is base64 inside a string marker; see content.rs.
+base64 = { workspace = true }
 # Owner-signed grants are verified here rather than in the gateway so the signer
 # and the verifier cannot disagree about what is covered. Same Ed25519 the enclave
 # already uses, so this adds no new primitive to anything the attestation
