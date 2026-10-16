@@ -33,6 +33,14 @@ tower-http = { workspace = true }
 base64 = { workspace = true }
 rand = "0.8"
 fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto" }
+# Sealing an assembled answer to the asking device (ADR 0024). fastcrypto is
+# already here but gates AES behind a feature and has no X25519 at all, so
+# these four are what the one primitive the ADR turns on actually needs. Each
+# addition is weight inside the measured image -- see services/recipient.rs.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
 async-trait = "0.1"
 
 aws-nitro-enclaves-nsm-api = { git = "https://github.com/aws/aws-nitro-enclaves-nsm-api", rev = "8ec7eac72bbb2097f1058ee32c13e1ff232f13e8", optional = true }
@@ -40,3 +48,6 @@ aws-nitro-enclaves-nsm-api = { git = "https://github.com/aws/aws-nitro-enclaves-
 [dev-dependencies]
 tokio = { workspace = true }
 tower = { version = "0.4", features = ["util"] }
+# The integration tests stand in for the receiving device: they generate an
+# X25519 keypair and open what the enclave sealed. See tests/integration_tests.rs.
+x25519-dalek = { version = "2", features = ["static_secrets"] }

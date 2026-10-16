@@ -8,7 +8,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use shared::{
-    ActionAck, ActionIntent, GrantUnsealRequest, ScopeIntrospectRequest,
+    ActionAck, ActionIntent, AssembleCandidate, AssembleRequest, AssembleResponse,
+    GrantUnsealRequest, ScopeIntrospectRequest,
     ScopeIntrospectResponse, SealDecryptRequest, SealDecryptResponse,
     SealEncryptRequest, SealEncryptResponse,
 };
@@ -143,6 +144,108 @@ pub async fn seal_unseal_for_grant(
     };
     let response = state.enclave.seal_decrypt(&req).await?;
     Ok(Json(response))
+}
+
+/// Asks the enclave to answer a query, and to seal the answer to the device
+/// that asked.
+///
+/// **This route is where "the recipient is derived, never supplied" lives.**
+/// Everything else in ADR 0024 is plumbing around that one sentence. The host
+/// ranked the candidates and reads none of them; the enclave unseals, filters
+/// and assembles; and the thing that makes the round trip worth making is that
+/// what comes back is encrypted to a key the orchestrator does not hold.
+///
+/// Which key is not a question the caller gets to answer. It is the encryption
+/// half of the registration row belonging to the key that signed the grant,
+/// looked up here, in the same breath as the verification. A
+/// `recipient_key_b64` in the request body would mean anyone holding a leaked
+/// grant could ask for the answer sealed to a key they control -- the entire
+/// design, defeated by a field. The struct the orchestrator sends therefore has
+/// no such field to set, which is the version of this rule a reviewer can check
+/// by reading one type.
+///
+/// Three refusals, each naming its own reason, because they are three different
+/// states an owner has to be able to tell apart:
+///
+/// - the grant does not verify -- expired, forged, or signed by a revoked key;
+/// - it verifies but grants no read over anything, which `evaluate` reports per
+///   object inside the enclave rather than here;
+/// - it verifies and the device has **no encryption key**, because it
+///   registered before ADR 0024 or with a client that sends only the signing
+///   half. That device can still sign and still read the unsealed paths; what
+///   it cannot do is receive this. Re-registering fixes it, and the refusal
+///   says so, because the alternative is an owner staring at a working grant
+///   and a failing query.
+///
+/// Note what is *not* checked here: `scope.may_unseal`. That gate is about
+/// turning a sealed **body** back into plaintext -- a second disclosure beyond
+/// seeing a resolved claim, which is why `seal_unseal_for_grant` next door
+/// demands it. This route discloses the resolved claims a read already covers;
+/// requiring `may_unseal` would mean no ordinary read grant could use the
+/// confidential path, and every owner would grant the stronger capability to
+/// get the safer one.
+pub async fn memory_assemble(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AssembleRequestBody>,
+) -> Result<Json<AssembleResponse>, GatewayError> {
+    let (claims, _, _) = shared::grants::parse_unverified(&req.grant_token)
+        .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+    let registered = state.device_keys.get(&claims.key_id).await?;
+
+    let scope = shared::verify_grant(
+        &req.grant_token,
+        |_| {
+            registered.as_ref().map(|key| shared::RegisteredKey {
+                owner_id: key.owner_id.clone(),
+                public_key: key.public_key.clone(),
+                revoked: key.is_revoked(),
+            })
+        },
+        now_ms(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+
+    // `sealing_target` and not `encryption_key`: revocation has to mean the
+    // device stops receiving as well as stops signing, and the row is where
+    // that rule lives rather than here. `verify_grant` has already refused a
+    // revoked key, so this is belt and braces -- deliberately, since the two
+    // checks are in different crates and only one of them is obviously about
+    // revocation.
+    let recipient = registered
+        .as_ref()
+        .and_then(|key| key.sealing_target())
+        .ok_or_else(|| {
+            GatewayError::BadRequest(
+                "this device has no encryption key registered, so an answer cannot be sealed to \
+                 it. Ed25519 signs and X25519 receives; re-register the device with both halves."
+                    .into(),
+            )
+        })?;
+
+    let request = AssembleRequest {
+        // Both from the verified grant. Neither is a field the caller has.
+        owner_id: scope.owner_id.clone(),
+        scope,
+        recipient_key_b64: B64.encode(recipient),
+        recipient_key_id: claims.key_id,
+        question: req.question,
+        candidates: req.candidates,
+    };
+    let response = state.enclave.assemble(&request).await?;
+    Ok(Json(response))
+}
+
+/// What the orchestrator sends to ask for an assembly.
+///
+/// No `owner_id` and no recipient, for the same reason every grant-authorised
+/// route here omits the first: a caller that could name either could name
+/// somebody else's.
+#[derive(Debug, Deserialize)]
+pub struct AssembleRequestBody {
+    pub grant_token: String,
+    pub question: String,
+    #[serde(default)]
+    pub candidates: Vec<AssembleCandidate>,
 }
 
 /// Asks the enclave to perform a sensitive action on the owner's behalf.

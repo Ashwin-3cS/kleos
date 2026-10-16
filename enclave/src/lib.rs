@@ -28,6 +28,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/identity/verify", post(routes::identity::verify))
         .route("/oauth/exchange", post(routes::oauth::exchange))
         .route("/act", post(routes::act::act))
+        .route("/assemble", post(routes::assemble::assemble_for_device))
         .route("/seal/encrypt", post(routes::seal::encrypt))
         .route("/seal/decrypt", post(routes::seal::decrypt))
         .with_state(state)

@@ -1,0 +1,86 @@
+{
+  "_why": [
+    "ADR 0024 moved the assembler into the enclave, so the strings an agent",
+    "reads are now produced in Rust. The Python assembler produced them until",
+    "now and still does on the paths A1 has not reached, and clients parse",
+    "them. Two implementations of one format drift, and the drift is silent:",
+    "nothing errors, the citations just stop lining up with the lines.",
+    "",
+    "This file is the format. Each side builds a node from the descriptor,",
+    "formats it, and compares against `expected`. Neither side owns it, which",
+    "is the point -- a change here has to be made deliberately and fails both",
+    "suites until both follow.",
+    "",
+    "Checked by enclave/tests/assembled_line_parity.rs and",
+    "orchestrator/tests/test_assembled_answer_parity.py."
+  ],
+  "lines": [
+    {
+      "case": "an active claim carries no status marker, because active is the ordinary case",
+      "kind": "claim",
+      "id": "clm-1",
+      "text": "project Atlas will use Neo4j",
+      "status": "active",
+      "expected": "- project Atlas will use Neo4j (clm-1)"
+    },
+    {
+      "case": "a superseded claim is shown rather than hidden, and says so",
+      "kind": "claim",
+      "id": "clm-2",
+      "text": "project Atlas will use Postgres",
+      "status": "superseded",
+      "expected": "- project Atlas will use Postgres [superseded] (clm-2)"
+    },
+    {
+      "case": "a contradicted claim too: an unresolved disagreement is still evidence",
+      "kind": "claim",
+      "id": "clm-3",
+      "text": "Alice owns the migration",
+      "status": "contradicted",
+      "expected": "- Alice owns the migration [contradicted] (clm-3)"
+    },
+    {
+      "case": "an event is its summary; the body never reaches a line",
+      "kind": "event",
+      "id": "evt-1",
+      "text": "the kickoff call",
+      "expected": "- the kickoff call (evt-1)"
+    },
+    {
+      "case": "an entity leads with its kind, which is the one line that does",
+      "kind": "entity",
+      "id": "ent-1",
+      "text": "Atlas",
+      "entity_kind": "project",
+      "expected": "- project: Atlas (ent-1)"
+    },
+    {
+      "case": "and the kind is the serde spelling, not the Python enum name",
+      "kind": "entity",
+      "id": "ent-2",
+      "text": "Alice",
+      "entity_kind": "person",
+      "expected": "- person: Alice (ent-2)"
+    }
+  ],
+  "declines": [
+    {
+      "case": "nothing retrieved at all is not a permission problem and must not read like one",
+      "considered": 0,
+      "reasons": [],
+      "expected": "No memory matches this question."
+    },
+    {
+      "case": "everything retrieved was out of scope: the count and the reasons, nothing else",
+      "considered": 1,
+      "reasons": ["too_sensitive"],
+      "expected": "Declining to answer: 1 candidate memory object(s) matched, but none are within the requesting agent's scope (too sensitive)."
+    },
+    {
+      "case": "reasons are deduplicated and sorted, so the same denial set reads the same way twice",
+      "considered": 3,
+      "reasons": ["wrong_owner", "too_sensitive", "wrong_owner"],
+      "expected": "Declining to answer: 3 candidate memory object(s) matched, but none are within the requesting agent's scope (too sensitive, wrong owner)."
+    }
+  ]
+}

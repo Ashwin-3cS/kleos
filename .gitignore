@@ -18,3 +18,9 @@ secrets/
 .env
 .env.*
 !.env.example
+
+# The working plan. Kept beside the checkout rather than in it: it names
+# unshipped weaknesses in the order they are easiest to exploit, which makes a
+# useful planning document and a poor public one. Removed from history, not
+# just from HEAD.
+PLAN.md
