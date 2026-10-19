@@ -80,6 +80,7 @@ from .graphs.decide import WriteRefused, consolidate_session
 from .graphs.decide import record_decision as decide
 from .graphs.history import context_chain, why_did_this_shift
 from .graphs.query import run_query
+from .graphs.reason import SubjectNotFound, reason_about
 from .graphs.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -371,6 +372,52 @@ def record_decision(
             "detail": str(refused),
         }
     return {"refused": False, **recorded.as_dict()}
+
+
+@mcp.tool()
+def reason_across_sessions(grant_token: str, subject: str) -> dict:
+    """Ask the harness what the sessions about one subject add up to.
+
+    Everything else here reasons narrowly: a decision is resolved against stored
+    claims one at a time, and a session is consolidated with only its own blocks
+    in view. This looks at **every claim about one subject**, across every
+    session and every device that wrote one, and asks what holds across them
+    that no single claim says.
+
+    `subject` is a name memory already knows -- a project, an artifact, a topic.
+    Matched the way canonicalisation matches entities, so "Lantern" and "project
+    Lantern" and a stored alias all reach the same subject.
+
+    **What comes back is written as claims, not prose.** Each conclusion goes
+    into the record as an ordinary claim, which means a later pass can supersede
+    it and the resolver compares it against what is already stored. Its
+    authority is `reference` whatever your grant says: an inference the harness
+    drew may contradict what somebody decided, visibly and with both sides kept,
+    and may never replace it.
+
+    They are attributed to **the harness**, with `identity_basis: derived` --
+    nobody asserted them. A briefing renders them as such, and an agent reading
+    one should weigh it accordingly: these are the lines to push back on.
+
+    Declines with `declined` set when fewer than two sessions have written about
+    the subject, because one session's claims were already reasoned over when it
+    closed. Concluding nothing is a normal outcome and comes back as `ran: true`
+    with an empty `conclusions`. Reaching the same conclusions a previous pass
+    already recorded comes back as `conclusions` present, `written` empty and no
+    `errors` -- the pass is idempotent, so running it again is cheap and safe.
+
+    Needs `may_write`: this writes to the record.
+    """
+    try:
+        result = reason_about(_get_runtime(), grant_token, subject)
+    except SubjectNotFound as missing:
+        # Returned rather than raised, for the reason `record_decision` gives:
+        # an exception crossing MCP arrives with its message stripped, and "the
+        # subject is not in memory yet" is an answer rather than a fault.
+        return {"refused": True, "reason": "subject_not_found", "detail": str(missing)}
+    except WriteRefused as refused:
+        return {"refused": True, "reason": refused.reason, "detail": str(refused)}
+    return {"refused": False, **result.as_dict()}
 
 
 # -- acting -------------------------------------------------------------

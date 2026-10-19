@@ -102,6 +102,12 @@ _ADVISORY_CHARS = 120
 #: below can tell it apart from an agent whose label nobody checked.
 PIPELINE_ACTOR = Actor.pipeline().agent_id
 
+#: What a conclusion the harness drew across sessions is recorded as (ADR 0025).
+#: Like the pipeline it has no device, and for the same reason -- but unlike the
+#: pipeline it is the *least* authoritative writer here rather than the most, so
+#: the two cannot share a rendering.
+HARNESS_ACTOR = Actor.harness().agent_id
+
 
 @dataclass(slots=True)
 class Attribution:
@@ -110,7 +116,9 @@ class Attribution:
     `identity_basis` is the honest part. `device_key` means the gateway verified
     an Ed25519 signature against a key the owner registered -- rely on it.
     `label` means all that is known is the `agent_id` the owner typed into a
-    scope before signing it, which nothing authenticates.
+    scope before signing it, which nothing authenticates. `derived` means the
+    harness concluded it across sessions and no identity was involved at all
+    (ADR 0025) -- the one value that says *nobody asserted this*.
     """
 
     object_id: str
@@ -309,7 +317,13 @@ def _attributions(runtime: Runtime, owner_id: str, ids: list[str]) -> list[Attri
             actor_agent_id=entry.actor_agent_id,
             actor_device_id=entry.actor_device_id,
             actor_session_id=entry.actor_session_id,
-            identity_basis="device_key" if entry.actor_device_id else "label",
+            identity_basis=(
+                "derived"
+                if entry.actor_agent_id == HARNESS_ACTOR
+                else "device_key"
+                if entry.actor_device_id
+                else "label"
+            ),
             kind=entry.kind,
             before=entry.before,
             after=entry.after,
@@ -432,6 +446,12 @@ def _advisory_line(claim: Claim, who: Attribution) -> str:
             f"device {who.actor_device_id[:12]} (labelled {who.actor_agent_id!r}, "
             "device-authenticated)"
         )
+    elif who.actor_agent_id == HARNESS_ACTOR:
+        # Nobody said this. It is a pattern the harness read off several
+        # sessions, so the line has to carry its own warrant: an agent that
+        # cannot tell a derived inference from a decision somebody made will
+        # treat them alike, and these are the ones it should push back on.
+        actor = "the harness, reasoning across sessions (derived, nobody asserted it)"
     elif who.actor_agent_id == PIPELINE_ACTOR:
         # The owner's own ingestion -- a connector pulling their mailbox, their
         # own typing. It has no device because there is no device, and rendering

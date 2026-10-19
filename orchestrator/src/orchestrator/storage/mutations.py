@@ -56,6 +56,12 @@ log = logging.getLogger(__name__)
 _REASON_MAX = 500
 
 
+#: The `agent_id` a harness-derived conclusion is attributed to. A reserved
+#: label: an owner who typed this into a scope would be claiming an authority the
+#: grant cannot confer, so the write path rejects it from a caller.
+HARNESS_AGENT_ID = "harness"
+
+
 @dataclass(frozen=True, slots=True)
 class Actor:
     """Who caused a write.
@@ -79,6 +85,21 @@ class Actor:
     def pipeline(cls) -> Actor:
         """The owner's own ingestion run: a connector, an extractor, a resolver."""
         return cls(agent_id="owner")
+
+    @classmethod
+    def harness(cls, grant_fp: str | None = None) -> Actor:
+        """A conclusion the harness drew across sessions (ADR 0025).
+
+        Distinct from :meth:`pipeline`, which is the owner's own material moving
+        through the graph. This is the harness asserting something *nobody said*
+        -- so it names no device, for the reason above, and it must not be
+        rendered as an agent whose label went unchecked either: no label was
+        involved, because no caller supplied one.
+
+        The grant is kept. The pass ran under one, and which grant authorised the
+        harness to write is the only part of this actor that anything verified.
+        """
+        return cls(agent_id=HARNESS_AGENT_ID, grant_fp=grant_fp)
 
 
 #: Why a change happened, as a closed set of rule names rather than prose.

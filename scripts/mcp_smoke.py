@@ -118,6 +118,7 @@ EXPECTED_TOOLS = {
     "close_session",
     "brief_before_acting",
     "record_decision",
+    "reason_across_sessions",
     "request_action",
 }
 

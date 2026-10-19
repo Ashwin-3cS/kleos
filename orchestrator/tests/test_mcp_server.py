@@ -27,14 +27,16 @@ EXPECTED = {
     "append_context",
     "close_session",
     "record_decision",
+    "reason_across_sessions",
     "brief_before_acting",
     "request_action",
 }
 
 #: Names that must never appear. Each is a decision with its reason recorded in
 #: `mcp_server`'s module docstring or the root README.
-#: The one write, so the absence of the others stays deliberate.
-WRITES = {"record_decision"}
+#: The writes, so the absence of any other stays deliberate. Both of these reach
+#: the record through `record_decision`; see `test_every_write_goes_through_the_gate`.
+WRITES = {"record_decision", "reason_across_sessions"}
 
 FORBIDDEN = {
     "memory_neighbourhood",  # a cheap seed-walk-reseed structure enumerator
@@ -77,10 +79,16 @@ def test_every_tool_documents_itself() -> None:
         assert tool.description and len(tool.description) > 40, tool.name
 
 
-def test_only_one_tool_writes() -> None:
-    """A second write tool is a decision, not an implementation detail: the write
-    gate, the precedence class and the `agent` source are all enforced in one
-    place, and a tool that wrote by another route would bypass all three."""
+def test_only_the_declared_tools_write() -> None:
+    """A write tool is a decision, not an implementation detail: the write gate,
+    the precedence class and the `agent` source are all enforced in one place,
+    and a tool that wrote by another route would bypass all three.
+
+    There are two now. `reason_across_sessions` (ADR 0025) writes the harness's
+    own cross-session conclusions -- and writes them *through* `record_decision`,
+    which is what keeps "one place" true with two entry points. The next test
+    is the one that checks that, rather than trusting this list.
+    """
     writes = _tool_names() & WRITES
     assert writes == WRITES
     suspicious = {
@@ -108,3 +116,38 @@ def test_a_refusal_is_returned_rather_than_raised() -> None:
         "record_decision must catch its refusal and return it"
     )
     assert '"refused": True' in source
+
+
+def test_every_write_goes_through_the_gate() -> None:
+    """Two tools write, and only one write path exists.
+
+    `WRITES` above is a list someone maintains, so on its own it says nothing
+    about whether a second write tool actually reuses the gate or merely claims
+    to. This reads the source: a write tool that reached the store directly
+    would decide `may_write`, the `agent` source and the precedence class for
+    itself, and the first two of those are the whole of ADR 0017.
+    """
+    import inspect
+
+    from orchestrator.graphs import reason as reason_graph
+
+    assert "record_decision(" in inspect.getsource(reason_graph.reason_about), (
+        "reason_about must write through record_decision, not around it"
+    )
+    # And as a derived write specifically: without this it would take its
+    # precedence class from `may_supersede_owner` like an agent's own decision,
+    # which is exactly what ADR 0025 forbids for an inference nobody asserted.
+    assert "derived=True" in inspect.getsource(reason_graph.reason_about)
+
+
+def test_the_reasoning_tool_returns_its_refusals() -> None:
+    """Same reason as `record_decision`'s: a refusal that crosses MCP as an
+    exception arrives with its message stripped, and both of this tool's
+    declines -- an unknown subject and a grant that may not write -- are answers
+    rather than faults."""
+    import inspect
+
+    source = inspect.getsource(mcp_server.reason_across_sessions)
+    assert "except SubjectNotFound" in source
+    assert "except WriteRefused" in source
+    assert source.count('"refused": True') >= 2

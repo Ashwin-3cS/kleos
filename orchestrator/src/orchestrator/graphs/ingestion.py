@@ -83,6 +83,14 @@ class IngestionState(TypedDict, total=False):
     #: ``{record external_id: statement}``. A claim the *caller* asserts rather
     #: than one extraction found. See `_declared_claim`.
     declared: dict[str, str]
+    #: Keep *only* the declared claim and discard what extraction found in the
+    #: same record. For a harness-derived conclusion (ADR 0025), where the body
+    #: is a statement a model produced: re-extracting it yields a reworded
+    #: second claim, asserted at the same instant, which the resolver then marks
+    #: in unresolved conflict with the real one -- a derived conclusion
+    #: contradicting itself, both attributed to the harness. Entities and the
+    #: citation event are still taken from extraction; only its claims go.
+    declared_only: bool
     supersessions: list[list[str]]
     contradictions: list[list[str]]
     errors: Annotated[list[str], _extend]
@@ -200,9 +208,11 @@ def build_ingestion_graph(runtime: Runtime):
             # page's source and sensitivity: forced here, not trusted from there.
             declared = (state.get("declared") or {}).get(record.external_id)
             if declared:
-                candidate.claims.append(
-                    _declared_claim(owner_id, record, candidate, declared)
-                )
+                found = _declared_claim(owner_id, record, candidate, declared)
+                if state.get("declared_only"):
+                    candidate.claims = [found]
+                else:
+                    candidate.claims.append(found)
             if authority is not None:
                 _stamp(candidate, authority=authority, actor=actor)
             candidates.append(candidate.model_dump(mode="json"))
@@ -682,6 +692,7 @@ def run_ingestion(
     actor: Actor | None = None,
     authority: Authority | None = None,
     declared: dict[str, str] | None = None,
+    declared_only: bool = False,
     reason: str = "",
 ) -> IngestionResult:
     """Runs the ingestion graph.
@@ -712,6 +723,7 @@ def run_ingestion(
             **({"actor": asdict(actor)} if actor else {}),
             **({"authority": authority.value} if authority else {}),
             **({"declared": declared} if declared else {}),
+            **({"declared_only": True} if declared_only else {}),
             **({"reason": reason} if reason else {}),
         },
         config=config,
