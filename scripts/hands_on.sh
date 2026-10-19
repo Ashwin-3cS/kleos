@@ -13,6 +13,22 @@
 #   ./scripts/hands_on.sh grants    # re-mint when the 8h TTL runs out
 #   ./scripts/hands_on.sh stop
 #
+# Extraction is the mock one by default, so this needs no model and no key. To
+# put a real model behind `record_decision` and `close_session(consolidate=true)`
+# -- a local llama.cpp, say -- set EXTRACTOR=llm and point LLM_BASE_URL at it:
+#
+#   GATEWAY_PORT=8081 ./scripts/run_local.sh     # llama.cpp wants 8080
+#   GATEWAY_URL=http://127.0.0.1:8081 \
+#   EXTRACTOR=llm LLM_BASE_URL=http://127.0.0.1:8080/v1 \
+#   EXTRACTION_MODEL=gemma-4-26b-a4b LLM_API_KEY=local LLM_TIMEOUT_SECS=300 \
+#     ./scripts/hands_on.sh
+#
+# A key is still *required* even where it is ignored: the extractor refuses to
+# construct without one rather than sending an unauthenticated request to
+# whatever `LLM_BASE_URL` turns out to point at. Any string does for a local
+# server. Raise the timeout: 60s is sized for a hosted provider and one record
+# through a partly-offloaded 26B takes about a minute.
+#
 # Memory is deliberately *not* wiped: the whole point is that it outlives the
 # session that wrote it.
 set -euo pipefail
@@ -24,6 +40,9 @@ GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:8080}"
 ORCH_URL="${ORCH_URL:-http://127.0.0.1:8090}"
 OWNER_TOKEN="${OWNER_TOKEN:-mock_google_alice}"
 TTL_SECS="${TTL_SECS:-28800}"
+#: `auto` follows ORCHESTRATOR_MODE, which is mock here. `llm` opts in to a
+#: real model for extraction and consolidation; see the header.
+EXTRACTOR="${EXTRACTOR:-auto}"
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 [ -x "$PY" ] || { echo "no venv at $PY; see orchestrator/README.md" >&2; exit 1; }
@@ -93,13 +112,14 @@ if [ "${1:-}" != "grants" ]; then
   curl -sf "$GATEWAY_URL/health" | jq -c '{status, enclave: .enclave.reachable}'
 
   echo
-  echo "== orchestrator + worker, MCP tools at $ORCH_URL/mcp =="
+  echo "== orchestrator + worker, MCP tools at $ORCH_URL/mcp (extractor: $EXTRACTOR) =="
   stop
   cd "$ORCH_DIR"
-  ORCHESTRATOR_MODE=mock MCP_HTTP_ENABLED=1 "$PY" -m orchestrator.api \
+  export ORCHESTRATOR_MODE=mock EXTRACTOR GATEWAY_URL
+  MCP_HTTP_ENABLED=1 "$PY" -m orchestrator.api \
     > "$ROOT_DIR/.local/orchestrator.log" 2>&1 &
   echo $! > "$ROOT_DIR/.local/orchestrator.pid"
-  ORCHESTRATOR_MODE=mock "$PY" -m orchestrator.jobs.worker \
+  "$PY" -m orchestrator.jobs.worker \
     > "$ROOT_DIR/.local/worker.log" 2>&1 &
   echo $! > "$ROOT_DIR/.local/worker.pid"
 
