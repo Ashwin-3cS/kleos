@@ -176,8 +176,9 @@ class RuleBasedConsolidator:
 class LLMConsolidator:
     """Consolidation through the same OpenAI-compatible provider as extraction.
 
-    Wired and unrun against a live API from this repository, like
-    `extraction/llm.py`. It reuses the extractor's client and retry behaviour by
+    Run against a local llama.cpp server (gemma-4-26b-a4b) and no hosted
+    provider, so the retry-on-429 path in `extraction/llm.py` that this reuses
+    is still unexercised. It reuses the extractor's client and retry behaviour by
     composition rather than inheritance: what differs is one prompt and the shape
     of the answer, and a subclass would inherit `extract()` too -- a method that
     asks the activity question and is exactly wrong for a scratchpad.
