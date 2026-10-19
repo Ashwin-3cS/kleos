@@ -43,6 +43,7 @@ is part of the history, and overwriting it loses why anyone thought otherwise.
 | [0022](/adr/0022-sensitive-actions-are-brokered-in-the-tee) | Sensitive actions are brokered in the TEE |
 | [0023](/adr/0023-the-owners-key-lives-in-the-browser) | The owner's key lives in the browser |
 | [0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device) | The enclave assembles, and re-seals to the asking device |
+| [0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks) | Reasoning across sessions, and why its output is a claim |
 
 The seven from 0016 are the agent harness, written after the fact: steps 1
 through 11 landed with their reasoning in commit messages and code comments,
@@ -50,7 +51,11 @@ which is the situation ADR 0001 exists to end.
 
 ## Open decisions
 
-Four are deliberately open, and each gets a record when it is made:
+Five are deliberately open, and each gets a record when it is made. Two were
+closed by later records: *whether `assemble` synthesises or formats* is pinned to
+formatting by [ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device),
+and *what the harness does with accumulated context* by
+[ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks).
 
 <CardGroup cols={2}>
 <Card title="Where extraction runs" icon="microchip">
@@ -58,8 +63,13 @@ Step 4. The tension is in [the confidentiality model](/concepts/confidentiality)
 derived memory is readable by the operator, and closing that needs client-side
 extraction or an attested model endpoint.
 </Card>
-<Card title="Whether assemble synthesises or formats" icon="pen">
-Step 2.
+<Card title="What triggers a reasoning pass" icon="pen">
+[ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks) rules
+out per-block and timer-based passes; the threshold itself is unchosen.
+</Card>
+<Card title="Whether the reasoning model may be hosted" icon="cloud">
+It decides the sentence the subscription rests on: the enclave's TLS tunnel hides
+the prompt from the operator, not from the provider that answers it.
 </Card>
 <Card title="Retention for transcripts and derived memory" icon="clock">
 Step 3.
