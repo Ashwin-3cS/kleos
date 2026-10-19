@@ -59,9 +59,9 @@ and *what the harness does with accumulated context* by
 
 <CardGroup cols={2}>
 <Card title="Where extraction runs" icon="microchip">
-Step 4. The tension is in [the confidentiality model](/concepts/confidentiality):
-derived memory is readable by the operator, and closing that needs client-side
-extraction or an attested model endpoint.
+The tension is in [the confidentiality model](/concepts/confidentiality):
+extraction and resolution still handle plaintext on the host, and the resolver
+unsealing *stored* claims is the sharper half.
 </Card>
 <Card title="What triggers a reasoning pass" icon="pen">
 [ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks) rules
@@ -72,9 +72,11 @@ It decides the sentence the subscription rests on: the enclave's TLS tunnel hide
 the prompt from the operator, not from the provider that answers it.
 </Card>
 <Card title="Retention for transcripts and derived memory" icon="clock">
-Step 3.
+Tracked and unscheduled, which is overdue for anything that accumulates
+somebody's memory by subscription.
 </Card>
 <Card title="Whether to adopt on-chain components at all" icon="link">
-Step 7, and only if beta users demonstrably need them.
+Only if beta users demonstrably need them. The blob store already has the shape
+Walrus has, so it stays a second implementation rather than a migration.
 </Card>
 </CardGroup>

@@ -47,25 +47,47 @@ The access token is used inside the enclave to identify the account and then
 dropped — never returned to the host at all. Only the enclave has the OAuth
 client secret, so the host cannot repeat the exchange itself.
 </Card>
-<Card title="Derived memory: no" icon="circle-xmark">
-Extraction runs in the Python orchestrator, outside the enclave, and in `live`
-mode it sends record text to an external LLM. Entities, events, claims, their
-text and their embeddings are written to Neo4j **in the clear**. An operator
-with database access reads the resolved memory.
+<Card title="Derived memory, on a read: yes" icon="circle-check">
+Closed by [ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device).
+The host ranks on structure and embeddings, reads none of the candidates, and
+hands them to the enclave still sealed; the enclave unseals, filters on real
+content, assembles and **re-encrypts the answer to the device that asked**. The
+host relays an opaque blob. Decrypting inside the TEE would have bought nothing
+on its own — the re-encryption is the decision.
+</Card>
+<Card title="Derived memory, on a write: not yet" icon="circle-xmark">
+Extraction and resolution still run in the Python orchestrator. The resolver is
+the sharper of the two: it unseals *already-stored* claims on every ingestion to
+compare against, so an operator watching one write sees far more than what was
+written. Cross-session reasoning
+([ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks)) is
+the same exposure with a wider aperture — every claim about a subject at once.
 </Card>
 </CardGroup>
 
 <Warning>
-That second column is a **real gap, not a technicality**: for many purposes the
-resolved record is the more sensitive artifact.
-
-It is a deliberate trade. Moving extraction into the enclave would mean putting
-an LLM call and the ingestion pipeline inside the thing being attested, which
-destroys the auditability that makes the attestation worth anything. Closing it
-properly needs a different answer — client-side extraction, or an attested model
-endpoint — and until that exists **the product should not claim the operator
-cannot read your memory. It can. What it cannot read is your mailbox.**
+The write side is a **real gap, not a technicality**: for many purposes the
+resolved record is the more sensitive artifact. Until it closes, **the product
+should not claim the operator cannot read your memory. It can read what a write
+touches. What it cannot read is your mailbox, or the answer to a read.**
 </Warning>
+
+<Note>
+**The model does not have to move into the enclave, and an earlier version of
+this page said it did.** The enclave already speaks TLS end to end for four
+Google and GitHub upstreams: `/etc/hosts` maps the real hostname to a loopback
+alias, socat forwards raw bytes over VSOCK, and the certificate is validated
+inside the TEE, so the host moves a stream it cannot read. What enters the
+measured image is an HTTP client, not an LLM — and `Upstream::host` is a
+compile-time constant precisely so a host-supplied endpoint cannot redirect it.
+
+What that does **not** buy is confidentiality from the provider that answers.
+TLS from inside the enclave hides the prompt from the operator and from nobody
+else. A self-hosted model is the only version where "we never see what it says"
+survives a reader who hears it as "nobody does" — and extraction and
+consolidation have both been run end to end against a local llama.cpp, so that
+is a real option rather than a hypothetical one.
+</Note>
 
 `ENCRYPT_CONTENT_AT_REST` narrows this: an event's summary and body, a claim's
 statement, an entity's name and aliases, and a citation's quote are sealed at

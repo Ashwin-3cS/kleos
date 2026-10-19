@@ -112,6 +112,65 @@ token rows are mock consents.
 .venv/bin/python -m orchestrator.mcp_server     # MCP server over stdio
 ```
 
+## Two devices, by hand
+
+`scripts/orchestrator_smoke.sh` and `scripts/mcp_smoke.py` both prove the
+cross-device flow with no model in the loop, which is what makes them
+regression tests and what makes them useless for *watching* it work. Neither
+leaves anything running afterwards.
+
+```bash
+./scripts/run_local.sh      # gateway + enclave
+./scripts/hands_on.sh       # orchestrator, MCP over HTTP, two grants
+```
+
+`hands_on.sh` sets the same thing up and stops: an orchestrator serving the
+tools over streamable HTTP, two device keys registered with the gateway, and two
+grants signed by them — one that may write and supersede, one that may only
+read. It prints the `claude mcp add` line and the text to paste into each chat,
+then gets out of the way. Memory is deliberately **not** wiped, unlike the smoke
+test: the point is that what one agent recorded outlives the session that
+recorded it.
+
+```bash
+./scripts/hands_on.sh grants   # re-mint when the 8h TTL runs out
+./scripts/hands_on.sh stop
+```
+
+<Note>
+The MCP endpoint needs the **trailing slash** — `.../mcp/`. The app is mounted
+at `/mcp` and its own endpoint inside is `/`, so `/mcp` redirects and a client
+that drops the session header across the redirect fails in a way that reads like
+a protocol bug.
+</Note>
+
+### Against a local model
+
+Extraction, page extraction and consolidation are three prompts through one
+OpenAI-compatible `/chat/completions` client, so a local `llama-server` is a
+base URL and a model name. Embeddings were already local, so with this
+configured **nothing in the harness leaves the machine**.
+
+```bash
+GATEWAY_PORT=8081 ./scripts/run_local.sh        # llama.cpp wants 8080
+GATEWAY_URL=http://127.0.0.1:8081 \
+EXTRACTOR=llm LLM_BASE_URL=http://127.0.0.1:8080/v1 \
+EXTRACTION_MODEL=<your model> LLM_API_KEY=local LLM_TIMEOUT_SECS=300 \
+  ./scripts/hands_on.sh
+```
+
+Three things that cost time once:
+
+- **llama.cpp's default port is 8080, which is the gateway's.** The collision
+  looks like a gateway bug, because `/health` still answers — with the wrong
+  JSON. Move one of them.
+- **`LLM_TIMEOUT_SECS=60` assumes a hosted provider.** One record through a
+  partly-offloaded 26B took 51s, so the shipped default is about one slow record
+  from an error that reads like the server being down.
+- **A key is required even where it is ignored.** The extractor refuses to
+  construct without one rather than sending an unauthenticated request to
+  wherever `LLM_BASE_URL` happens to point. Any string does.
+
 ## The explorer
 
 `GET /explorer` serves one self-contained HTML page — no build step, no npm, no

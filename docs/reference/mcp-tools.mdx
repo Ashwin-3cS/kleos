@@ -1,6 +1,6 @@
 ---
 title: "MCP tools"
-description: "The six tools an agent can call, and the ones that deliberately do not exist."
+description: "The tools an agent can call, and the ones that deliberately do not exist."
 ---
 
 Served over stdio by `python -m orchestrator.mcp_server`.
@@ -159,6 +159,63 @@ resolution, the write — is the ordinary ingestion path.
 agent holds a grant, so there is no path by which it can be sealed today. Refused
 up front rather than skipped inside the graph, where it would read as a partial
 success.
+</Warning>
+</Accordion>
+
+<Accordion title="reason_across_sessions(grant_token, subject)">
+Asks the harness what the sessions about one subject add up to.
+
+Everything else here reasons narrowly. A decision is resolved against stored
+claims one at a time, and a session is consolidated with only its own blocks in
+view. This reads **every claim about one subject**, across every session and
+every device that wrote one, and asks what holds across them that no single
+claim says. [ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks).
+
+`subject` is a name memory already knows — a project, an artifact, a topic.
+Matched the way canonicalisation matches entities, so "Lantern", "project
+Lantern" and a stored alias all reach the same subject. A subject memory has
+never heard of is refused rather than answered: this reasons over what was
+written, it does not go looking.
+
+**What comes back is written as claims, not prose.** That is the whole decision,
+and it turns on one property: a block cannot be superseded. Every correction
+mechanism here operates on claims — supersession, contradiction, reconciliation,
+status, the actor triple, the rule that fired. A stored paragraph goes stale with
+an authenticated actor attached and nothing in the service can fix it; a claim on
+the same topic from a later pass supersedes it through machinery that already
+works.
+
+| | |
+| --- | --- |
+| **Authority** | `reference`, **whatever the grant says**. Even under `may_supersede_owner`. A derived inference may contradict what somebody decided, visibly and with both sides kept, and may never replace it. |
+| **Attribution** | The harness. No device, because there is no device, and no borrowed agent label, because nobody chose a name for a writer that had none. `identity_basis` is `derived` — the one value that means *nobody asserted this*. |
+| **The gate** | The same `may_write` an agent's own write needs. A pass the owner did not ask for is not more entitled than an agent they did. |
+
+A briefing renders these as *"the harness, reasoning across sessions (derived,
+nobody asserted it)"*. An agent that cannot tell a derived inference from a
+decision somebody made will treat them alike, and these are the lines it should
+push back on.
+
+Three outcomes that are not failures:
+
+- **`declined` set** — fewer than two sessions have written about the subject.
+  One session's claims were already reasoned over when it closed, so a pass over
+  them would restate that session's own conclusions as something derived.
+- **`ran: true`, `conclusions: []`** — it looked and found nothing. The common
+  case. Several sessions about one subject usually add up to exactly what each
+  of them already said.
+- **`conclusions` present, `written: []`, no `errors`** — it reached conclusions
+  a previous pass already recorded. The record is dated to the newest claim it
+  was drawn from rather than to the clock, so re-running is idempotent, cheap
+  and safe.
+
+<Warning>
+In mock mode the two patterns it finds are structural — repeated reversal, and
+two devices holding incompatible positions — because those are arithmetic rather
+than judgement. With a model configured it runs **both**: the rules always, and
+the model for what it can add. Running the model instead of the rules lost the
+structural patterns exactly where a model was available, which is a bug this had
+and no longer has.
 </Warning>
 </Accordion>
 </AccordionGroup>

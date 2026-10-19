@@ -1,6 +1,6 @@
 ---
 title: "The agent harness"
-description: "Several agents, one mutable record: instance identity, short-term sessions, and the three states of memory."
+description: "Several agents, one mutable record: instance identity, short-term sessions, the three states of memory, and what the harness concludes for itself."
 ---
 
 Kleos is built for more than one agent. Claude Code on one device and ChatGPT on
@@ -153,6 +153,78 @@ session's `consolidated_into` is everything it ever produced.
 
 One refused conclusion does not refuse the rest: a grant covering episodes and
 not procedures keeps the episodes and reports what it would not keep.
+</Accordion>
+</AccordionGroup>
+
+## Reasoning across sessions
+
+Consolidation above asks what **one** session concluded, and it asks with no
+stored memory and no other sessions in view. The resolver compares one new
+statement against stored claims, pairwise and subject-scoped. Between them,
+nothing had ever looked at a *subject* and asked what the sessions about it add
+up to — so four sessions across two devices could all be about one project and
+the harness would have formed a view of each separately and of none of them
+together.
+
+`reason_across_sessions` is the pass that does.
+[ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks).
+
+<AccordionGroup>
+<Accordion title="Its output is a claim, not a stored block">
+The decision, and it turns on one property: **a block cannot be superseded.**
+
+Every correction mechanism in this service operates on claims. Store reasoned
+prose instead and you have something that goes stale with an authenticated actor
+attached, which none of the machinery built to fix exactly that can touch. The
+Lantern decision reverses tomorrow; every claim updates, and the paragraph still
+says what it said.
+
+Note how directly this applies to what a pass concludes. "Decisions about this
+subject have been reversed three times" is a statement with a shelf life — and
+as a claim, a later pass's conclusion on the same topic supersedes it for free.
+
+The rejected alternative was caching the briefing: safe, since every line traces
+to a claim id, but it buys latency rather than capability, and a stale cached
+block reads authoritative.
+</Accordion>
+<Accordion title="It may contradict a decision and may never replace one">
+Authority is capped at `reference` **whatever the grant says** — even under
+`may_supersede_owner`, which for an agent's own decision would make it a
+`delegate` write.
+
+This is the load-bearing constraint. A grant that says `may_supersede_owner` is
+the owner delegating to *an agent they named*, not to a reasoning pass nobody
+asked for, and a machine-derived inference quietly overwriting what somebody
+decided is the inversion of what this service is for.
+</Accordion>
+<Accordion title="A third identity basis: derived">
+`device_key` means the gateway verified a signature against a registered key.
+`label` means all that is known is the `agent_id` the owner typed into a scope.
+`derived` means **no identity was involved at all**.
+
+The harness has no device, like the owner's own ingestion — but unlike the
+owner's ingestion it is the *least* authoritative writer here rather than the
+most, so the two cannot render the same way. A briefing says "the harness,
+reasoning across sessions (derived, nobody asserted it)".
+
+A caller cannot write *as* the harness: a grant carrying that `agent_id` is
+refused by name rather than silently relabelled, because a relabel would hide
+that somebody tried.
+</Accordion>
+<Accordion title="It reads claims, not scratchpads">
+Consolidation already decided what of a session was worth keeping, and almost
+nothing was. Re-reading the blocks in the one component with the widest view
+would quietly reverse that — and claims carry what this needs anyway: the
+statement, the status the resolver assigned, and the device and session behind
+it.
+</Accordion>
+<Accordion title="Declining, concluding nothing, and concluding the same thing twice">
+Three distinct non-failures. Below two sessions it **declines**, because one
+session's claims were already reasoned over. It can run and conclude nothing,
+which is the common case. And reaching conclusions a previous pass already
+recorded writes none of them again: the record is dated to the newest claim it
+was drawn from rather than to the clock, the same choice consolidation makes for
+the same reason.
 </Accordion>
 </AccordionGroup>
 

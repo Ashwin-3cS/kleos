@@ -97,8 +97,8 @@ the Python orchestration service (ingestion, query, history and neighbourhood
 graphs, Neo4j-backed hybrid retrieval, query-time permissions); agent sessions
 as short-term memory; consolidation into kinded claims; the agent read log and
 the mutation log; the blob read path for sealed bodies; a read-only graph
-explorer; an MCP server with nine tools including one write, the briefing and
-the action broker; an owner dashboard that signs grants in the browser; and one
+explorer; an MCP server with ten tools including two writes, the briefing,
+cross-session reasoning and the action broker; an owner dashboard that signs grants in the browser; and one
 real connector -- ChatGPT, via the person's own data export.
 
 **What does not.** No SDK, no smart contracts. The TEE action
@@ -1140,10 +1140,12 @@ Typed, with real signatures, failing explicitly rather than silently:
 - **Wallet/domain identity signals** -- unchanged since the scaffold. (OAuth
   code exchange is no longer one: see "The confidentiality model".)
 - **The MCP server** (`orchestrator/src/orchestrator/mcp_server.py`) exposes
-  nine tools over stdio: three reads (`query_memory`, `why_this_shifted`,
-  `memory_context_chain`), three for session state (`open_session`,
-  `append_context`, `close_session`), the briefing (`brief_before_acting`),
-  **one write** (`record_decision`) and the action broker (`request_action`).
+  ten tools over stdio and streamable HTTP: three reads (`query_memory`,
+  `why_this_shifted`, `memory_context_chain`), three for session state
+  (`open_session`, `append_context`, `close_session`), the briefing
+  (`brief_before_acting`), **two writes** (`record_decision` and
+  `reason_across_sessions`, which both go through one gate) and the action
+  broker (`request_action`).
   Driven from a real client by `scripts/mcp_smoke.py`, which is what it took to
   find the four defects an in-process test cannot reach: a refusal that did not
   survive the transport, a briefing quoting the extractor instead of the agent's

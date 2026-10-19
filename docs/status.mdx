@@ -27,8 +27,14 @@ Short-term working context, stored sealed and deliberately not searchable until
 consolidated.
 </Card>
 <Card title="MCP server" icon="plug">
-Nine tools over stdio: reads, session state, the briefing, one write, and the
-action broker. Driven from a real client by `scripts/mcp_smoke.py`.
+Ten tools over stdio **and** streamable HTTP: reads, session state, the
+briefing, two writes, and the action broker. Driven from a real client over both
+transports by `scripts/mcp_smoke.py`.
+</Card>
+<Card title="Cross-session reasoning" icon="brain">
+`reason_across_sessions` reads every claim about a subject and writes what holds
+across them as claims, attributed to the harness and capped at `reference`.
+Works; not yet shippable — see below.
 </Card>
 <Card title="Owner dashboard" icon="sliders">
 Issue, inspect and revoke grants from a screen, with the signing key held in the
@@ -118,6 +124,30 @@ call could ever have succeeded in `nitro` mode**. It went unnoticed because
 `nitro` mode had never been run and `mock` mode short-circuits before the
 network. Fixed and unit-tested; still unproven on hardware.
 
+## Works, and not yet shippable
+
+<Warning>
+**Cross-session reasoning reads plaintext on the host.** `reason_across_sessions`
+unseals every stored claim about a subject in an ordinary host process — the
+same exposure as the resolver's, with a wider aperture. It is correct for
+development and is not the end state: the model call belongs inside the enclave,
+going out over the TLS tunnel the enclave already uses for OAuth.
+
+It is also **unmeasured**, and it is the one thing here that writes claims
+nobody asked for. There is no trigger threshold and no cost ceiling: only the
+explicit call exists, and it is the single model call in the service not bounded
+by top-k.
+</Warning>
+
+<Note>
+**An enclave's outbound TLS hides the prompt from the operator and from nobody
+else.** Whichever provider answers sees it. The confidentiality claim survives
+because we are not that provider — and a reader will hear "nobody sees it", so
+a self-hosted model is the only version where it survives being read plainly.
+Extraction and consolidation have been run end to end against a local
+llama.cpp, so that is a real option rather than a hypothetical one.
+</Note>
+
 ## Known sharp edges
 
 - **A grant cannot be revoked before it expires**, except per-object via
@@ -131,3 +161,8 @@ network. Fixed and unit-tested; still unproven on hardware.
 - **`POST /ingest` and `POST /remember` are unauthenticated** and take
   `owner_id` from the request body. The orchestrator binds to localhost, and
   that is currently the only control.
+- **A retried write reports nothing written.** `record_decision` called twice
+  with the same statement is correctly idempotent — the resolver recognises the
+  content-addressed duplicate — but the second call comes back with no claim
+  ids, so an idempotent write is indistinguishable from one that did nothing.
+  Read it alongside what the call returned rather than on its own.
