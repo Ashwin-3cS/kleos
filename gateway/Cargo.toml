@@ -11,12 +11,10 @@ path = "src/lib.rs"
 name = "gateway"
 path = "src/main.rs"
 
-# The owner's side of grant signing. Grants are signed by a key the owner holds,
-# so something has to hold it; in a finished product that is a browser or a
-# phone, and here it is this command. See ADR 0011.
-[[bin]]
-name = "kleos-device"
-path = "src/bin/kleos-device.rs"
+# `kleos-device` used to live here. It moved to its own crate when it gained an
+# X25519 half: a device that receives a sealed answer runs AES-GCM, and pulling
+# that into the gateway's dependency tree would have made the note on the
+# dev-dependency below false for the server too. See ADR 0011 and 0024.
 
 [dependencies]
 shared = { path = "../shared" }

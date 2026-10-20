@@ -31,6 +31,12 @@ Ten tools over stdio **and** streamable HTTP: reads, session state, the
 briefing, two writes, and the action broker. Driven from a real client over both
 transports by `scripts/mcp_smoke.py`.
 </Card>
+<Card title="The sealed read path" icon="lock">
+With content sealed at rest, the enclave assembles and re-encrypts the answer
+to the device that asked; the host relays a blob it cannot read. Proven end to
+end outside the browser — `kleos-device unseal` opens it, and another device
+is refused.
+</Card>
 <Card title="Cross-session reasoning" icon="brain">
 `reason_across_sessions` reads every claim about a subject and writes what holds
 across them as claims, attributed to the harness and capped at `reference`.
@@ -161,12 +167,15 @@ llama.cpp, so that is a real option rather than a hypothetical one.
 - **`POST /ingest` and `POST /remember` are unauthenticated** and take
   `owner_id` from the request body. The orchestrator binds to localhost, and
   that is currently the only control.
-- **Reads fail under `ENCRYPT_CONTENT_AT_REST`** until a device registers an
-  X25519 key: the gateway will not seal an answer to a device that has only a
-  signing key. Writes work — they did not until recently, and the fix gave a
-  writing grant the ability to cause stored content to be decrypted in a host
-  process so that resolution can compare against it. That is the same exposure
-  moving resolution into the enclave is meant to close.
+- **A device must register both key halves at once.** Ed25519 signs and X25519
+  receives, and the binding between them is the registration row — which is
+  immutable, so a key registered with only a signing half can never gain the
+  other. The failure arrives much later, as a 400 from `/memory/assemble` when
+  an answer cannot be sealed to the device that asked.
+- **A writing grant can cause stored content to be decrypted in a host
+  process**, so that resolution can compare a new statement against existing
+  ones. Nothing is disclosed to the agent, but it is the exposure that moving
+  resolution into the enclave is meant to close.
 - **A gateway error crossing MCP loses its reason.** It arrives at the agent as
   `Error executing tool <name>`; the explanation is in the orchestrator log
   only. Refusals were fixed by returning rather than raising; errors were not.

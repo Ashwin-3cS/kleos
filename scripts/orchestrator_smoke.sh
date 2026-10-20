@@ -97,7 +97,7 @@ curl -sf "$ORCH_URL/ingest/$JOB_ID" | jq '{status, result}'
 # each scope locally. The gateway has no route that mints one (ADR 0011).
 DEVICE_KEY="$ROOT_DIR/.local/device.key"
 SIGNER="$ROOT_DIR/target/debug/kleos-device"
-[ -x "$SIGNER" ] || cargo build -q -p gateway --bin kleos-device
+[ -x "$SIGNER" ] || cargo build -q -p device --bin kleos-device
 [ -f "$DEVICE_KEY" ] || "$SIGNER" keygen --key "$DEVICE_KEY" >/dev/null
 
 echo
@@ -106,7 +106,9 @@ PUBKEY=$("$SIGNER" pubkey --key "$DEVICE_KEY")
 curl -sf -X POST "$GATEWAY_URL/auth/device/register" \
   -H 'content-type: application/json' \
   -H "Authorization: Bearer $SESSION_TOKEN" \
-  -d "{\"public_key_b64\": \"$PUBKEY\", \"label\": \"smoke-test\"}" \
+  -d "{\"public_key_b64\": \"$PUBKEY\",
+       \"encryption_key_b64\": \"$("$SIGNER" pubkey --key "$DEVICE_KEY" --encryption)\",
+       \"label\": \"smoke-test\"}" \
   | jq -c '{key_id, label, registered_at_ms}'
 
 # Signs a scope read from stdin. The private key never leaves this machine.
@@ -247,7 +249,9 @@ PUBKEY_2=$("$SIGNER" pubkey --key "$DEVICE_2_KEY")
 curl -sf -X POST "$GATEWAY_URL/auth/device/register" \
   -H 'content-type: application/json' \
   -H "Authorization: Bearer $SESSION_TOKEN" \
-  -d "{\"public_key_b64\": \"$PUBKEY_2\", \"label\": \"smoke-device-2\"}" \
+  -d "{\"public_key_b64\": \"$PUBKEY_2\",
+       \"encryption_key_b64\": \"$("$SIGNER" pubkey --key "$DEVICE_2_KEY" --encryption)\",
+       \"label\": \"smoke-device-2\"}" \
   | jq -c '{key_id, label}'
 
 DEVICE_1_ID=$("$SIGNER" key-id --key "$DEVICE_KEY")

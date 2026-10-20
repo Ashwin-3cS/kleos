@@ -60,7 +60,7 @@ stop() {
 [ "${1:-}" = "stop" ] && { stop; exit 0; }
 
 SIGNER="$ROOT_DIR/target/debug/kleos-device"
-[ -x "$SIGNER" ] || cargo build -q -p gateway --bin kleos-device
+[ -x "$SIGNER" ] || cargo build -q -p device --bin kleos-device
 
 # The owner signs grants with a key only they hold; the gateway has no route
 # that mints one (ADR 0011). So this behaves like a client: keygen once, register
@@ -74,11 +74,19 @@ mint_grants() {
   for n in 1 2; do
     key="$ROOT_DIR/.local/hands-on-device$n.key"
     [ -f "$key" ] || "$SIGNER" keygen --key "$key" >/dev/null
-    # Registration is idempotent by design: the binding between a signing key
-    # and its X25519 half is the row, and re-registering must not move it.
+    # **Both halves, in one registration.** Ed25519 signs and X25519 receives,
+    # and the binding between them is this row -- which is immutable by design,
+    # so a key registered with only a signing half can never gain the other.
+    # Without the encryption key a device cannot be sent a sealed answer at
+    # all, and the failure arrives much later as a 400 from /memory/assemble.
+    #
+    # Registration is idempotent, so re-running this is safe and does *not*
+    # move an existing binding.
     curl -s -X POST "$GATEWAY_URL/auth/device/register" \
       -H 'content-type: application/json' -H "Authorization: Bearer $SESSION_TOKEN" \
-      -d "{\"public_key_b64\": \"$("$SIGNER" pubkey --key "$key")\", \"label\": \"hands-on-$n\"}" \
+      -d "{\"public_key_b64\": \"$("$SIGNER" pubkey --key "$key")\",
+           \"encryption_key_b64\": \"$("$SIGNER" pubkey --key "$key" --encryption)\",
+           \"label\": \"hands-on-$n\"}" \
       >/dev/null
   done
 

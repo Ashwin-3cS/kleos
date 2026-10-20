@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["enclave", "gateway", "shared"]
+members = ["device", "enclave", "gateway", "shared"]
 
 [workspace.package]
 edition = "2021"
