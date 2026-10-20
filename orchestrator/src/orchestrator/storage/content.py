@@ -122,12 +122,21 @@ class ContentCrypto:
     #: see ADR 0024 and the note in ``graphs/query.py``.
     seals_content = True
 
-    def __init__(self, gateway, grant_token: str | None = None) -> None:
+    def __init__(
+        self, gateway, grant_token: str | None = None, purpose: str = "read"
+    ) -> None:
         self._gateway = gateway
         self._grant_token = grant_token
+        #: ``read`` unseals for *disclosure to the agent* and needs
+        #: `may_unseal`; ``write`` unseals so the resolver and canonicaliser can
+        #: compare against stored content, which discloses nothing and needs
+        #: `may_write`. Two capabilities for two different acts -- see the
+        #: gateway's `unseal_for_resolution`.
+        self._purpose = purpose
 
-    def for_grant(self, grant_token: str) -> ContentCrypto:
-        """This, but unsealing under an agent's grant instead of an owner session.
+    def for_grant(self, grant_token: str, purpose: str = "read") -> ContentCrypto:
+        """This, but sealing *and* unsealing under an agent's grant instead of
+        an owner session.
 
         **This closes a live defect rather than adding a feature.** Sealing
         happens during ingestion, which holds an owner session. Unsealing happens
@@ -137,11 +146,16 @@ class ContentCrypto:
         unusable. The only reason it had never been seen is that it defaults off,
         because the smoke script and the eval run without a gateway.
 
+        The write side had the same defect and kept it longer: `seal_node` on
+        the way into storage also went through the owner-session route, so with
+        the setting on an agent could not write at all. `_seal_text` now follows
+        the same rule as `_unseal_text` -- the grant when there is one.
+
         A new instance rather than a mutable field, because one `Runtime` serves
         concurrent reads and a token parked on the shared object would be read by
         whichever request got there next.
         """
-        return ContentCrypto(self._gateway, grant_token)
+        return ContentCrypto(self._gateway, grant_token, purpose)
 
     # -- sealing ---------------------------------------------------------
 
@@ -211,12 +225,25 @@ class ContentCrypto:
     # -- the trust-boundary crossings ------------------------------------
 
     def _seal_text(self, plaintext: str) -> str:
-        sealed = self._gateway.seal_encrypt(plaintext.encode())
+        # Under a grant when there is one, under the owner session otherwise.
+        # Sealing needed an owner session until now, and the ingestion graph has
+        # one only when the *owner's* sources are being pulled -- an agent
+        # writing a decision holds a grant, so every agent write failed here
+        # with "no owner session" as soon as `ENCRYPT_CONTENT_AT_REST` was on.
+        # The same shape `_unseal_text` already had, for the same reason.
+        if self._grant_token:
+            sealed = self._gateway.seal_for_grant(plaintext.encode(), self._grant_token)
+        else:
+            sealed = self._gateway.seal_encrypt(plaintext.encode())
         return pack(sealed.ref.key_id, sealed.ciphertext)
 
     def _unseal_text(self, value: str) -> str:
         key_id, ciphertext = unpack(value)
         if self._grant_token is not None:
+            if self._purpose == "write":
+                return self._gateway.unseal_for_resolution(
+                    ciphertext, key_id, self._grant_token
+                ).decode()
             return self._gateway.unseal_for_grant(
                 ciphertext, key_id, self._grant_token
             ).decode()
@@ -235,7 +262,7 @@ class NullContentCrypto:
 
     seals_content = False
 
-    def for_grant(self, grant_token: str) -> NullContentCrypto:
+    def for_grant(self, grant_token: str, purpose: str = "read") -> NullContentCrypto:
         """Nothing is sealed, so there is nothing to authorise. Returns itself so
         a read path can call this unconditionally."""
         return self

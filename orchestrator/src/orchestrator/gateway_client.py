@@ -164,6 +164,68 @@ class GatewayClient:
         )
         return base64.b64decode(body["plaintext_b64"])
 
+    def seal_for_grant(self, plaintext: bytes, grant_token: str) -> SealedContent:
+        """Seals content under an agent's own grant, with no owner session.
+
+        The symmetric half of `unseal_for_grant`, and it closes the same defect
+        on the write side. `seal_encrypt` above is `auth=True`: it takes the
+        owner from an **owner session**, which the ingestion graph has when the
+        owner's own sources are pulled and an agent never has. With
+        `ENCRYPT_CONTENT_AT_REST` on, that made every agent write fail at the
+        seal with "no owner session" -- so the confidentiality setting and the
+        agent write path could not both be on. Unseen until now because the
+        setting defaults off, exactly as the read-side version was.
+
+        The gateway verifies the grant, checks `may_write` and takes the owner
+        from the verified scope, so the owner is at least as unspoofable as it
+        is behind a session.
+        """
+        body = self._post(
+            "/memory/seal/for-grant",
+            {
+                "grant_token": grant_token,
+                "plaintext_b64": base64.b64encode(plaintext).decode(),
+            },
+        )
+        ciphertext = base64.b64decode(body["ciphertext_b64"])
+        return SealedContent(
+            ciphertext=ciphertext,
+            ref=EncryptedContentRef(
+                key_id=body["key_id"],
+                scheme=body["scheme"],
+                blob_id=None,
+                byte_len=len(ciphertext),
+            ),
+            attestation=body.get("attestation", ""),
+        )
+
+    def unseal_for_resolution(
+        self, ciphertext: bytes, key_id: str, grant_token: str
+    ) -> bytes:
+        """Unseals stored content so an agent's write can be resolved against it.
+
+        Gated on `may_write`, not `may_unseal`. The resolver compares a new
+        statement against stored claims and canonicalisation compares a new
+        entity name against stored ones; both see ciphertext otherwise and
+        silently find nothing, so an agent's *second* write about any subject
+        stopped superseding anything. Nothing is disclosed to the agent here --
+        the comparison happens in this process -- which is why requiring the
+        reading capability would be a privilege widened for convenience.
+
+        It does widen what a write grant can cause: stored content decrypted in
+        a host process. That is the `resolver.py:221` exposure and it is what
+        step 5 closes.
+        """
+        body = self._post(
+            "/memory/seal/for-resolution",
+            {
+                "grant_token": grant_token,
+                "ciphertext_b64": base64.b64encode(ciphertext).decode(),
+                "key_id": key_id,
+            },
+        )
+        return base64.b64decode(body["plaintext_b64"])
+
     def unseal_for_grant(self, ciphertext: bytes, key_id: str, grant_token: str) -> bytes:
         """Unseals content under an agent's own grant, with no owner session.
 

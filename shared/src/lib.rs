@@ -22,7 +22,8 @@ pub use permissions::{
 pub use protocol::{
     IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest, OAuthExchangeResponse,
     ActionAck, ActionIntent, AssembleCandidate, AssembleDenial, AssembleRequest, AssembleResponse,
-    AssembledAnswer, AssembledCitation, GrantUnsealRequest, ScopeGrantRequest, ScopeGrantResponse,
+    AssembledAnswer, AssembledCitation, GrantSealRequest, GrantUnsealRequest, ScopeGrantRequest,
+    ScopeGrantResponse,
     ScopeIntrospectRequest,
     ScopeIntrospectResponse,
     SealDecryptRequest, SealDecryptResponse, SealEncryptRequest, SealEncryptResponse,

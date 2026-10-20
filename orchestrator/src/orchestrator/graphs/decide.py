@@ -269,6 +269,10 @@ def record_decision(
         # work it did, and what extraction finds beside the declaration there is
         # often a real second claim.
         declared_only=derived,
+        # So the seal on the way into storage goes through the grant. An agent
+        # has no owner session, and before this `ENCRYPT_CONTENT_AT_REST` made
+        # every agent write fail inside the gateway client.
+        grant_token=grant_token,
         # The agent's own words, carried to the mutation the briefing quotes.
         # Without this the create entry falls back to "extracted from a record"
         # and every advisory reads "because extracted from a record" -- true of

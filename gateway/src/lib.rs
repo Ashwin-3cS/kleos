@@ -55,6 +55,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/memory/seal/unseal",
             post(routes::memory::seal_unseal_for_grant),
         )
+        .route(
+            "/memory/seal/for-grant",
+            post(routes::memory::seal_encrypt_for_grant),
+        )
+        .route(
+            "/memory/seal/for-resolution",
+            post(routes::memory::unseal_for_resolution),
+        )
         .route("/auth/device/register", post(routes::memory::device_register))
         .route("/auth/device/keys", get(routes::memory::device_keys))
         .route("/auth/device/revoke", post(routes::memory::device_revoke))

@@ -704,3 +704,62 @@ async fn the_same_key_cannot_be_claimed_by_two_owners() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn sealing_under_a_grant_needs_the_grant_to_permit_writing() {
+    // `/memory/seal/encrypt` takes an owner session, which an agent has none of
+    // -- so with content sealed at rest an agent could not write at all. This
+    // route closes that, and the capability it asks for is `may_write`: sealing
+    // is what a write does on its way into storage, and it discloses nothing.
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+
+    let read_only =
+        shared::sign_grant(&scope("owner-1", "agent-1"), &kp, now_ms(), HOUR_MS, "n1").unwrap();
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/seal/for-grant",
+            None,
+            json!({"grant_token": read_only, "plaintext_b64": "AAAA"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a read-only grant has nothing to seal"
+    );
+}
+
+#[tokio::test]
+async fn resolution_unsealing_asks_for_may_write_and_not_may_unseal() {
+    // Two different acts, two different capabilities. Resolution unseals stored
+    // content so the resolver can compare against it; nothing is disclosed to
+    // the agent, so requiring the *reading* capability would force every
+    // writing grant to carry one it does not need.
+    let state = state();
+    let kp = keypair();
+    register(&state, "owner-1", &kp).await;
+
+    // A grant that may unseal but may not write is refused here, which is the
+    // half that proves the two routes are not interchangeable.
+    let mut reader = scope("owner-1", "agent-1");
+    reader.may_unseal = true;
+    let token = shared::sign_grant(&reader, &kp, now_ms(), HOUR_MS, "n1").unwrap();
+    let (status, _) = call(
+        &state,
+        post(
+            "/memory/seal/for-resolution",
+            None,
+            json!({"grant_token": token, "ciphertext_b64": "AAAA", "key_id": "k"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "may_unseal is not a licence to resolve a write"
+    );
+}

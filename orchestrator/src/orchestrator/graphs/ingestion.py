@@ -83,6 +83,12 @@ class IngestionState(TypedDict, total=False):
     #: ``{record external_id: statement}``. A claim the *caller* asserts rather
     #: than one extraction found. See `_declared_claim`.
     declared: dict[str, str]
+    #: The agent's grant, when this run is an agent's write. Sealing on the way
+    #: into storage needs an owner session otherwise, and an agent has none --
+    #: so without this, `ENCRYPT_CONTENT_AT_REST` made agent writes impossible.
+    #: Never used to decide *whether* the write is allowed: `record_decision`
+    #: settled that before the graph was entered.
+    grant_token: str
     #: Keep *only* the declared claim and discard what extraction found in the
     #: same record. For a harness-derived conclusion (ADR 0025), where the body
     #: is a statement a model produced: re-extracting it yields a reworded
@@ -154,14 +160,28 @@ class IngestionResult:
         }
 
 
-def build_ingestion_graph(runtime: Runtime):
+def build_ingestion_graph(runtime: Runtime, grant_token: str | None = None):
     # Stored claims are sealed at rest, so the resolver is handed the means to
     # read them back -- otherwise it would compare plaintext against ciphertext
     # and never notice a decision being superseded (ADR 0010).
-    resolver = Resolver(runtime.store, unseal=runtime.content.unseal_node)
+    #
+    # **Through the grant when this run has one.** Both of these read *stored*
+    # content: the resolver unseals existing claims to compare against, and the
+    # canonicaliser unseals existing entity names. Both went through the
+    # owner-session route, and an agent has no owner session -- so with
+    # `ENCRYPT_CONTENT_AT_REST` on, an agent's write failed here as soon as the
+    # owner's memory held anything about the same subject. The first write of a
+    # subject succeeded and the second did not, which is the worst shape a bug
+    # like this can have.
+    content = (
+        runtime.content.for_grant(grant_token, purpose="write")
+        if grant_token
+        else runtime.content
+    )
+    resolver = Resolver(runtime.store, unseal=content.unseal_node)
     canonicaliser = Canonicaliser(
         runtime.store,
-        unseal=runtime.content.unseal_node,
+        unseal=content.unseal_node,
         limit=runtime.settings.canonicalise_max_entities,
     )
 
@@ -384,7 +404,7 @@ def build_ingestion_graph(runtime: Runtime):
             candidate = Candidate.model_validate(raw)
 
             for entity in candidate.entities:
-                _upsert(runtime, entity)
+                _upsert(runtime, entity, content)
                 written.append(entity.id)
                 touched["entities"].add(entity.id)
 
@@ -404,7 +424,7 @@ def build_ingestion_graph(runtime: Runtime):
                     errors.append(f"skipped {event.id}: sensitive body was not sealed")
                     skipped += 1
                     continue
-                _upsert(runtime, event)
+                _upsert(runtime, event, content)
                 written.append(event.id)
                 touched["events"].add(event.id)
                 for entity_id in event.entity_ids:
@@ -414,7 +434,7 @@ def build_ingestion_graph(runtime: Runtime):
                         link(event.id, "CITES", citation.event_id)
 
             for claim in candidate.claims:
-                created = _upsert(runtime, claim)
+                created = _upsert(runtime, claim, content)
                 written.append(claim.id)
                 touched["claims"].add(claim.id)
                 if created:
@@ -668,7 +688,7 @@ def _stamp(candidate: Candidate, *, authority: str, actor: Actor) -> None:
         node.provenance.actor_session_id = actor.session_id
 
 
-def _upsert(runtime: Runtime, node) -> bool:
+def _upsert(runtime: Runtime, node, content=None) -> bool:
     """Embeds from plaintext, then seals, then writes.
 
     The order is the whole correctness condition. An embedding computed after
@@ -676,9 +696,14 @@ def _upsert(runtime: Runtime, node) -> bool:
     quietly useless while every test that checks structure kept passing. So the
     plaintext text is taken first, and the node that reaches the store has its
     content fields already sealed (ADR 0010).
+
+    ``content`` is the sealer to use. It is the runtime's own unless this run
+    carries a grant, in which case sealing goes through the grant rather than
+    through an owner session the agent does not have.
     """
     embedding = runtime.embedder.embed(text_for_index(node))
-    return runtime.store.upsert(runtime.content.seal_node(node), embedding)
+    sealer = content if content is not None else runtime.content
+    return runtime.store.upsert(sealer.seal_node(node), embedding)
 
 
 def run_ingestion(
@@ -693,6 +718,7 @@ def run_ingestion(
     authority: Authority | None = None,
     declared: dict[str, str] | None = None,
     declared_only: bool = False,
+    grant_token: str | None = None,
     reason: str = "",
 ) -> IngestionResult:
     """Runs the ingestion graph.
@@ -711,7 +737,7 @@ def run_ingestion(
     resolver's source-based fallback working for material stored before any of
     this existed.
     """
-    graph = build_ingestion_graph(runtime)
+    graph = build_ingestion_graph(runtime, grant_token)
     config = {"configurable": {"thread_id": thread_id or f"ingest:{owner_id}:{source}"}}
     final = graph.invoke(
         {
@@ -724,6 +750,7 @@ def run_ingestion(
             **({"authority": authority.value} if authority else {}),
             **({"declared": declared} if declared else {}),
             **({"declared_only": True} if declared_only else {}),
+            **({"grant_token": grant_token} if grant_token else {}),
             **({"reason": reason} if reason else {}),
         },
         config=config,

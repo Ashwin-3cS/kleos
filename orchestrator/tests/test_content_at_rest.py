@@ -590,3 +590,89 @@ def test_ingestion_still_seals_under_the_owner_session(runtime: Runtime) -> None
 
     assert runtime.gateway.seals > 0
     assert runtime.gateway.session_unseals >= 0, "ingestion may unseal to resolve"
+
+
+# -- sealing when the writer is an agent --------------------------------
+
+
+class _RoutingGateway:
+    """Records which seal/unseal route each call took."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def seal_encrypt(self, plaintext: bytes):
+        self.calls.append("owner-session-seal")
+        return _sealed(plaintext)
+
+    def seal_for_grant(self, plaintext: bytes, grant_token: str):
+        self.calls.append("grant-seal")
+        return _sealed(plaintext)
+
+    def seal_decrypt(self, ciphertext: bytes, key_id: str) -> bytes:
+        self.calls.append("owner-session-unseal")
+        return bytes(ciphertext)
+
+    def unseal_for_grant(self, ciphertext: bytes, key_id: str, grant_token: str) -> bytes:
+        self.calls.append("grant-unseal-read")
+        return bytes(ciphertext)
+
+    def unseal_for_resolution(
+        self, ciphertext: bytes, key_id: str, grant_token: str
+    ) -> bytes:
+        self.calls.append("grant-unseal-write")
+        return bytes(ciphertext)
+
+
+def _sealed(plaintext: bytes):
+    from orchestrator.gateway_client import EncryptedContentRef, SealedContent
+
+    return SealedContent(
+        ciphertext=plaintext,
+        ref=EncryptedContentRef(
+            key_id="k1", scheme="test", blob_id=None, byte_len=len(plaintext)
+        ),
+        attestation="",
+    )
+
+
+def test_an_agents_write_seals_through_its_grant_not_an_owner_session() -> None:
+    """The defect this closes: `seal_encrypt` is owner-session-authorised and an
+    agent has none, so with `ENCRYPT_CONTENT_AT_REST` on every agent write
+    failed at the seal with "no owner session" -- the confidentiality setting
+    and the agent write path could not both be on. Unseen because the setting
+    defaults off, exactly as the read-side version of this was."""
+    from orchestrator.storage.content import ContentCrypto
+
+    gateway = _RoutingGateway()
+    ContentCrypto(gateway).for_grant("grant-1", purpose="write")._seal_text("hello")
+
+    assert gateway.calls == ["grant-seal"]
+
+
+def test_without_a_grant_sealing_still_goes_through_the_owner_session() -> None:
+    """The owner's own ingestion has a session and no grant, and must keep
+    working exactly as it did."""
+    from orchestrator.storage.content import ContentCrypto
+
+    gateway = _RoutingGateway()
+    ContentCrypto(gateway)._seal_text("hello")
+
+    assert gateway.calls == ["owner-session-seal"]
+
+
+def test_resolution_and_disclosure_unseal_through_different_routes() -> None:
+    """Two acts, two capabilities. Unsealing so the resolver can compare
+    against stored content discloses nothing to the agent and asks for
+    `may_write`; unsealing a body *for* the agent is a disclosure and asks for
+    `may_unseal`. One route for both would make every writing grant carry a
+    reading capability it does not need."""
+    from orchestrator.storage.content import ContentCrypto, pack
+
+    sealed = pack("k1", b"ciphertext")
+    gateway = _RoutingGateway()
+
+    ContentCrypto(gateway).for_grant("g", purpose="write")._unseal_text(sealed)
+    ContentCrypto(gateway).for_grant("g")._unseal_text(sealed)
+
+    assert gateway.calls == ["grant-unseal-write", "grant-unseal-read"]

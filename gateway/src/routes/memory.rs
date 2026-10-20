@@ -9,7 +9,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use shared::{
     ActionAck, ActionIntent, AssembleCandidate, AssembleRequest, AssembleResponse,
-    GrantUnsealRequest, ScopeIntrospectRequest,
+    GrantSealRequest, GrantUnsealRequest, ScopeIntrospectRequest,
     ScopeIntrospectResponse, SealDecryptRequest, SealDecryptResponse,
     SealEncryptRequest, SealEncryptResponse,
 };
@@ -69,6 +69,125 @@ pub async fn seal_decrypt(
     let session = require_session(&headers, state.config.keys.session())?;
     let req = SealDecryptRequest {
         owner_id: session.owner_id,
+        ciphertext_b64: req.ciphertext_b64,
+        key_id: req.key_id,
+    };
+    let response = state.enclave.seal_decrypt(&req).await?;
+    Ok(Json(response))
+}
+
+/// Seals record content for an **agent**, authorised by the grant it holds.
+///
+/// `seal_encrypt` above takes an owner session, which the ingestion graph has
+/// when the *owner's* sources are being pulled. An agent writing a decision has
+/// a grant and nothing else, so with `ENCRYPT_CONTENT_AT_REST` on, every agent
+/// write failed at the seal with "no owner session" -- the confidentiality
+/// setting and the agent write path were mutually exclusive. This is the
+/// symmetric half of `seal_unseal_for_grant`, which closed the same defect on
+/// the read side.
+///
+/// Gated on `may_write`, not on `may_unseal`. Sealing is what a write does on
+/// its way into storage, and a grant that may write is already a grant that may
+/// put this content in the record -- encrypting it on the way in takes nothing
+/// further. A read-only grant reaching here is a bug in the caller, and is
+/// refused by name rather than silently sealing.
+///
+/// Note what this route cannot be turned into: it returns ciphertext under the
+/// owner's key and nothing else. It discloses nothing, so the asymmetry with
+/// unsealing -- which needs its own capability because reading a body is a
+/// disclosure -- is deliberate rather than an oversight.
+pub async fn seal_encrypt_for_grant(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GrantSealRequest>,
+) -> Result<Json<SealEncryptResponse>, GatewayError> {
+    let (claims, _, _) = shared::grants::parse_unverified(&req.grant_token)
+        .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+    let registered = state.device_keys.get(&claims.key_id).await?;
+
+    let scope = shared::verify_grant(
+        &req.grant_token,
+        |_| {
+            registered.map(|key| shared::RegisteredKey {
+                owner_id: key.owner_id.clone(),
+                public_key: key.public_key.clone(),
+                revoked: key.is_revoked(),
+            })
+        },
+        now_ms(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+
+    if !scope.may_write {
+        return Err(GatewayError::Unauthorized(
+            "this grant does not permit writing, so there is nothing for it to              seal: content is sealed on its way into the record"
+                .into(),
+        ));
+    }
+
+    // The owner comes from the verified scope, never from the request.
+    let req = SealEncryptRequest {
+        owner_id: scope.owner_id,
+        plaintext_b64: req.plaintext_b64,
+    };
+    let response = state.enclave.seal_encrypt(&req).await?;
+    Ok(Json(response))
+}
+
+/// Unseals stored content so that an agent's **write** can be resolved against
+/// it. Gated on `may_write`, deliberately not on `may_unseal`.
+///
+/// Resolution reads what is already stored: the resolver compares a new
+/// statement against existing claims, and canonicalisation compares a new
+/// entity name against existing ones. Both must see plaintext or they compare
+/// against ciphertext and silently find nothing. With content sealed at rest
+/// and an agent holding only a grant, an agent's second write about any subject
+/// failed here -- the first succeeded, because there was nothing stored to
+/// compare against yet, which is the worst shape this kind of bug can have.
+///
+/// **Why not `may_unseal`.** That capability means *this agent may read the raw
+/// body behind a claim it was shown* (ADR 0020) -- a disclosure to the agent.
+/// Nothing is disclosed here: the plaintext is compared inside the orchestrator
+/// and the agent receives supersession and contradiction ids it would get
+/// anyway. Requiring `may_unseal` would force every writing grant to carry a
+/// reading capability it does not need, which is a privilege widened for
+/// convenience.
+///
+/// **What this does widen.** A grant that may write can now cause stored
+/// content to be decrypted in a host process. That is the `resolver.py:221`
+/// exposure, and it is exactly what step 5 closes by moving resolution into the
+/// enclave. Until then an agent write against sealed memory cannot resolve
+/// without it, and a write that cannot resolve is a write that silently stops
+/// superseding anything.
+pub async fn unseal_for_resolution(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GrantUnsealRequest>,
+) -> Result<Json<SealDecryptResponse>, GatewayError> {
+    let (claims, _, _) = shared::grants::parse_unverified(&req.grant_token)
+        .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+    let registered = state.device_keys.get(&claims.key_id).await?;
+
+    let scope = shared::verify_grant(
+        &req.grant_token,
+        |_| {
+            registered.map(|key| shared::RegisteredKey {
+                owner_id: key.owner_id.clone(),
+                public_key: key.public_key.clone(),
+                revoked: key.is_revoked(),
+            })
+        },
+        now_ms(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+
+    if !scope.may_write {
+        return Err(GatewayError::Unauthorized(
+            "this grant does not permit writing, so it has no write to resolve.              Reading a sealed body under a grant is /memory/seal/unseal, which              needs may_unseal."
+                .into(),
+        ));
+    }
+
+    let req = SealDecryptRequest {
+        owner_id: scope.owner_id,
         ciphertext_b64: req.ciphertext_b64,
         key_id: req.key_id,
     };

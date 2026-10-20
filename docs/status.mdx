@@ -161,13 +161,12 @@ llama.cpp, so that is a real option rather than a hypothetical one.
 - **`POST /ingest` and `POST /remember` are unauthenticated** and take
   `owner_id` from the request body. The orchestrator binds to localhost, and
   that is currently the only control.
-- **`ENCRYPT_CONTENT_AT_REST` and agent writes are mutually exclusive today.**
-  Sealing a field reaches the enclave through a route authorised by an **owner
-  session**, and an agent holds a grant — so with sealing on, every
-  `record_decision` fails with "no owner session". Reads under sealing fail
-  too, at a different point: the gateway will not seal an answer to a device
-  that registered only a signing key. Both are confirmed end to end against a
-  real gateway and enclave.
+- **Reads fail under `ENCRYPT_CONTENT_AT_REST`** until a device registers an
+  X25519 key: the gateway will not seal an answer to a device that has only a
+  signing key. Writes work — they did not until recently, and the fix gave a
+  writing grant the ability to cause stored content to be decrypted in a host
+  process so that resolution can compare against it. That is the same exposure
+  moving resolution into the enclave is meant to close.
 - **A gateway error crossing MCP loses its reason.** It arrives at the agent as
   `Error executing tool <name>`; the explanation is in the orchestrator log
   only. Refusals were fixed by returning rather than raising; errors were not.

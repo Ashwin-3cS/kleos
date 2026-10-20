@@ -76,6 +76,23 @@ pub struct GrantUnsealRequest {
     pub key_id: String,
 }
 
+/// Seal content for an *agent*, authorised by the grant it already holds.
+///
+/// The symmetric half of [`GrantUnsealRequest`], and it exists for the same
+/// reason: [`SealEncryptRequest`] takes the owner from an **owner session**,
+/// and an agent has none. Without this, turning on content-at-rest encryption
+/// stops an agent writing at all -- the seal on the way into storage fails with
+/// "no owner session" long before anything reaches the database.
+///
+/// The owner is not a field here either. A caller that could name the owner
+/// could seal content under somebody else's key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct GrantSealRequest {
+    pub grant_token: String,
+    pub plaintext_b64: String,
+}
+
 /// Owner-authorised grant of a query scope to a named agent. Minted by the
 /// gateway against an authenticated owner session; the resulting token is
 /// what the orchestrator's query graph presents back for introspection.
