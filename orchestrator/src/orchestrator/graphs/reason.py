@@ -30,10 +30,11 @@ different words, and a reworded conclusion is a different content address. Three
 things bound that, and none of them closes it: the pass never reads its own
 conclusions back (see `_observations`), it tells the reasoner what it already
 concluded, and the resolver compares whatever does get written against the
-earlier version rather than letting both stand as independent facts. Measured on
-gpt-oss-120b: four conclusions on the first pass, one on the second, which is
-decaying rather than fixed. **This is why the trigger threshold matters** and
-why running the pass in a loop is the wrong shape.
+earlier version rather than letting both stand as independent facts. Measured twice on
+gpt-oss-120b: four conclusions then one, and on a clean database two then
+three. Bounded, and **not reliably decreasing** -- the first measurement said
+"decaying" and the second did not replicate it. **This is why the trigger
+threshold matters** and why running the pass in a loop is the wrong shape.
 
 **Its dates come from the claims it read, not from the clock.** The record's
 id is content-addressed over the statement, the reason and the timestamp, so a

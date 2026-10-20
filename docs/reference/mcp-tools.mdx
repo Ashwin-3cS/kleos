@@ -215,9 +215,10 @@ A model asked the same question twice answers in different words, and a reworded
 conclusion is a new claim. Three things bound that and none closes it: the pass
 never reads its own conclusions back as evidence, it tells the reasoner what it
 already concluded, and the resolver compares what does get written against the
-earlier version. Measured on `gpt-oss-120b`: four conclusions on the first pass
-and one on the second — decaying, not fixed. Run it when a subject has
-accumulated new work.
+earlier version. Two runs on `gpt-oss-120b` went four conclusions then one, and
+two conclusions then three — bounded, but **not reliably decreasing**. Run it
+when a subject has accumulated new work, and treat each pass as spending
+tokens and adding claims.
 </Warning>
 
 <Warning>
