@@ -21,6 +21,20 @@ What `derived=True` changes is the precedence class, which is pinned to
 `Reference` whatever the grant says, so an inference the harness drew can
 contradict what somebody decided but never replace it.
 
+**It is idempotent for what the rules conclude, and not for what a model
+concludes.** Worth stating plainly, because the first version of this docstring
+claimed more. The record's id is content-addressed over the statement, so a
+conclusion reached in the same words twice is the same claim -- which holds for
+the rule-based half every time. A model asked the same question twice answers in
+different words, and a reworded conclusion is a different content address. Three
+things bound that, and none of them closes it: the pass never reads its own
+conclusions back (see `_observations`), it tells the reasoner what it already
+concluded, and the resolver compares whatever does get written against the
+earlier version rather than letting both stand as independent facts. Measured on
+gpt-oss-120b: four conclusions on the first pass, one on the second, which is
+decaying rather than fixed. **This is why the trigger threshold matters** and
+why running the pass in a loop is the wrong shape.
+
 **Its dates come from the claims it read, not from the clock.** The record's
 id is content-addressed over the statement, the reason and the timestamp, so a
 pass that stamped `now()` would write a fresh copy of the same conclusion every
@@ -52,6 +66,7 @@ from ..extraction.reasoning import (
 )
 from ..resolution.entities import match as name_match
 from ..schema import Claim, Entity
+from ..storage.mutations import HARNESS_AGENT_ID
 from .decide import WriteRefused, record_decision
 from .runtime import Runtime
 
@@ -77,6 +92,10 @@ class ReasoningPass:
     #: Claims read. Not an answer to "how much was disclosed" -- that is the
     #: read log's job -- but the denominator for anything this concluded.
     considered: int
+    #: Claims the pass skipped because it wrote them itself on an earlier run.
+    #: See `_observations`: a pass that read its own conclusions back would
+    #: conclude something new from them every time it ran.
+    skipped_derived: int
     #: Distinct sessions those claims came from. Below `MIN_SESSIONS` the pass
     #: declines, because one session's claims were already reasoned over.
     sessions: int
@@ -123,7 +142,7 @@ def reason_about(
             "what was written, it does not go looking."
         )
 
-    observations = _observations(runtime, owner_id, entity_ids)
+    observations, already = _observations(runtime, owner_id, entity_ids)
     sessions = {o.session_id for o in observations if o.session_id}
     devices = {o.device_id for o in observations if o.device_id}
     reasoner = get_reasoner(runtime.settings)
@@ -133,6 +152,7 @@ def reason_about(
         subject=subject,
         subject_entity_ids=entity_ids,
         considered=len(observations),
+        skipped_derived=len(already),
         sessions=len(sessions),
         devices=len(devices),
         reasoner=reasoner.name,
@@ -160,7 +180,7 @@ def reason_about(
         return base
 
     try:
-        conclusions = reasoner.reason(subject, observations)
+        conclusions = reasoner.reason(subject, observations, also_known=already)
     finally:
         reasoner.close()
 
@@ -253,20 +273,42 @@ def _subject_entities(runtime: Runtime, owner_id: str, subject: str) -> list[str
 
 def _observations(
     runtime: Runtime, owner_id: str, entity_ids: list[str]
-) -> list[Observation]:
+) -> tuple[list[Observation], list[str]]:
     """The claims about those entities, unsealed, flattened, oldest first.
 
     Ordered by assertion time because a pattern across sessions is a pattern
     over time -- "reversed three times" is only legible in order, and handing a
     model an arbitrary order invites it to invent one.
+
+    **The harness's own conclusions are excluded**, and this is load-bearing
+    rather than tidy. Found by running two passes in a row against a real model:
+    the first pass's claims are claims about the subject, so the second pass
+    read them back, concluded something *new* from them, wrote that, and left
+    more for the third. Each run grew the graph, and the duplicate filter in
+    `_parse` could not stop it -- it matches normalised text, and what came back
+    was the same thought reworded ("the choice of storage technology is driven
+    by..." against "storage decisions are primarily driven by...").
+
+    The principle underneath: a derived conclusion is not evidence. It is what
+    was concluded *from* the evidence, and reasoning over your own conclusions
+    is how a record drifts away from anything anybody said. The pass reads what
+    agents and the owner asserted, and nothing it wrote itself.
     """
     observations: list[Observation] = []
+    already: list[str] = []
     for stored in runtime.store.claims_about(owner_id, entity_ids):
         if not isinstance(stored.node, Claim):
             continue
         # The exposure named in the module docstring. Every claim about the
         # subject, in the clear, in this process.
         claim: Claim = runtime.content.unseal_node(stored.node)
+        if claim.provenance.actor_agent_id == HARNESS_AGENT_ID:
+            # Not evidence, but worth telling the reasoner about: a pass that
+            # does not know what it already concluded will conclude it again in
+            # different words, and the model's wording is not stable enough for
+            # the content address to catch it.
+            already.append(claim.statement)
+            continue
         observations.append(
             Observation(
                 claim_id=claim.id,
@@ -279,4 +321,4 @@ def _observations(
             )
         )
     observations.sort(key=lambda o: (o.asserted_at_ms, o.claim_id))
-    return observations
+    return observations, already

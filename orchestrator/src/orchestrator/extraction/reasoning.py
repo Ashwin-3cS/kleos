@@ -126,22 +126,27 @@ class RuleBasedReasoner:
         return None
 
     def reason(
-        self, subject: str, observations: list[Observation]
+        self,
+        subject: str,
+        observations: list[Observation],
+        *,
+        also_known: list[str] | None = None,
     ) -> list[CrossSessionConclusion]:
         out: list[CrossSessionConclusion] = []
 
+        known = {_normalise(k) for k in (also_known or [])}
         reversed_ids = tuple(
             o.claim_id
             for o in observations
             if o.status == ClaimStatus.SUPERSEDED.value
         )
-        if len(reversed_ids) >= CHURN_THRESHOLD:
+        churn = (
+            f"Decisions about {subject} have been reversed {len(reversed_ids)} times."
+        )
+        if len(reversed_ids) >= CHURN_THRESHOLD and _normalise(churn) not in known:
             out.append(
                 CrossSessionConclusion(
-                    statement=(
-                        f"Decisions about {subject} have been reversed "
-                        f"{len(reversed_ids)} times."
-                    ),
+                    statement=churn,
                     kind=MemoryKind.PROCEDURAL,
                     reason=(
                         "the subject has a history of reversal, so the current "
@@ -156,12 +161,11 @@ class RuleBasedReasoner:
             o for o in observations if o.status == ClaimStatus.CONTRADICTED.value
         ]
         devices = {o.device_id for o in contradicted if o.device_id}
-        if len(contradicted) >= 2 and len(devices) >= 2:
+        split = f"Two devices hold incompatible positions about {subject}."
+        if len(contradicted) >= 2 and len(devices) >= 2 and _normalise(split) not in known:
             out.append(
                 CrossSessionConclusion(
-                    statement=(
-                        f"Two devices hold incompatible positions about {subject}."
-                    ),
+                    statement=split,
                     kind=MemoryKind.PROCEDURAL,
                     reason=(
                         "a disagreement between devices is unresolved, so an "
@@ -407,13 +411,18 @@ class CompositeReasoner:
         self._llm.close()
 
     def reason(
-        self, subject: str, observations: list[Observation]
+        self,
+        subject: str,
+        observations: list[Observation],
+        *,
+        also_known: list[str] | None = None,
     ) -> list[CrossSessionConclusion]:
         structural = self._rules.reason(subject, observations)
-        added = self._llm.reason(
-            subject, observations, also_known=[c.statement for c in structural]
+        return structural + self._llm.reason(
+            subject,
+            observations,
+            also_known=[*(also_known or []), *(c.statement for c in structural)],
         )
-        return structural + added
 
 
 def get_reasoner(settings: Settings):

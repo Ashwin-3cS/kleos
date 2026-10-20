@@ -581,3 +581,53 @@ def test_one_conclusion_becomes_exactly_one_claim(runtime: Runtime) -> None:
     assert derived[0].status is ClaimStatus.ACTIVE
     # The statement is the conclusion's own words, not a rewording of them.
     assert derived[0].statement == result.conclusions[0]["statement"]
+
+
+def test_a_pass_does_not_read_back_what_it_wrote(runtime: Runtime) -> None:
+    """The feedback loop, found by running two passes against a real model.
+
+    A derived claim is a claim about the subject, so without this filter the
+    second pass reads the first pass's conclusions, concludes something new
+    *from* them, writes that, and leaves more for the third. Each run grew the
+    graph. `_parse`'s duplicate filter cannot stop it: it matches normalised
+    text, and what came back was the same thought reworded -- "the choice of
+    storage technology is driven by..." against "storage decisions are
+    primarily driven by...".
+
+    A derived conclusion is not evidence. It is what was concluded from the
+    evidence, and reasoning over your own conclusions is how a record drifts
+    away from anything anybody said.
+
+    Asserted on `_observations` rather than on two passes, because the loop
+    needs the derived claim to carry an `ABOUT` edge to the subject and whether
+    it gets one depends on what the extractor finds in it -- which the live
+    model does and the fixture grammar may not. The filter is the thing that
+    has to hold either way.
+    """
+    from orchestrator.graphs.reason import _observations, _subject_entities
+
+    _history(runtime)
+    # Phrased for the mock extractor's grammar, so it genuinely lands with an
+    # ABOUT edge on the subject -- an unreachable claim would pass vacuously.
+    record_decision(
+        runtime,
+        "writer",
+        f"project {SUBJECT} will use an approach the harness inferred.",
+        "a derived reason",
+        occurred_at_ms=1_700_000_400_000,
+        derived=True,
+    )
+    entity_ids = _subject_entities(runtime, OWNER, SUBJECT)
+    harness_claims = [
+        c for c in _claims(runtime)
+        if c.provenance.actor_agent_id == HARNESS_AGENT_ID
+    ]
+    assert harness_claims, "the fixture wrote no derived claim"
+
+    observations, already = _observations(runtime, OWNER, entity_ids)
+
+    assert already, "a harness-authored claim reached the evidence set"
+    # And it comes back as something to tell the reasoner it already said.
+    assert any(SUBJECT in statement for statement in already)
+    seen = {o.claim_id for o in observations}
+    assert not (seen & {c.id for c in harness_claims})

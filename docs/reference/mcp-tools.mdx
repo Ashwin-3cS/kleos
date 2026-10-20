@@ -205,9 +205,20 @@ Three outcomes that are not failures:
   case. Several sessions about one subject usually add up to exactly what each
   of them already said.
 - **`conclusions` present, `written: []`, no `errors`** — it reached conclusions
-  a previous pass already recorded. The record is dated to the newest claim it
-  was drawn from rather than to the clock, so re-running is idempotent, cheap
-  and safe.
+  a previous pass already recorded, in the same words. The record is dated to
+  the newest claim it was drawn from rather than to the clock, so an identical
+  conclusion is an identical content address and nothing new is written.
+
+<Warning>
+**Do not call this in a loop.** Only the rule-based half is strictly idempotent.
+A model asked the same question twice answers in different words, and a reworded
+conclusion is a new claim. Three things bound that and none closes it: the pass
+never reads its own conclusions back as evidence, it tells the reasoner what it
+already concluded, and the resolver compares what does get written against the
+earlier version. Measured on `gpt-oss-120b`: four conclusions on the first pass
+and one on the second — decaying, not fixed. Run it when a subject has
+accumulated new work.
+</Warning>
 
 <Warning>
 In mock mode the two patterns it finds are structural — repeated reversal, and

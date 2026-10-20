@@ -402,9 +402,14 @@ def reason_across_sessions(grant_token: str, subject: str) -> dict:
     Declines with `declined` set when fewer than two sessions have written about
     the subject, because one session's claims were already reasoned over when it
     closed. Concluding nothing is a normal outcome and comes back as `ran: true`
-    with an empty `conclusions`. Reaching the same conclusions a previous pass
-    already recorded comes back as `conclusions` present, `written` empty and no
-    `errors` -- the pass is idempotent, so running it again is cheap and safe.
+    with an empty `conclusions`.
+
+    **Do not call this in a loop.** It never reads its own conclusions back and
+    it tells the reasoner what it already concluded, so repeated passes decay
+    rather than compound -- but a model asked the same question twice answers in
+    different words, and a reworded conclusion is a new claim. Only what the
+    rule-based half concludes is strictly idempotent. Run it when a subject has
+    accumulated new work, not on a timer.
 
     Needs `may_write`: this writes to the record.
     """
