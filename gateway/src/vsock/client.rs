@@ -1,8 +1,9 @@
 use crate::error::GatewayError;
 use shared::{
-    ActionAck, ActionIntent, AssembleRequest, AssembleResponse, IdentityVerifyRequest, IdentityVerifyResponse, OAuthExchangeRequest,
-    OAuthExchangeResponse, SealDecryptRequest, SealDecryptResponse, SealEncryptRequest,
-    SealEncryptResponse,
+    ActionAck, ActionIntent, AssembleRequest, AssembleResponse, EvaluateRequest, EvaluateResponse,
+    EvaluateWriteRequest, EvaluateWriteResponse, IdentityVerifyRequest, IdentityVerifyResponse,
+    OAuthExchangeRequest, OAuthExchangeResponse, SealDecryptRequest, SealDecryptResponse,
+    SealEncryptRequest, SealEncryptResponse,
 };
 use std::time::Duration;
 
@@ -112,6 +113,26 @@ impl EnclaveClient {
         req: &AssembleRequest,
     ) -> Result<AssembleResponse, GatewayError> {
         self.post_json("/assemble", req).await
+    }
+
+    /// Asks the enclave for a permission verdict per object (ADR 0028).
+    ///
+    /// The gateway forwards and does not interpret, the same stance it takes on
+    /// an action ack: a verdict the host rewrote would be the operator deciding
+    /// while the route name says otherwise.
+    pub async fn evaluate(
+        &self,
+        req: &EvaluateRequest,
+    ) -> Result<EvaluateResponse, GatewayError> {
+        self.post_json("/permissions/evaluate", req).await
+    }
+
+    /// The same, for a write.
+    pub async fn evaluate_write(
+        &self,
+        req: &EvaluateWriteRequest,
+    ) -> Result<EvaluateWriteResponse, GatewayError> {
+        self.post_json("/permissions/evaluate-write", req).await
     }
 
     async fn post_json<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(

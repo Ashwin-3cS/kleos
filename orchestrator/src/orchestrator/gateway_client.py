@@ -409,6 +409,27 @@ class GatewayClient:
             enclave_public_key=enclave_key,
         )
 
+    def evaluate(self, grant_token: str, objects: list[dict]) -> dict:
+        """Asks the enclave, through the gateway, for one verdict per object.
+
+        No `owner_id` and no `now_ms`: the first is derived from the verified
+        grant and the second is read inside the enclave. See ADR 0028 -- a host
+        that supplied the clock could rewind it and resurrect an expired grant,
+        with nothing downstream looking wrong.
+        """
+        return self._post(
+            "/memory/evaluate",
+            {"grant_token": grant_token, "objects": objects},
+        )
+
+    def evaluate_write(self, grant_token: str, intent: dict) -> dict:
+        """The same, for a write. `intent.owner_id` is overwritten by the
+        gateway from the verified scope rather than compared against it."""
+        return self._post(
+            "/memory/evaluate-write",
+            {"grant_token": grant_token, "intent": intent},
+        )
+
     def request_action(
         self, grant_token: str, action_id: str, args: dict
     ) -> dict:

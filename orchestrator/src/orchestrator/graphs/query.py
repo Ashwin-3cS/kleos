@@ -27,25 +27,28 @@ enclave to unseal and nothing being disclosed to the host that the host did
 not already write. ``ENCRYPT_CONTENT_AT_REST`` is the one switch, it is loud,
 and any deployment holding real memory has it on.
 
-The permission check still runs here in the sealed case, and its verdict is
-**not** sent. The enclave evaluates again, against the ACLs travelling with
-the candidates, and its verdict is the one that governs disclosure -- a
-decision made out here is a decision the operator makes. The host-side pass
-survives only because retrieval and the read log are shaped around it; it
-narrows what is posted and decides nothing. Step 4 removes it.
+**On the sealed path this process no longer decides at all** (ADR 0028). It
+ranks, posts every candidate with its ACL still attached, and the enclave
+evaluates against the content. The host-side pass used to run anyway and send
+nothing, which made it the second of two checks where only one governs -- worse
+than one check, because the one a reader finds first is the one that does not
+matter. A decision made out here is a decision the operator makes.
+
+On the unsealed path it still decides, because it still assembles. There is no
+second check to defer to there, and an unsealed deployment trusts the host
+throughout.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..permissions import Scope, evaluate
+from ..permissions import Scope
 from ..retrieval.index import MemoryRetriever
 from ..schema import Claim, Entity, Event
 from .audit import record_read
@@ -179,17 +182,43 @@ def build_query_graph(runtime: Runtime):
         }
 
     def check_permissions(state: QueryState) -> dict:
+        """Decides which candidates this process may assemble from.
+
+        **Skipped entirely when content is sealed**, and that is ADR 0028
+        rather than an optimisation. On the sealed path the enclave evaluates
+        every candidate against the content itself and its verdict is the one
+        that governs disclosure, so a check out here was the second of two
+        where only one decides -- which is worse than one check, because the one
+        a reader finds first is the one that does not matter.
+
+        On the unsealed path this process assembles the answer itself, so it
+        must decide: there is no second check to defer to, and skipping it would
+        be a read with no permission check at all. The asymmetry is
+        uncomfortable and it is the honest state -- an unsealed deployment
+        trusts the host throughout, and a permission check is not the place it
+        stops doing so.
+        """
+        if runtime.content.seals_content:
+            return {"permitted": state.get("candidates", []), "denials": []}
         scope = Scope.model_validate(state["scope"])
-        now_ms = int(time.time() * 1000)
+        decided = runtime.gatekeeper.evaluate_objects(
+            scope,
+            [(c["id"], _node_of(c).acl) for c in state.get("candidates", [])],
+            grant_token=state.get("grant_token"),
+        )
         permitted, denials = [], []
         for candidate in state.get("candidates", []):
-            node = _node_of(candidate)
-            decision = evaluate(scope, node.acl, now_ms)
-            if decision.allowed:
+            verdict = decided[candidate["id"]]
+            if verdict.allowed:
                 permitted.append(candidate)
             else:
-                denials.append({"id": candidate["id"], "reason": decision.reason.value})
-        log.info("query.permissions allowed=%d denied=%d", len(permitted), len(denials))
+                denials.append({"id": candidate["id"], "reason": verdict.reason})
+        log.info(
+            "query.permissions where=%s allowed=%d denied=%d",
+            runtime.gatekeeper.where,
+            len(permitted),
+            len(denials),
+        )
         return {"permitted": permitted, "denials": denials}
 
     def assemble(state: QueryState) -> dict:

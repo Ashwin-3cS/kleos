@@ -16,6 +16,8 @@ because the attestation is only worth what its measurement is worth.
 | `POST /seal/decrypt` | unseal **record content** — never a refresh token |
 | `POST /act` | perform one sensitive action and return an acknowledgement |
 | `POST /attest` | an NSM attestation document |
+| `POST /permissions/evaluate` | one verdict per object, against the enclave's own clock (ADR 0028) |
+| `POST /permissions/evaluate-write` | the same, for one write intent |
 | `GET /health` | liveness |
 
 <Note>

@@ -14,6 +14,7 @@ from ..config import Settings, get_settings
 from ..connectors.registry import REGISTRY, ConnectorRegistry
 from ..extraction import get_extractor
 from ..extraction.base import Extractor
+from ..gatekeeper import Gatekeeper
 from ..gateway_client import AttestationCheck, GatewayClient
 from ..retrieval.embeddings import Embedder, get_embedder, verify_dim
 from ..retrieval.ranking import RankingWeights
@@ -60,6 +61,9 @@ class Runtime:
     #: Seals the record's text before it is stored, and unseals only what a read
     #: is about to disclose. See ADR 0010.
     content: ContentCrypto | NullContentCrypto
+    #: Who decides whether an agent may see an object: this process, or the
+    #: enclave. See ADR 0028.
+    gatekeeper: Gatekeeper
     weights: RankingWeights
 
     @classmethod
@@ -118,6 +122,7 @@ class Runtime:
                 if settings.encrypt_content_at_rest
                 else NullContentCrypto()
             ),
+            gatekeeper=Gatekeeper(gateway, settings.evaluate_in_enclave),
             weights=RankingWeights.from_settings(settings),
         )
 

@@ -36,14 +36,13 @@ price of not letting a filtered subgraph pass itself off as the whole graph.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..permissions import Scope, evaluate
+from ..permissions import Scope
 from ..schema import Claim, Entity, Event
 from .audit import record_read
 from .runtime import Runtime
@@ -129,19 +128,28 @@ def build_neighbourhood_graph(runtime: Runtime):
         }
 
     def check_permissions(state: NeighbourhoodState) -> dict:
-        """One ``evaluate`` per walked object, before anything is assembled."""
+        """One verdict per walked object, before anything is assembled.
+
+        Computed here or in the enclave, with the enclave's own clock, depending
+        on the deployment (ADR 0028).
+        """
         scope = Scope.model_validate(state["scope"])
-        now_ms = int(time.time() * 1000)
+        candidates = state.get("candidates", [])
+        decided = runtime.gatekeeper.evaluate_objects(
+            scope,
+            [(c["id"], _node_of(c).acl) for c in candidates],
+            grant_token=state.get("grant_token"),
+        )
         verdicts: dict[str, str | None] = {}
         denials: list[dict] = []
-        for candidate in state.get("candidates", []):
-            node = _node_of(candidate)
-            decision = evaluate(scope, node.acl, now_ms)
-            verdicts[candidate["id"]] = None if decision.allowed else decision.reason.value
-            if not decision.allowed:
-                denials.append({"id": candidate["id"], "reason": decision.reason.value})
+        for candidate in candidates:
+            verdict = decided[candidate["id"]]
+            verdicts[candidate["id"]] = None if verdict.allowed else verdict.reason
+            if not verdict.allowed:
+                denials.append({"id": candidate["id"], "reason": verdict.reason})
         log.info(
-            "neighbourhood.permissions allowed=%d denied=%d",
+            "neighbourhood.permissions where=%s allowed=%d denied=%d",
+            runtime.gatekeeper.where,
             len(verdicts) - len(denials),
             len(denials),
         )

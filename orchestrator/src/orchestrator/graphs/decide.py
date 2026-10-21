@@ -49,7 +49,7 @@ from typing import Any
 from ..connectors.agent import AGENT, build_record
 from ..enums import Authority, MemoryKind, Sensitivity
 from ..extraction.consolidate import get_consolidator
-from ..permissions import WriteIntent, evaluate_write
+from ..permissions import WriteIntent
 from ..storage.mutations import HARNESS_AGENT_ID, Actor
 from ..storage.sessions import SessionError
 from .ingestion import run_ingestion
@@ -193,11 +193,17 @@ def record_decision(
         sensitivity=sensitivity,
         memory_kind=kind,
     )
-    decision = evaluate_write(scope, intent, None)
-    if not decision.allowed:
-        reason_code = decision.reason.value if decision.reason else "unknown"
+    # Decided here or in the enclave, depending on the deployment (ADR 0028).
+    # The write gate moved with the read ones deliberately: leaving it behind
+    # would mean an operator could no longer decide what an agent *reads* while
+    # still deciding what it may *write*, which is the direction that modifies
+    # the record rather than disclosing it.
+    verdict = runtime.gatekeeper.evaluate_one_write(scope, intent, grant_token=grant_token)
+    if not verdict.allowed:
+        reason_code = verdict.reason or "unknown"
         log.info(
-            "decide.refused agent=%s device=%s reason=%s",
+            "decide.refused where=%s agent=%s device=%s reason=%s",
+            runtime.gatekeeper.where,
             scope.agent_id,
             resolved.device_id,
             reason_code,

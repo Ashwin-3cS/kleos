@@ -50,6 +50,32 @@ assembler to see an unchecked candidate, and it makes a denial visible as a
 denial. Every read path — query, shift history, context chain, neighbourhood —
 has the same four-node shape for this reason.
 
+### Who computes the verdict
+
+With `EVALUATE_IN_ENCLAVE` on, the check node does not decide: it asks
+`POST /permissions/evaluate` and applies verdicts computed inside the enclave
+(ADR 0028). The function is the same one — it was already compiled into the
+measured image for `/assemble` — so what changes is who runs it.
+
+Two things that buys. The operator can no longer change a verdict by editing a
+Python file, which is all it took before. And **the clock stops being the
+host's**: `now_ms` was read right there, and every time window and every grant
+expiry is measured against it, so a host that supplied it could rewind it to
+resurrect an expired grant with nothing downstream looking wrong — the verdict
+would be correct for the time it was given. There is no field to supply one.
+
+If the enclave cannot be reached the read **refuses**, as a 503. A check that
+degrades when the TEE is down is a check an operator obtains by turning the TEE
+off.
+
+<Warning>
+**It does not make the scope trustworthy.** The `Scope` is still the one the
+gateway resolved from the grant, on the host, because the gateway holds the
+device key registry. So the operator cannot compute the verdict and can still
+choose the question. Closing that needs a verification root the operator cannot
+substitute — see ADR 0011.
+</Warning>
+
 ## The owner signs grants, not the gateway
 
 <Note>

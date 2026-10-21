@@ -195,6 +195,15 @@ class Settings(BaseSettings):
         default=False, validation_alias="ENCRYPT_CONTENT_AT_REST"
     )
 
+    #: Compute permission verdicts in the enclave rather than here (ADR 0028).
+    #:
+    #: Off by default so the eval harness and the unit tests run with no
+    #: gateway, which is the shape of every setting that needs the TEE. A
+    #: deployment that forgets it is a deployment deciding on the host, which
+    #: is why `docs/status.mdx` names it. There is deliberately no fallback: if
+    #: this is on and the enclave is unreachable, a read refuses.
+    evaluate_in_enclave: bool = Field(default=False, validation_alias="EVALUATE_IN_ENCLAVE")
+
     #: Ceiling on the owner-driven write routes, per owner per window
     #: (ADR 0027). `0` disables it. Generous on purpose: set too low this
     #: refuses a legitimate burst, such as a voice client flushing a backlog.

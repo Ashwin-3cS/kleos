@@ -29,6 +29,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/oauth/exchange", post(routes::oauth::exchange))
         .route("/act", post(routes::act::act))
         .route("/assemble", post(routes::assemble::assemble_for_device))
+        .route(
+            "/permissions/evaluate",
+            post(routes::permissions::evaluate_objects),
+        )
+        .route(
+            "/permissions/evaluate-write",
+            post(routes::permissions::evaluate_write_intent),
+        )
         .route("/seal/encrypt", post(routes::seal::encrypt))
         .route("/seal/decrypt", post(routes::seal::decrypt))
         .with_state(state)

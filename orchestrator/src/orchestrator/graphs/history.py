@@ -7,7 +7,8 @@ ingestion finishes; what was missing is a read that makes them legible.
 Neither of these adds a node type, and neither re-derives anything.
 
 Both follow the query graph's shape exactly -- traverse blind, then a
-separate node applies ``permissions.evaluate`` per object, so the assembler
+separate node asks for one verdict per object -- here or in the enclave, see
+ADR 0028 -- so the assembler
 structurally cannot see an unchecked claim. This matters more here than it
 does for a plain query: a decision is often superseded *because* of evidence
 from a source the asking agent has no grant for, which is both the
@@ -28,14 +29,13 @@ citation is precisely the un-granted source's contribution.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..permissions import Scope, evaluate
+from ..permissions import Scope
 from ..schema import Citation, Claim, Entity, Event
 from .audit import record_read
 from .runtime import Runtime
@@ -119,24 +119,40 @@ def _authorize(runtime: Runtime):
     return authorize
 
 
-def _check_permissions(state: HistoryState) -> dict:
-    """One ``evaluate`` per walked object, before anything is assembled."""
-    scope = Scope.model_validate(state["scope"])
-    now_ms = int(time.time() * 1000)
-    verdicts: dict[str, str | None] = {}
-    denials: list[dict] = []
-    for candidate in state.get("candidates", []):
-        node = _node_of(candidate)
-        decision = evaluate(scope, node.acl, now_ms)
-        verdicts[candidate["id"]] = None if decision.allowed else decision.reason.value
-        if not decision.allowed:
-            denials.append({"id": candidate["id"], "reason": decision.reason.value})
-    log.info(
-        "history.permissions allowed=%d denied=%d",
-        len(verdicts) - len(denials),
-        len(denials),
-    )
-    return {"verdicts": verdicts, "denials": denials}
+def _check_permissions(runtime: Runtime):
+    """One verdict per walked object, before anything is assembled.
+
+    Takes the runtime because *where* the verdict is computed is a deployment
+    decision now (ADR 0028): here, or in the enclave with the enclave's own
+    clock. The node used to call `evaluate` directly against
+    `int(time.time() * 1000)`, which made both the function and the clock the
+    operator's.
+    """
+
+    def check_permissions(state: HistoryState) -> dict:
+        scope = Scope.model_validate(state["scope"])
+        candidates = state.get("candidates", [])
+        decided = runtime.gatekeeper.evaluate_objects(
+            scope,
+            [(c["id"], _node_of(c).acl) for c in candidates],
+            grant_token=state.get("grant_token"),
+        )
+        verdicts: dict[str, str | None] = {}
+        denials: list[dict] = []
+        for candidate in candidates:
+            verdict = decided[candidate["id"]]
+            verdicts[candidate["id"]] = None if verdict.allowed else verdict.reason
+            if not verdict.allowed:
+                denials.append({"id": candidate["id"], "reason": verdict.reason})
+        log.info(
+            "history.permissions where=%s allowed=%d denied=%d",
+            runtime.gatekeeper.where,
+            len(verdicts) - len(denials),
+            len(denials),
+        )
+        return {"verdicts": verdicts, "denials": denials}
+
+    return check_permissions
 
 
 def _node_of(candidate: dict):
@@ -528,7 +544,7 @@ def _compile(runtime: Runtime, walk, assemble):
     graph = StateGraph(HistoryState)
     graph.add_node("authorize", _authorize(runtime))
     graph.add_node("walk", walk)
-    graph.add_node("check_permissions", _check_permissions)
+    graph.add_node("check_permissions", _check_permissions(runtime))
     graph.add_node("assemble", assemble)
     graph.add_edge(START, "authorize")
     graph.add_edge("authorize", "walk")

@@ -23,6 +23,8 @@ minted.
 | `POST /auth/device/register` | owner session | register a device public key |
 | `GET /auth/device/keys` | owner session | list device keys, including revoked |
 | `POST /auth/device/revoke` | owner session | revoke a key, and every grant it signed |
+| `POST /memory/evaluate` | **agent grant** | one permission verdict per object, computed in the enclave against its own clock (ADR 0028). The scope comes from the verified grant and there is no field for one |
+| `POST /memory/evaluate-write` | **agent grant** | the same for one write intent. `intent.owner_id` is overwritten from the verified scope, not compared against it |
 | `POST /memory/scope/introspect` | — | resolve a grant token to `{active, scope, key_id}` |
 
 <Note>
@@ -66,6 +68,13 @@ memory. The models now **forbid** unknown fields, so a caller still sending
 `RATE_LIMIT_WINDOW_SECS`, refusing with 429 and `Retry-After`. A fixed window,
 so a caller can get 2N across two adjacent windows; it is a ceiling to stop
 loops, not traffic shaping.
+</Note>
+
+<Note>
+Any grant-authorised read can answer **503** when `EVALUATE_IN_ENCLAVE` is on
+and the enclave is unreachable: the permission verdict is computed in there and
+there is no fallback to the host (ADR 0028). `retryable: true` distinguishes it
+from a 403, which would mean the scope is too narrow.
 </Note>
 
 <Warning>

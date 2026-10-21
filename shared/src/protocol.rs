@@ -415,3 +415,83 @@ pub struct AssembledCitation {
     pub occurred_at_ms: u64,
     pub ingested_at_ms: Option<u64>,
 }
+
+// ---------------------------------------------------------------------------
+// Permission verdicts, computed in the enclave (ADR 0028)
+// ---------------------------------------------------------------------------
+
+/// What the host asks the enclave to decide.
+///
+/// Note what is **not** here: `now_ms`. The enclave reads its own clock and
+/// reports it back. `evaluate` measures every time window and every grant
+/// expiry against that number, so a host that supplied it could rewind it,
+/// resurrect an expired grant and reopen a closed window -- and leave no trace,
+/// because the verdict that came back would be correct for the time it was
+/// given. There is no field for it.
+///
+/// Note also what is here instead of nodes: one `ObjectAcl` per object.
+/// `evaluate` is decidable from `(scope, acl, now_ms)` alone, which was
+/// deliberate from the start, and this is the thing that property buys --
+/// sealed content stays out of a call that has no use for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaluateRequest {
+    pub owner_id: String,
+    /// The verified scope the grant carried, resolved by the gateway. Same
+    /// arrangement as [`AssembleRequest::scope`], and the same limitation: this
+    /// closes "the operator computes the verdict", not "the operator supplies
+    /// the scope". See ADR 0028.
+    pub scope: Scope,
+    pub objects: Vec<EvaluateObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaluateObject {
+    pub id: String,
+    pub acl: crate::permissions::ObjectAcl,
+}
+
+/// One verdict, carrying the id it is about.
+///
+/// Echoed rather than positional so the host matches by id: a verdict list
+/// matched by position is one an intermediary can reorder or truncate and have
+/// the gap read as "allowed".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaluateVerdict {
+    pub id: String,
+    pub allowed: bool,
+    pub reason: Option<crate::permissions::DenyReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaluateResponse {
+    pub verdicts: Vec<EvaluateVerdict>,
+    /// The clock the verdicts were decided against, reported so a caller can
+    /// log what was used rather than assume its own.
+    pub now_ms: u64,
+}
+
+/// The write gate, same arrangement (ADR 0028).
+///
+/// A separate route rather than a mode on the one above, mirroring
+/// `permissions::evaluate_write` being a sibling function rather than a flag:
+/// a mode parameter means every call site has to say "read", and the one that
+/// forgets gets whatever the default is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaluateWriteRequest {
+    pub owner_id: String,
+    pub scope: Scope,
+    pub intent: crate::permissions::WriteIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaluateWriteResponse {
+    pub allowed: bool,
+    pub reason: Option<crate::permissions::DenyReason>,
+    pub now_ms: u64,
+}

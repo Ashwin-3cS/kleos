@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +23,7 @@ from .connectors.direct import SOURCES as DIRECT_SOURCES
 from .connectors.direct import TEXT as DIRECT_TEXT
 from .connectors.direct import build_record, is_push_source
 from .connectors.registry import REGISTRY
+from .gatekeeper import GatekeeperUnavailable
 from .graphs.brief import SealedBriefingUnsupported, brief_before_acting
 from .graphs.decide import WriteRefused, consolidate_session, record_decision
 from .graphs.history import context_chain, why_did_this_shift
@@ -154,6 +155,28 @@ app = FastAPI(title="Kleos orchestrator", version="0.1.0", lifespan=lifespan)
 if _MCP_APP is not None:
     app.mount("/mcp", _MCP_APP)
     log.info("MCP tools mounted at /mcp (streamable HTTP)")
+
+
+@app.exception_handler(GatekeeperUnavailable)
+def gatekeeper_unavailable(_request: Request, exc: GatekeeperUnavailable) -> JSONResponse:
+    """503, because the grant is fine and the enclave is not.
+
+    A read that cannot reach the enclave refuses rather than deciding on the
+    host (ADR 0028), and the status has to say which kind of refusal it is: a
+    403 would tell an agent its scope is too narrow, and a 500 would read as a
+    bug in this service. Both would have a client doing the wrong thing next.
+
+    One handler rather than a `try` per route: six routes catching the same
+    exception is five chances to map it differently.
+    """
+    log.warning("refusing a read: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "retryable": True,
+        },
+    )
 
 
 class IngestRequest(BaseModel):

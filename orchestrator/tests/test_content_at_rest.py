@@ -302,6 +302,13 @@ def test_a_declined_read_decrypts_nothing_either(runtime: Runtime) -> None:
     run_ingestion(runtime, OWNER, source="mock", thread_id="at-rest-denied")
 
     runtime.gateway.unseals = 0
+    # The denial is the *enclave's* now. Since ADR 0028 the host does not
+    # pre-filter on the sealed path -- it posts every candidate and the enclave
+    # decides -- so a test that wants a declined read has to say so here rather
+    # than rely on the host having narrowed the list. That is the change this
+    # line records: before, a blind grant produced an empty candidate list out
+    # here, which meant the host's verdict was the one being tested.
+    runtime.gateway.disclosed = []
     answer = run_query(runtime, "what did we decide?", BLIND_TOKEN)
 
     assert not answer.answered

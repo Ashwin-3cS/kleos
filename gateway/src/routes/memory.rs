@@ -9,6 +9,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use shared::{
     ActionAck, ActionIntent, AssembleCandidate, AssembleRequest, AssembleResponse,
+    EvaluateRequest, EvaluateResponse, EvaluateWriteRequest, EvaluateWriteResponse,
     GrantSealRequest, GrantUnsealRequest, ScopeIntrospectRequest,
     ScopeIntrospectResponse, SealDecryptRequest, SealDecryptResponse,
     SealEncryptRequest, SealEncryptResponse,
@@ -666,4 +667,101 @@ pub async fn scope_introspect(
         scope,
         key_id: claims.key_id,
     }))
+}
+
+/// Asks the enclave for a permission verdict per object (ADR 0028).
+///
+/// The gateway's job is the same as everywhere else here: **who is asking.**
+/// Verify the grant, resolve the scope, take the owner from it, forward. What
+/// the gateway deliberately does not do is decide -- it has no `evaluate` call
+/// of its own on this path, because a verdict computed on the host is a verdict
+/// the operator computes, which is the whole point of the route.
+///
+/// Not gated on any capability beyond holding a valid grant. The scope *is* the
+/// capability: a grant that covers nothing gets a list of denials, which is the
+/// correct answer and not an error. Adding a gate here would mean deciding
+/// twice, once coarsely out here.
+pub async fn memory_evaluate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<EvaluateRequestBody>,
+) -> Result<Json<EvaluateResponse>, GatewayError> {
+    let scope = verified_scope(&state, &req.grant_token).await?;
+    let request = EvaluateRequest {
+        owner_id: scope.owner_id.clone(),
+        scope,
+        objects: req.objects,
+    };
+    Ok(Json(state.enclave.evaluate(&request).await?))
+}
+
+/// The write gate, in the enclave (ADR 0028).
+///
+/// `may_write` is checked in there rather than here, by `evaluate_write`
+/// itself. The sealing routes above check `scope.may_write` on the host because
+/// they have to act on it locally; this route's only job is to relay a
+/// question, so a host-side pre-check would be the second decision ADR 0028
+/// exists to remove.
+pub async fn memory_evaluate_write(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<EvaluateWriteRequestBody>,
+) -> Result<Json<EvaluateWriteResponse>, GatewayError> {
+    let scope = verified_scope(&state, &req.grant_token).await?;
+    // The intent names an owner, and a caller could name somebody else's. It is
+    // overwritten from the verified scope rather than compared against it, for
+    // the reason ADR 0027 removed `owner_id` from the orchestrator's write
+    // routes: a field a caller can set is one it can set wrongly, and a
+    // comparison is what a later change deletes as redundant.
+    let mut intent = req.intent;
+    intent.owner_id = scope.owner_id.clone();
+    let request = EvaluateWriteRequest {
+        owner_id: scope.owner_id.clone(),
+        scope,
+        intent,
+    };
+    Ok(Json(state.enclave.evaluate_write(&request).await?))
+}
+
+/// Verifies a grant and returns the scope it carried.
+///
+/// The fifth copy of this block is the one that got extracted. The duplication
+/// was not the cost so much as what it invited: several copies of a signature
+/// check drift, and the one that drifts is the one nobody reads. Same argument
+/// the orchestrator's `require_owner` was extracted under.
+async fn verified_scope(state: &AppState, grant_token: &str) -> Result<shared::permissions::Scope, GatewayError> {
+    // The key is fetched before verification because a signature cannot be
+    // checked without knowing which key it claims. Nothing else in that
+    // payload is trusted until the signature holds.
+    let (claims, _, _) = shared::grants::parse_unverified(grant_token)
+        .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))?;
+    let registered = state.device_keys.get(&claims.key_id).await?;
+
+    shared::verify_grant(
+        grant_token,
+        |_| {
+            registered.map(|key| shared::RegisteredKey {
+                owner_id: key.owner_id.clone(),
+                public_key: key.public_key.clone(),
+                revoked: key.is_revoked(),
+            })
+        },
+        now_ms(),
+    )
+    .map_err(|e| GatewayError::Unauthorized(format!("invalid grant: {e}")))
+}
+
+/// What the orchestrator sends to ask for verdicts.
+///
+/// No `owner_id`, for the reason every grant-authorised route here omits it: a
+/// caller that could name an owner could name somebody else's.
+#[derive(Debug, Deserialize)]
+pub struct EvaluateRequestBody {
+    pub grant_token: String,
+    #[serde(default)]
+    pub objects: Vec<shared::EvaluateObject>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvaluateWriteRequestBody {
+    pub grant_token: String,
+    pub intent: shared::permissions::WriteIntent,
 }

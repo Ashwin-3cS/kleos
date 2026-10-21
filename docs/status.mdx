@@ -46,6 +46,11 @@ Works; not yet shippable — see below.
 Issue, inspect and revoke grants from a screen, with the signing key held in the
 browser. Plus what each agent has been working on, and what every grant did.
 </Card>
+<Card title="Verdicts computed in the enclave" icon="scale-balanced">
+With `EVALUATE_IN_ENCLAVE` on, `evaluate` and `evaluate_write` run inside the
+TEE against the enclave's own clock, on all four read paths and the write gate.
+An unreachable enclave refuses the read rather than deciding on the host.
+</Card>
 <Card title="Attestation verification" icon="certificate">
 The document is parsed, its chain verified to the pinned AWS Nitro root, and
 checked to commit to the exact result it arrived with — on the device, in the
@@ -197,6 +202,15 @@ llama.cpp, so that is a real option rather than a hypothetical one.
   state.
 - **`SEALED_TOKEN_STORE_URL` unset means an in-memory store.** Correct for mock
   mode; it silently forgets tokens on restart.
+- **`EVALUATE_IN_ENCLAVE` is off by default**, so a deployment that forgets it
+  computes permission verdicts on the host — which is the old behaviour and
+  the thing ADR 0028 exists to end. Off by default because the eval harness and
+  the unit tests run with no gateway, which is the shape of every setting that
+  needs the TEE.
+- **The scope is still resolved on the host.** The gateway verifies the grant
+  and derives the scope, because it holds the device key registry, so the
+  operator cannot compute a verdict and can still choose the question it is
+  asked about.
 - **The orchestrator has no TLS of its own.** `POST /ingest` and `POST
   /remember` now require an owner session and derive the owner from it (ADR
   0027), and `/remember` is metered per owner — but a grant or a session still

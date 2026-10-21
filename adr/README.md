@@ -80,6 +80,7 @@ is part of the history, and overwriting it loses why anyone thought otherwise.
 | [0025](0025-reasoning-across-sessions-writes-claims-not-blocks.md) | Reasoning across sessions, and why its output is a claim |
 | [0026](0026-verify-the-attestation-and-say-what-verified.md) | Verify the attestation, and say what verified |
 | [0027](0027-the-write-door-takes-a-session-and-derives-the-owner.md) | The write door takes a session, and derives the owner |
+| [0028](0028-the-verdict-is-computed-in-the-enclave.md) | The verdict is computed in the enclave |
 
 The seven from 0016 are the agent harness, written after the fact: steps 1
 through 11 landed with their reasoning in commit messages and code comments,
