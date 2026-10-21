@@ -197,9 +197,10 @@ llama.cpp, so that is a real option rather than a hypothetical one.
   state.
 - **`SEALED_TOKEN_STORE_URL` unset means an in-memory store.** Correct for mock
   mode; it silently forgets tokens on restart.
-- **`POST /ingest` and `POST /remember` are unauthenticated** and take
-  `owner_id` from the request body. The orchestrator binds to localhost, and
-  that is currently the only control.
+- **The orchestrator has no TLS of its own.** `POST /ingest` and `POST
+  /remember` now require an owner session and derive the owner from it (ADR
+  0027), and `/remember` is metered per owner — but a grant or a session still
+  travels in a request body, so anything beyond localhost needs TLS in front.
 - **A device must register both key halves at once.** Ed25519 signs and X25519
   receives, and the binding between them is the registration row — which is
   immutable, so a key registered with only a signing half can never gain the

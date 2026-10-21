@@ -12,10 +12,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import mcp_server
 from .config import get_settings
@@ -30,7 +30,8 @@ from .graphs.ingestion import run_ingestion
 from .graphs.neighbourhood import neighbourhood
 from .graphs.query import run_query
 from .graphs.runtime import Runtime
-from .jobs.queue import get_queue
+from .jobs import limits
+from .jobs.queue import get_queue, get_redis
 from .jobs.tasks import ingest_source
 from .storage.sessions import SessionError
 
@@ -73,6 +74,52 @@ def require_owner(session_token: str) -> str:
         raise HTTPException(status_code=401, detail=f"invalid owner session: {exc}") from exc
 
 
+def require_owner_bearer(authorization: str | None) -> str:
+    """The same check, with the session in an `Authorization: Bearer` header.
+
+    A header on this one route and a body field on the others, which is
+    inconsistent deliberately (ADR 0027): `GET /ingest/{job_id}` has the id in
+    the path, and a credential in a query string lands in access logs, proxy
+    logs and browser history.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="this route needs an owner session: Authorization: Bearer <session_token>",
+        )
+    return require_owner(authorization.split(" ", 1)[1].strip())
+
+
+def enforce_limit(route: str, owner_id: str, limit: int) -> None:
+    """Counts one call against the owner's window, or refuses with a 429.
+
+    Per owner rather than per IP, because on an authenticated route the
+    credential is what identifies the writer. See `jobs/limits.py` for why the
+    window is fixed and why it fails open.
+    """
+    settings = get_settings()
+    verdict = limits.check(
+        get_redis(settings),
+        route=route,
+        owner_id=owner_id,
+        limit=limit,
+        window_secs=settings.rate_limit_window_secs,
+    )
+    if not verdict.allowed:
+        log.warning(
+            "rate limited route=%s owner=%s used=%d limit=%d",
+            route,
+            owner_id,
+            verdict.used,
+            verdict.limit,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=verdict.detail,
+            headers={"Retry-After": str(verdict.retry_after_secs)},
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _runtime
@@ -110,11 +157,22 @@ if _MCP_APP is not None:
 
 
 class IngestRequest(BaseModel):
-    owner_id: str
+    """A backfill the owner is asking for.
+
+    `owner_id` is **not** a field (ADR 0027). It used to be, and taking it from
+    the body meant anyone who could reach this port could write into anyone's
+    memory by naming them. It is derived from `session_token` now, and unknown
+    fields are forbidden so a caller still sending it is told rather than
+    quietly given the owner the session names.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: An **owner** session from the gateway, not a grant. Required: it is both
+    #: the authentication and where the owner comes from.
+    session_token: str
     source: str = "mock"
     since_ms: int = 0
-    #: Owner session from the gateway, needed only to seal sensitive bodies.
-    session_token: str | None = None
 
 
 class IngestResponse(BaseModel):
@@ -140,9 +198,19 @@ class ContextRequest(BaseModel):
 
 
 class RememberRequest(BaseModel):
-    """Something the person is telling the system directly."""
+    """Something the person is telling the system directly.
 
-    owner_id: str
+    `owner_id` is derived from the session and is not a field a caller sends --
+    see `IngestRequest` and ADR 0027. The session is required here even when
+    nothing is being sealed, which is a change: it used to be needed only for
+    `sensitive=true`, so the unsealed path wrote to a named owner with no
+    credential at all.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: An **owner** session from the gateway, not a grant.
+    session_token: str
     text: str = Field(min_length=1, max_length=100_000)
     #: `text` or `voice`. Separate sources so a grant can cover one and not the
     #: other -- "read what I wrote down, not what I said out loud" is a real
@@ -152,10 +220,8 @@ class RememberRequest(BaseModel):
     #: belongs on last Tuesday: `occurred_at_ms` is what every time-windowed scope
     #: and every "what did I know then" read is written against.
     occurred_at_ms: int | None = None
-    #: Seals the utterance in the enclave before storage, which needs a session.
+    #: Seals the utterance in the enclave before storage.
     sensitive: bool = False
-    #: Owner session, required only to seal.
-    session_token: str | None = None
 
 
 class ReadLogRequest(BaseModel):
@@ -272,7 +338,16 @@ def sources() -> dict[str, Any]:
 
 @app.post("/ingest", response_model=IngestResponse, status_code=202)
 def enqueue_ingest(req: IngestRequest) -> IngestResponse:
+    """Enqueues a backfill for the owner this session names.
+
+    Owner-authenticated, and the owner is **derived** (ADR 0027). Before that it
+    was the one write route in the service with no credential at all, taking the
+    owner from the body -- so on any reachable address, naming somebody was
+    enough to write into their memory.
+    """
     settings = get_settings()
+    owner_id = require_owner(req.session_token)
+    enforce_limit("ingest", owner_id, settings.ingest_rate_limit)
     # Rejected here rather than deep in the graph: an unknown source would
     # otherwise surface as a failed background job with a traceback.
     if req.source not in REGISTRY:
@@ -287,20 +362,29 @@ def enqueue_ingest(req: IngestRequest) -> IngestResponse:
     queue = get_queue(settings)
     job = queue.enqueue(
         ingest_source,
-        owner_id=req.owner_id,
+        owner_id=owner_id,
         source=req.source,
         since_ms=req.since_ms,
         session_token=req.session_token,
     )
-    log.info("enqueued ingestion job=%s owner=%s source=%s", job.id, req.owner_id, req.source)
+    log.info("enqueued ingestion job=%s owner=%s source=%s", job.id, owner_id, req.source)
     return IngestResponse(job_id=job.id, queue=settings.ingestion_queue)
 
 
 @app.get("/ingest/{job_id}")
-def ingest_status(job_id: str) -> dict[str, Any]:
+def ingest_status(
+    job_id: str, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """The state of one backfill, for the owner who asked for it.
+
+    A job belonging to another owner answers **404 and not 403** (ADR 0027):
+    403 would confirm the job exists, which turns a sequence of job ids into an
+    oracle for who else uses this deployment and how often.
+    """
+    owner_id = require_owner_bearer(authorization)
     queue = get_queue()
     job = queue.fetch_job(job_id)
-    if job is None:
+    if job is None or job.kwargs.get("owner_id") != owner_id:
         raise HTTPException(status_code=404, detail=f"no such job {job_id}")
     return {
         "job_id": job.id,
@@ -327,6 +411,8 @@ def remember(req: RememberRequest) -> dict[str, Any]:
     to be kept resolving the same way.
     """
     settings = get_settings()
+    owner_id = require_owner(req.session_token)
+    enforce_limit("remember", owner_id, settings.remember_rate_limit)
     if not is_push_source(req.source):
         raise HTTPException(
             status_code=400,
@@ -339,18 +425,13 @@ def remember(req: RememberRequest) -> dict[str, Any]:
         raise HTTPException(
             status_code=400, detail=f"source {req.source!r} is not enabled in this deployment"
         )
-    if req.sensitive and not req.session_token:
-        # Sealing crosses the trust boundary, and the gateway takes the owner from
-        # the session rather than from us. Refused up front rather than failing
-        # inside the graph, where it would surface as a skipped record.
-        raise HTTPException(
-            status_code=400,
-            detail="sensitive=true needs session_token: sealing happens in the enclave, "
-            "under the owner the session names",
-        )
+    # The old check that `sensitive=true` came with a session is gone, because
+    # the session is now required either way. Sealing still happens in the
+    # enclave under the owner the session names -- that has not changed; what
+    # changed is that the unsealed path can no longer skip the credential.
 
     record = build_record(
-        owner_id=req.owner_id,
+        owner_id=owner_id,
         text=req.text,
         source=req.source,
         occurred_at_ms=req.occurred_at_ms,
@@ -358,7 +439,7 @@ def remember(req: RememberRequest) -> dict[str, Any]:
     )
     result = run_ingestion(
         runtime(),
-        req.owner_id,
+        owner_id,
         source=req.source,
         session_token=req.session_token,
         records=[record],
@@ -368,7 +449,7 @@ def remember(req: RememberRequest) -> dict[str, Any]:
     )
     log.info(
         "remembered owner=%s source=%s external_id=%s claims=%d",
-        req.owner_id,
+        owner_id,
         req.source,
         record.external_id,
         result.claims,

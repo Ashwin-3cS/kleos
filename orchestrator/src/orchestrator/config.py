@@ -195,6 +195,15 @@ class Settings(BaseSettings):
         default=False, validation_alias="ENCRYPT_CONTENT_AT_REST"
     )
 
+    #: Ceiling on the owner-driven write routes, per owner per window
+    #: (ADR 0027). `0` disables it. Generous on purpose: set too low this
+    #: refuses a legitimate burst, such as a voice client flushing a backlog.
+    remember_rate_limit: int = Field(default=120, validation_alias="REMEMBER_RATE_LIMIT")
+    ingest_rate_limit: int = Field(default=30, validation_alias="INGEST_RATE_LIMIT")
+    rate_limit_window_secs: int = Field(
+        default=60, validation_alias="RATE_LIMIT_WINDOW_SECS"
+    )
+
     #: Verify the attestation on everything the enclave returns (ADR 0026).
     #:
     #: On by default, because the alternative is what this replaced: a document

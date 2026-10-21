@@ -112,9 +112,9 @@ sealed refresh token to a short-lived access token. Google and GitHub have
 consent and a sealed refresh-token store but no `fetch`, which is the same
 missing piece from the other side.
 `nitro` mode has never run on real Nitro hardware. Real Seal and Walrus are
-stubs. `POST /ingest` and `POST /remember` are unauthenticated and rely on
-binding to localhost. There is no grant revocation list, only short TTLs and
-device-key revocation. See "Still stubs" for the full list and `docs/status.mdx`
+stubs. The orchestrator has no TLS of its own, so a credential in a request
+body relies on binding to localhost. There is no grant revocation list, only
+short TTLs and device-key revocation. See "Still stubs" for the full list and `docs/status.mdx`
 for the single authoritative version of it.
 
 > **On the name.** The product is Kleos, and so are the identifiers now. It was

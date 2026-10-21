@@ -63,6 +63,19 @@ description: "Every environment variable, and the ones whose defaults are decisi
 | `WALRUS_PUBLISHER_URL` / `WALRUS_AGGREGATOR_URL` | unset | When set, sealed blobs go to Walrus. Still a stub: it **raises** rather than silently falling back to `BLOB_STORE_DIR` |
 | `SEALED_TOKEN_STORE_URL` | unset | Unset means an in-memory store, which silently forgets tokens on restart |
 
+## Rate limits
+
+Per owner per window, on the owner-driven write routes (ADR 0027). `0` disables
+one. A fixed window, so a caller can get 2N across two adjacent windows — it is
+a ceiling to stop loops, not traffic shaping. It **fails open** if Redis is
+unreachable: see `jobs/limits.py` for why.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `REMEMBER_RATE_LIMIT` | `120` | `POST /remember` is synchronous and spends an extraction call per record |
+| `INGEST_RATE_LIMIT` | `30` | `POST /ingest` only enqueues, so the ceiling is about queue depth |
+| `RATE_LIMIT_WINDOW_SECS` | `60` | shared by both |
+
 ## Attestation verification
 
 Read by the gateway and the orchestrator, and set by flags on `kleos-device`.

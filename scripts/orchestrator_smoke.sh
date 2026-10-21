@@ -79,18 +79,22 @@ fi
 
 echo
 echo "== 3. enqueue an ingestion job for the mock connector =="
+# No owner_id in the body: it is derived from the session (ADR 0027), and
+# sending it is a 422 rather than a 202 that ignored it.
 JOB_ID=$(curl -sf -X POST "$ORCH_URL/ingest" \
   -H 'content-type: application/json' \
-  -d "{\"owner_id\": \"$OWNER_ID\", \"source\": \"mock\", \"session_token\": \"$SESSION_TOKEN\"}" \
+  -d "{\"source\": \"mock\", \"session_token\": \"$SESSION_TOKEN\"}" \
   | jq -r .job_id)
 echo "job_id: $JOB_ID"
 
 for _ in $(seq 1 60); do
-  STATUS=$(curl -sf "$ORCH_URL/ingest/$JOB_ID" | jq -r .status)
+  STATUS=$(curl -sf -H "Authorization: Bearer $SESSION_TOKEN" \
+    "$ORCH_URL/ingest/$JOB_ID" | jq -r .status)
   [ "$STATUS" = "finished" ] || [ "$STATUS" = "failed" ] && break
   sleep 1
 done
-curl -sf "$ORCH_URL/ingest/$JOB_ID" | jq '{status, result}'
+curl -sf -H "Authorization: Bearer $SESSION_TOKEN" \
+  "$ORCH_URL/ingest/$JOB_ID" | jq '{status, result}'
 
 # The owner signs grants with a key only they hold, so the script has to behave
 # like a client: generate a device key once, register the public half, and sign

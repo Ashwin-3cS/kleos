@@ -37,9 +37,9 @@ absence.
 | --- | --- | --- | --- |
 | `GET /health` | sync | — | status of Neo4j, Redis and the gateway |
 | `GET /sources` | sync | — | the connector registry, with `ENABLED_SOURCES` applied |
-| `POST /ingest` | **enqueued** (202, job id) | none today | run the ingestion graph for one source |
-| `GET /ingest/{job_id}` | sync | — | job status and result |
-| `POST /remember` | sync (201) | session only when `sensitive` | push one thing the person said |
+| `POST /ingest` | **enqueued** (202, job id) | **owner session** | run the ingestion graph for one source. The owner is derived from the session |
+| `GET /ingest/{job_id}` | sync | **owner session**, as `Authorization: Bearer` | job status and result. Another owner's job answers 404, not 403 |
+| `POST /remember` | sync (201) | **owner session** | push one thing the person said. Metered per owner |
 | `POST /query` | sync | grant | run the query graph |
 | `POST /memory/shift` | sync | grant | why a decision shifted: the chain and the evidence at each step |
 | `POST /memory/context` | sync | grant | the citation chain around one object, across sources |
@@ -54,11 +54,24 @@ absence.
 | `GET /explorer` | static | — | the read-only graph explorer |
 | `GET /ui` | static | — | the owner's dashboard. Every path under it serves the same page, including `/ui/oauth/land` |
 
+<Note>
+**`owner_id` is not a field on any route.** It is derived from the credential —
+a grant's verified scope, or an owner session resolved by the gateway. ADR 0027
+closed the exception: `/ingest` and `/remember` used to take it from the body
+and authenticate nothing, so naming somebody was enough to write into their
+memory. The models now **forbid** unknown fields, so a caller still sending
+`owner_id` gets a 422 naming it rather than a 201 that quietly ignored it.
+
+`/remember` is metered per owner — `REMEMBER_RATE_LIMIT` per
+`RATE_LIMIT_WINDOW_SECS`, refusing with 429 and `Retry-After`. A fixed window,
+so a caller can get 2N across two adjacent windows; it is a ceiling to stop
+loops, not traffic shaping.
+</Note>
+
 <Warning>
-`POST /ingest` and `POST /remember` take `owner_id` from the **request body** and
-are unauthenticated. The orchestrator binds to localhost, and that is currently
-the only control. Nothing rate-limits `/remember`. It needs both before the
-orchestrator is reachable from anywhere else.
+This does not make the orchestrator safe to expose. It has no TLS of its own,
+no per-grant revocation, no per-owner quotas and no per-object deletion, and
+`/ingest/{job_id}` returns a job's full result to its owner with no redaction.
 </Warning>
 
 ### Why ingestion is enqueued and queries are not
@@ -71,12 +84,11 @@ not a job id.
 
 ```json
 {
-  "owner_id": "...",
+  "session_token": "...",
   "text": "Decided that Kleos will use hybrid retrieval rather than pure vector search.",
   "source": "text",
   "occurred_at_ms": null,
-  "sensitive": false,
-  "session_token": null
+  "sensitive": false
 }
 ```
 
@@ -90,9 +102,9 @@ thing the person said is a record like any other once it exists.
 - `url` stays `null` even when the text contains one. `SourceRef.url` means
   *where this record lives*, and an utterance lives nowhere. A URL inside it is
   something the person *referred to* — a different relationship.
-- `sensitive` is per request, not per source, and is **refused up front** without
-  a session rather than failing inside the graph where it would surface as a
-  skipped record.
+- `sensitive` is per request, not per source. It used to be the only thing that
+  required a session, which is how the unsealed path ended up writing to a
+  named owner with no credential at all. The session is required either way now.
 
 ### `POST /query`
 

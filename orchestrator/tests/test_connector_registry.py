@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
+from orchestrator import api as api_module
 from orchestrator.api import IngestRequest, enqueue_ingest
 from orchestrator.config import Settings
 from orchestrator.connectors import REGISTRY, ConnectorSpec, MockConnector
@@ -99,12 +101,30 @@ def test_record_metadata_survives_the_connector_boundary():
     assert RawRecord.model_validate(record.model_dump(mode="json")).metadata == record.metadata
 
 
-def test_unknown_source_is_rejected_at_the_api_edge():
+def test_unknown_source_is_rejected_at_the_api_edge(monkeypatch):
+    """...but only after the caller has been authenticated.
+
+    The order matters and the stubs below are what make it visible: since ADR
+    0027 `/ingest` resolves an owner session before it looks at the source, so
+    an unauthenticated caller learns nothing about which sources exist.
+    """
+    monkeypatch.setattr(api_module, "require_owner", lambda token: OWNER)
+    monkeypatch.setattr(api_module, "enforce_limit", lambda *a: None)
     with pytest.raises(HTTPException) as caught:
-        enqueue_ingest(IngestRequest(owner_id=OWNER, source="does-not-exist"))
+        enqueue_ingest(IngestRequest(session_token="s", source="does-not-exist"))
     assert caught.value.status_code == 400
     assert "unknown source" in caught.value.detail
     assert "mock" in caught.value.detail
+
+
+def test_the_api_edge_will_not_take_an_owner_id():
+    """`owner_id` is derived from the session and is not a field (ADR 0027).
+
+    Forbidden rather than ignored: a caller that still sends it is told, instead
+    of getting a 202 that quietly used the owner the session named.
+    """
+    with pytest.raises(ValidationError):
+        IngestRequest(owner_id=OWNER, session_token="s", source="mock")
 
 
 def test_unknown_source_names_what_is_known():
