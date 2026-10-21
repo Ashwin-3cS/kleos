@@ -275,13 +275,16 @@ def _posted_assembly_body() -> set[str]:
     Captured by calling it against a stub rather than read out of the source,
     so a field added by a later refactor is caught however it got there.
     """
-    from orchestrator.gateway_client import GatewayClient
+    from orchestrator.gateway_client import AttestationCheck, GatewayClient
 
     captured: dict = {}
 
     class _Stub(GatewayClient):
         def __init__(self) -> None:  # no HTTP client, on purpose
-            pass
+            # The one field `assemble` needs beyond the POST: this test is
+            # about what goes *up*, and a verifier here would be checking a
+            # document the stub never produced.
+            self._attestation = AttestationCheck()
 
         def _post(self, path: str, json: dict, auth: bool = False) -> dict:
             captured["path"] = path

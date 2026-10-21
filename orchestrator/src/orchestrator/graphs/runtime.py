@@ -14,7 +14,7 @@ from ..config import Settings, get_settings
 from ..connectors.registry import REGISTRY, ConnectorRegistry
 from ..extraction import get_extractor
 from ..extraction.base import Extractor
-from ..gateway_client import GatewayClient
+from ..gateway_client import AttestationCheck, GatewayClient
 from ..retrieval.embeddings import Embedder, get_embedder, verify_dim
 from ..retrieval.ranking import RankingWeights
 from ..storage.actions import ActionLog
@@ -83,7 +83,10 @@ class Runtime:
         verify_dim(embedder, settings.embedding_dim)
         if migrate:
             apply_migrations(store.driver, settings.neo4j_database, settings.embedding_dim)
-        gateway = GatewayClient(settings.gateway_url)
+        gateway = GatewayClient(
+            settings.gateway_url,
+            attestation=AttestationCheck(settings),
+        )
         # One store, shared: sealed record bodies and session blocks go to the
         # same place, and two instances would be two Quilt id spaces over the
         # same directory.

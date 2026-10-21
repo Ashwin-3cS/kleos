@@ -21,8 +21,12 @@ pub struct IdentityVerifyRequest {
 pub struct IdentityVerifyResponse {
     pub identity: OwnerIdentity,
     /// Hex-encoded NSM attestation document (or mock-prefixed stub) covering
-    /// the identity verification that just happened inside the enclave.
+    /// the identity verification that just happened inside the enclave. Its
+    /// `public_key` field is `commitment(IDENTITY, [enclave_pk, identity_json])`.
     pub attestation: String,
+    /// The enclave's signing key, base64, so that commitment can be recomputed.
+    #[serde(default)]
+    pub enclave_public_key_b64: String,
 }
 
 /// Request to encrypt one piece of raw source content inside the enclave,
@@ -45,8 +49,13 @@ pub struct SealEncryptResponse {
     /// `MOCK_SEAL_V1`, never a real Seal scheme id.
     pub scheme: String,
     /// Attestation covering the fact that this encryption happened inside
-    /// the enclave.
+    /// the enclave. Its `public_key` field is
+    /// `commitment(SEAL_ENCRYPT, [enclave_pk, key_id])`.
     pub attestation: String,
+    /// The enclave's signing key, base64, so the commitment above can be
+    /// recomputed. See [`AssembleResponse::enclave_public_key_b64`] for why
+    /// taking it from the host is safe.
+    pub enclave_public_key_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +262,10 @@ pub struct OAuthExchangeResponse {
     /// expiry at either provider.
     pub access_token_expires_at_ms: Option<u64>,
     pub attestation: String,
+    /// The enclave's signing key, base64. The document's `public_key` is
+    /// `commitment(OAUTH, [enclave_pk, owner_id, provider, sealed_key_id])`.
+    #[serde(default)]
+    pub enclave_public_key_b64: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -327,10 +340,20 @@ pub struct AssembleResponse {
     pub disclosed_ids: Vec<String>,
     pub denials: Vec<AssembleDenial>,
     pub considered: usize,
-    /// Covers the enclave public key, the recipient key and the ciphertext, so
-    /// a verifier can tell this assembly happened in here and was sealed to
-    /// that device. Unverified by anything today -- step 3 of the roadmap.
+    /// The document's `public_key` field is
+    /// `commitment(ASSEMBLE, [enclave_pk, recipient_key_id, ciphertext_b64])`,
+    /// so a verifier can tell this assembly happened in there and was sealed
+    /// to that device, rather than that some enclave exists. Verified by the
+    /// device and by the orchestrator (ADR 0026).
     pub attestation: String,
+    /// The enclave's long-lived signing key, base64.
+    ///
+    /// Needed to recompute the commitment above, and safe to take from the
+    /// host: a substituted key makes the commitment check fail, so the host
+    /// can break verification but cannot pass it with a key of its own. A
+    /// client that wants this key on its own authority reads `/attest`, whose
+    /// document commits to the key by itself.
+    pub enclave_public_key_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

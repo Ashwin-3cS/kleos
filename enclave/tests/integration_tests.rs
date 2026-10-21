@@ -407,7 +407,8 @@ async fn a_recipient_key_that_is_not_a_key_is_refused() {
 #[tokio::test]
 async fn an_assembly_carries_an_attestation_over_its_own_ciphertext() {
     // Over *this* assembly rather than over the enclave in general, so the
-    // document says which blob it is about. Nothing verifies it yet -- step 3.
+    // document says which blob it is about, as a commitment the device
+    // recomputes before it opens anything (ADR 0026).
     let (_, public) = test_device();
     let (_, body) = post(
         "/assemble",

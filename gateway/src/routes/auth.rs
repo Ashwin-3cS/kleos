@@ -229,6 +229,10 @@ pub async fn session(
     Json(req): Json<shared::IdentityVerifyRequest>,
 ) -> Result<Json<SessionResponse>, GatewayError> {
     let verified = state.enclave.verify_identity(&req).await?;
+    // Before the session token exists, not after. A session is the owner
+    // identity turned into a bearer credential, so a document that does not
+    // check is a credential minted on the word of whatever answered.
+    check_identity_attestation(&state, &verified)?;
     let session_token = crate::middleware::session::issue_session_token(
         &verified.identity.owner_id,
         state.config.keys.session(),
@@ -304,4 +308,43 @@ fn percent_encode(input: &str) -> String {
         }
     }
     out
+}
+
+/// Verifies the attestation over an identity the enclave just reported.
+///
+/// Two checks, and the second is the one that is easy to omit: the document has
+/// to verify, *and* it has to commit to this identity. A document that only
+/// verifies says an enclave exists somewhere.
+fn check_identity_attestation(
+    state: &AppState,
+    verified: &shared::IdentityVerifyResponse,
+) -> Result<(), GatewayError> {
+    let Some(policy) = &state.config.attestation else {
+        return Ok(());
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let document = shared::attestation::verify(&verified.attestation, policy, now_ms)
+        .map_err(|e| GatewayError::Internal(format!("the identity attestation did not verify: {e}")))?;
+
+    let identity_json = serde_json::to_vec(&verified.identity)
+        .map_err(|e| GatewayError::Internal(format!("could not re-serialise the identity: {e}")))?;
+    let pk = base64::engine::general_purpose::STANDARD
+        .decode(verified.enclave_public_key_b64.as_bytes())
+        .map_err(|_| {
+            GatewayError::Internal("the enclave public key is not base64".to_string())
+        })?;
+    let expected = shared::attestation::commitment(
+        shared::attestation::purpose::IDENTITY,
+        &[&pk, &identity_json],
+    );
+    if !document.binds_key(&expected) {
+        return Err(GatewayError::Internal(
+            "the identity attestation verified but does not commit to this identity".to_string(),
+        ));
+    }
+    tracing::info!(trust = document.trust.as_str(), "identity attestation verified");
+    Ok(())
 }

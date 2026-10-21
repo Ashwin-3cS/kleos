@@ -13,7 +13,10 @@ name = "kleos-device"
 path = "src/main.rs"
 
 [dependencies]
-shared = { path = "../shared" }
+# With the verifier on: a device that opens a sealed answer without checking
+# what sealed it is the trusting half of ADR 0026. The gateway is the host; this
+# is not, which is why verification here is the version that means something.
+shared = { path = "../shared", features = ["attestation-verify"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }

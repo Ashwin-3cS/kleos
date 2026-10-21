@@ -14,10 +14,30 @@ only ever sees the public half.
 | `pubkey --key <path>` | the base64 public key, for registration |
 | `key-id --key <path>` | the derived key id, which is what the gateway reports |
 | `sign --key <path> --scope <file> --ttl-secs 3600` | sign a scope into a grant token |
+| `pubkey --key <path> --encryption` | the X25519 half, which receives sealed answers |
+| `unseal --key <path>` | open a sealed answer on stdin, after verifying what sealed it |
+| `verify --key <path>` | the same checks, printing the verdict and opening nothing |
 
 `sign` reads a `Scope` as JSON from a file or stdin and generates a fresh nonce
 per grant, so two grants over an identical scope stay distinguishable in the read
 log.
+
+`unseal` takes what `query_memory` returns — the sealed envelope, the
+attestation and the enclave key together — and **verifies before it opens**
+(ADR 0026). This is the check that means something: the device is the one party
+in the system that is not the operator.
+
+| Flag | Effect |
+| --- | --- |
+| `--allow-mock` | accept a `MOCK_ATTESTATION_` stub. Needed against a local mock enclave, and refused without it |
+| `--root <path>` | the AWS Nitro root, DER or PEM, checked against the pinned fingerprint |
+| `--pcr0 <hex>` | require this measurement. A document that verifies but measures another image is refused, not downgraded |
+| `--max-age-secs <n>` | reject a document older than this |
+| `--allow-unattested` | open an answer that carries no attestation at all. The old behaviour, now something you ask for |
+
+Two checks run, and the second is the one easy to omit: the document has to
+verify, **and** it has to commit to this ciphertext sealed to this device. A
+relayed document from another assembly verifies perfectly and is refused here.
 
 ## Scripts
 

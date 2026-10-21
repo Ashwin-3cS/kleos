@@ -36,6 +36,7 @@
 
 use crate::error::EnclaveError;
 use crate::services::attestation::get_attestation;
+use shared::attestation::{commitment, purpose};
 use fastcrypto::hash::{Blake2b256, HashFunction};
 use serde_json::Value;
 
@@ -154,9 +155,11 @@ async fn attest_digest(owner_id: &str, args: &Value) -> Result<Outcome, EnclaveE
 
     // Committed to the attestation alongside the owner, so the document says
     // *whose* digest was attested and not merely that some digest was.
-    let mut committed = owner_id.as_bytes().to_vec();
-    committed.extend_from_slice(digest.as_bytes());
-    let attestation = get_attestation(committed).await?;
+    let committed = commitment(
+        purpose::ATTEST_DIGEST,
+        &[owner_id.as_bytes(), digest.as_bytes()],
+    );
+    let attestation = get_attestation(committed.to_vec()).await?;
 
     Ok(Outcome {
         digest: digest_of(attestation.as_bytes()),

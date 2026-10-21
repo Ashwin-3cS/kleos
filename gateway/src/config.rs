@@ -1,6 +1,8 @@
 use crate::keys::SigningKeys;
 use std::env;
 
+use shared::attestation::Policy as AttestationPolicy;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub gateway_port: u16,
@@ -20,6 +22,18 @@ pub struct Config {
     /// Postgres URL for the sealed refresh-token store. Unset means the
     /// in-memory store, which is the local mock-mode default.
     pub sealed_token_store_url: Option<String>,
+    /// What this gateway accepts as an attestation (ADR 0026).
+    ///
+    /// Built at boot, so a root certificate that is not the AWS root stops the
+    /// service starting instead of failing every document at runtime in a way
+    /// that reads like a bad document. `None` means verification is off, which
+    /// is a configuration choice and not a default: see `from_env`.
+    ///
+    /// Note what a check *here* is worth. The gateway is the host — the
+    /// component an operator substituting a fake enclave would substitute — so
+    /// this catches misconfiguration and not an attack. The device's check is
+    /// the one that is not the operator's.
+    pub attestation: Option<AttestationPolicy>,
 }
 
 impl Config {
@@ -62,6 +76,7 @@ impl Config {
             sealed_token_store_url: env::var("SEALED_TOKEN_STORE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            attestation: attestation_policy()?,
         })
     }
 
@@ -72,6 +87,9 @@ impl Config {
             enclave_host: "127.0.0.1".to_string(),
             enclave_port: 4000,
             keys: SigningKeys::mock(),
+            // Mocks allowed, and nothing else: the mock enclave produces
+            // nothing else. The tests build on this.
+            attestation: Some(AttestationPolicy::mock_only()),
             session_ttl_secs: 3600,
             oauth_state_ttl_secs: 600,
             google_client_id: "mock-google-client-id".to_string(),
@@ -95,4 +113,66 @@ impl Config {
             shared::Provider::GitHub => &self.github_redirect_uri,
         }
     }
+}
+
+/// The attestation policy from the environment.
+///
+/// Fallible on purpose, in the same spirit as `SigningKeys::from_env`: a
+/// gateway that boots with a root certificate it cannot verify looks like it is
+/// working, which is worse than one that refuses to boot.
+fn attestation_policy() -> anyhow::Result<Option<AttestationPolicy>> {
+    let on = env::var("VERIFY_ATTESTATION")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true);
+    if !on {
+        tracing::warn!(
+            "VERIFY_ATTESTATION is off: this gateway relays attestation documents \
+             without reading them"
+        );
+        return Ok(None);
+    }
+
+    let allow_mock = env::var("ATTESTATION_ALLOW_MOCK")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let mut policy = match env::var("ATTESTATION_ROOT_PATH").ok().filter(|p| !p.trim().is_empty()) {
+        Some(path) => {
+            let der = read_certificate(&path)?;
+            AttestationPolicy::with_root(der)
+                .map_err(|e| anyhow::anyhow!("ATTESTATION_ROOT_PATH {path}: {e}"))?
+        }
+        None => AttestationPolicy::default(),
+    };
+    policy.allow_mock = allow_mock;
+    if let Some(hex_pcr0) = env::var("ATTESTATION_EXPECTED_PCR0").ok().filter(|v| !v.trim().is_empty())
+    {
+        policy.expected_pcr0 = Some(
+            hex::decode(hex_pcr0.trim())
+                .map_err(|_| anyhow::anyhow!("ATTESTATION_EXPECTED_PCR0 must be hex"))?,
+        );
+    }
+    policy.max_age_ms = env::var("ATTESTATION_MAX_AGE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300)
+        * 1000;
+    Ok(Some(policy))
+}
+
+/// A certificate from disk, DER or PEM.
+fn read_certificate(path: &str) -> anyhow::Result<Vec<u8>> {
+    let bytes = std::fs::read(path)?;
+    let text = String::from_utf8_lossy(&bytes);
+    if text.contains("-----BEGIN CERTIFICATE-----") {
+        use base64::Engine;
+        let body: String = text
+            .lines()
+            .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE-----"))
+            .skip(1)
+            .take_while(|l| !l.starts_with("-----END CERTIFICATE-----"))
+            .collect();
+        return Ok(base64::engine::general_purpose::STANDARD.decode(body)?);
+    }
+    Ok(bytes)
 }

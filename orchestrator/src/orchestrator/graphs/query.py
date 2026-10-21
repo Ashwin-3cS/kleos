@@ -110,6 +110,15 @@ class QueryAnswer:
     #: because every caller has to serialise both shapes anyway, and a union
     #: here is a union a client can switch on.
     sealed: dict | None = None
+    #: The attestation over the sealed assembly, and the enclave key needed to
+    #: recompute what it commits to.
+    #:
+    #: Relayed rather than acted on: this process already verified them in
+    #: `GatewayClient.assemble`, and it passes them on because its own verdict
+    #: is a host-side verdict. The device checks for itself, which is the check
+    #: that is not the operator's (ADR 0026).
+    attestation: str | None = None
+    enclave_public_key: str | None = None
 
     @property
     def is_sealed(self) -> bool:
@@ -125,6 +134,8 @@ class QueryAnswer:
             "considered": self.considered,
             "disclosed_ids": self.disclosed_ids,
             "sealed": self.sealed,
+            "attestation": self.attestation,
+            "enclave_public_key": self.enclave_public_key,
         }
 
 
@@ -259,6 +270,8 @@ def _assemble_in_enclave(runtime: Runtime, state: QueryState) -> dict:
             considered=considered,
             disclosed_ids=assembly.disclosed_ids,
             sealed=assembly.sealed,
+            attestation=assembly.attestation,
+            enclave_public_key=assembly.enclave_public_key,
         ).as_dict()
     }
 
@@ -396,4 +409,6 @@ def run_query(
         # because the other path cannot produce one.
         disclosed_ids=answer.get("disclosed_ids", []),
         sealed=answer.get("sealed"),
+        attestation=answer.get("attestation"),
+        enclave_public_key=answer.get("enclave_public_key"),
     )

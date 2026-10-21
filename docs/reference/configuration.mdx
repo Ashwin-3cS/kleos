@@ -63,6 +63,19 @@ description: "Every environment variable, and the ones whose defaults are decisi
 | `WALRUS_PUBLISHER_URL` / `WALRUS_AGGREGATOR_URL` | unset | When set, sealed blobs go to Walrus. Still a stub: it **raises** rather than silently falling back to `BLOB_STORE_DIR` |
 | `SEALED_TOKEN_STORE_URL` | unset | Unset means an in-memory store, which silently forgets tokens on restart |
 
+## Attestation verification
+
+Read by the gateway and the orchestrator, and set by flags on `kleos-device`.
+ADR 0026 has the reasoning; `/status` has what is reachable today.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `VERIFY_ATTESTATION` | `true` | Off relays documents without reading them. The gateway logs a warning on boot when it is off |
+| `ATTESTATION_ALLOW_MOCK` | `false` | `MOCK_ATTESTATION_...` is refused unless this is on. **Required with `ENCLAVE_MODE=mock`**, which is why `run_local.sh` and `hands_on.sh` set it — and why the prefix is a check rather than a comment |
+| `ATTESTATION_ROOT_PATH` | unset | The AWS Nitro root, DER or PEM. Refused **at boot** unless it matches the fingerprint pinned in `shared/src/attestation.rs`, so a wrong certificate stops the service instead of failing every document. Fetch it from [AWS](https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip) |
+| `ATTESTATION_EXPECTED_PCR0` | unset | Hex PCR0 of our own image. Without it, a verified document proves only that *some* Nitro enclave produced it — which does not exclude one the operator built |
+| `ATTESTATION_MAX_AGE_SECS` | `300` | `0` disables the check. A document is a statement about the past, and a replayed one verifies perfectly |
+
 ## LLM, when `ORCHESTRATOR_MODE=live`
 
 | Variable | Default |

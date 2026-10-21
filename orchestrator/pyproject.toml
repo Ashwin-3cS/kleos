@@ -23,6 +23,12 @@ dependencies = [
     # the same models without torch, 67MB against roughly 2GB, for an identical
     # vector. See ADR 0012.
     "fastembed>=0.8",
+    # Verifying a Nitro attestation document (ADR 0026): CBOR for the document,
+    # X.509 and P-384 for the chain. Both are the standard choice and neither is
+    # reachable from the write path -- `attestation.commitment` needs neither,
+    # so a missing one cannot take down ingestion.
+    "cbor2>=5.6",
+    "cryptography>=43",
 ]
 
 [project.optional-dependencies]

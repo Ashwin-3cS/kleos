@@ -14,6 +14,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 export ENCLAVE_MODE=mock
+# The enclave here is the mock one, so every attestation it produces is a
+# `MOCK_ATTESTATION_` stub -- and ADR 0026 refuses those unless something says
+# mocks are acceptable. Set here and nowhere in the defaults: a local run that
+# needs this is a local run admitting what it is.
+export ATTESTATION_ALLOW_MOCK="${ATTESTATION_ALLOW_MOCK:-1}"
 export ENCLAVE_PORT="${ENCLAVE_PORT:-4000}"
 export GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 export ENCLAVE_HOST="${ENCLAVE_HOST:-127.0.0.1}"

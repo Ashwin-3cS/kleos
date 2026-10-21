@@ -8,6 +8,9 @@ use crate::AppState;
 use axum::extract::State;
 use axum::Json;
 use fastcrypto::traits::{KeyPair, ToFromBytes};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use shared::attestation::{commitment, purpose};
 use shared::{IdentityVerifyRequest, IdentityVerifyResponse, OAuthSignal};
 use std::sync::Arc;
 
@@ -62,12 +65,12 @@ pub async fn verify(
     let pk = state.signing_key.public();
     let attestation_input = serde_json::to_vec(&identity)
         .map_err(|e| EnclaveError::Internal(format!("failed to serialize identity: {e}")))?;
-    let mut committed = pk.as_bytes().to_vec();
-    committed.extend_from_slice(&attestation_input);
-    let attestation = get_attestation(committed).await?;
+    let committed = commitment(purpose::IDENTITY, &[pk.as_bytes(), &attestation_input]);
+    let attestation = get_attestation(committed.to_vec()).await?;
 
     Ok(Json(IdentityVerifyResponse {
         identity,
         attestation,
+        enclave_public_key_b64: B64.encode(pk.as_bytes()),
     }))
 }

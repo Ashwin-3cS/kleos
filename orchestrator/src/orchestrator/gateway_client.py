@@ -13,10 +13,21 @@ this process deliberately cannot read, and relays.
 from __future__ import annotations
 
 import base64
+import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import httpx
 
+from .attestation import (
+    AttestationError,
+    Policy,
+    Purpose,
+    Trust,
+    commitment,
+)
+from .attestation import verify as verify_attestation
 from .permissions import Scope
 from .schema import EncryptedContentRef
 from .storage.reads import grant_fingerprint
@@ -66,22 +77,116 @@ class SealedAssembly:
     denials: list[dict]
     considered: int
     attestation: str
+    #: The enclave's signing key, base64. Needed to recompute the commitment
+    #: the attestation carries; safe to take from the host, because a
+    #: substituted key makes the check fail rather than pass.
+    enclave_public_key: str = ""
 
 
 class SealedContent:
-    __slots__ = ("ciphertext", "ref", "attestation")
+    __slots__ = ("ciphertext", "ref", "attestation", "enclave_public_key")
 
-    def __init__(self, ciphertext: bytes, ref: EncryptedContentRef, attestation: str) -> None:
+    def __init__(
+        self,
+        ciphertext: bytes,
+        ref: EncryptedContentRef,
+        attestation: str,
+        enclave_public_key: str = "",
+    ) -> None:
         self.ciphertext = ciphertext
         self.ref = ref
         self.attestation = attestation
+        self.enclave_public_key = enclave_public_key
+
+
+class AttestationCheck:
+    """Verifies what the enclave returned, and says what verified (ADR 0026).
+
+    Built once from settings, because the root certificate's fingerprint is
+    checked at construction: a wrong certificate should stop the service
+    starting rather than fail every document in a way that reads like a bad
+    document.
+
+    `enabled` false is a configuration choice and not a silent default -- see
+    `Settings.verify_attestation` for what a check on this side of the boundary
+    is and is not worth.
+    """
+
+    __slots__ = ("enabled", "policy", "floor")
+
+    def __init__(self, settings: Any = None) -> None:
+        if settings is None or not settings.verify_attestation:
+            self.enabled = False
+            self.policy = Policy()
+            self.floor = Trust.MOCK
+            return
+        self.enabled = True
+        expected_pcr0 = (
+            bytes.fromhex(settings.attestation_expected_pcr0)
+            if settings.attestation_expected_pcr0
+            else None
+        )
+        root = (
+            Path(settings.attestation_root_path).read_bytes()
+            if settings.attestation_root_path
+            else b""
+        )
+        common = {
+            "expected_pcr0": expected_pcr0,
+            "max_age_ms": settings.attestation_max_age_secs * 1000,
+            "allow_mock": settings.attestation_allow_mock,
+        }
+        self.policy = (
+            Policy.with_root(root, **common) if root else Policy(**common)
+        )
+        # A mock clears the floor only because configuration said mocks are
+        # acceptable here.
+        self.floor = Trust.MOCK if settings.attestation_allow_mock else Trust.SIGNED_BY_AWS
+
+    def check(self, document: str, purpose: str, parts: list[bytes]) -> None:
+        """Raises `GatewayError` unless `document` verifies *and* commits to
+        `parts`.
+
+        Both halves, because a document that only verifies says an enclave
+        exists somewhere. The commitment is what ties it to the bytes in hand.
+        """
+        if not self.enabled:
+            return
+        if not document:
+            raise GatewayError(
+                f"the gateway returned no attestation for {purpose}, so nothing "
+                "establishes that an enclave produced it"
+            )
+        now_ms = int(time.time() * 1000)
+        try:
+            verified = verify_attestation(document, self.policy, now_ms)
+        except AttestationError as exc:
+            raise GatewayError(f"the {purpose} attestation did not verify: {exc}") from exc
+        if not verified.trust.at_least(self.floor):
+            raise GatewayError(
+                f"the {purpose} attestation verified only as "
+                f"`{verified.trust.value}`, and this service requires at least "
+                f"`{self.floor.value}`"
+            )
+        expected = commitment(purpose, parts)
+        if not verified.binds_key(expected):
+            raise GatewayError(
+                f"the {purpose} attestation verified but does not commit to this "
+                "result: it is about some other call"
+            )
 
 
 class GatewayClient:
-    def __init__(self, base_url: str, timeout: float = 10.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 10.0,
+        attestation: AttestationCheck | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = httpx.Client(base_url=self._base_url, timeout=timeout)
         self._session_token: str | None = None
+        self._attestation = attestation or AttestationCheck()
 
     def close(self) -> None:
         self._http.close()
@@ -134,6 +239,23 @@ class GatewayClient:
             auth=True,
         )
         ciphertext = base64.b64decode(body["ciphertext_b64"])
+        return self._sealed_content(body, ciphertext)
+
+    def _sealed_content(self, body: dict, ciphertext: bytes) -> SealedContent:
+        """Builds the result and verifies the document that came with it.
+
+        Shared by both seal routes on purpose: two call sites building this by
+        hand is how one of them ends up unverified.
+        """
+        enclave_key = body.get("enclave_public_key_b64", "")
+        self._attestation.check(
+            body.get("attestation", ""),
+            Purpose.SEAL_ENCRYPT,
+            [
+                base64.b64decode(enclave_key) if enclave_key else b"",
+                body["key_id"].encode(),
+            ],
+        )
         return SealedContent(
             ciphertext=ciphertext,
             ref=EncryptedContentRef(
@@ -142,7 +264,8 @@ class GatewayClient:
                 blob_id=None,
                 byte_len=len(ciphertext),
             ),
-            attestation=body["attestation"],
+            attestation=body.get("attestation", ""),
+            enclave_public_key=enclave_key,
         )
 
     def seal_decrypt(self, ciphertext: bytes, key_id: str) -> bytes:
@@ -188,16 +311,7 @@ class GatewayClient:
             },
         )
         ciphertext = base64.b64decode(body["ciphertext_b64"])
-        return SealedContent(
-            ciphertext=ciphertext,
-            ref=EncryptedContentRef(
-                key_id=body["key_id"],
-                scheme=body["scheme"],
-                blob_id=None,
-                byte_len=len(ciphertext),
-            ),
-            attestation=body.get("attestation", ""),
-        )
+        return self._sealed_content(body, ciphertext)
 
     def unseal_for_resolution(
         self, ciphertext: bytes, key_id: str, grant_token: str
@@ -275,12 +389,24 @@ class GatewayClient:
                 "candidates": candidates,
             },
         )
+        sealed = body["sealed"]
+        enclave_key = body.get("enclave_public_key_b64", "")
+        self._attestation.check(
+            body.get("attestation", ""),
+            Purpose.ASSEMBLE,
+            [
+                base64.b64decode(enclave_key) if enclave_key else b"",
+                sealed.get("recipient_key_id", "").encode(),
+                sealed.get("ciphertext_b64", "").encode(),
+            ],
+        )
         return SealedAssembly(
-            sealed=body["sealed"],
+            sealed=sealed,
             disclosed_ids=list(body.get("disclosed_ids", [])),
             denials=list(body.get("denials", [])),
             considered=int(body.get("considered", 0)),
             attestation=body.get("attestation", ""),
+            enclave_public_key=enclave_key,
         )
 
     def request_action(

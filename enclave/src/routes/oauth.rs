@@ -11,6 +11,7 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use fastcrypto::traits::{KeyPair, ToFromBytes};
+use shared::attestation::{commitment, purpose};
 use shared::{OAuthExchangeRequest, OAuthExchangeResponse, Provider};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,13 +74,16 @@ pub async fn exchange(
 
     let now_ms = now_ms();
     let pk = state.signing_key.public();
-    let mut committed = pk.as_bytes().to_vec();
-    committed.extend_from_slice(owner_id.as_bytes());
-    committed.extend_from_slice(provider.as_str().as_bytes());
-    if let Some(s) = &sealed {
-        committed.extend_from_slice(s.key_id.as_bytes());
-    }
-    let attestation = get_attestation(committed).await?;
+    let committed = commitment(
+        purpose::OAUTH,
+        &[
+            pk.as_bytes(),
+            owner_id.as_bytes(),
+            provider.as_str().as_bytes(),
+            sealed.as_ref().map(|s| s.key_id.as_bytes()).unwrap_or(b""),
+        ],
+    );
+    let attestation = get_attestation(committed.to_vec()).await?;
 
     Ok(Json(OAuthExchangeResponse {
         provider: provider.as_str().to_string(),
@@ -91,6 +95,7 @@ pub async fn exchange(
         granted_at_ms: now_ms,
         access_token_expires_at_ms: exchanged.expires_in_secs.map(|s| now_ms + s * 1_000),
         attestation,
+        enclave_public_key_b64: B64.encode(pk.as_bytes()),
     }))
 }
 

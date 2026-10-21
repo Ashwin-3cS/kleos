@@ -8,6 +8,7 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use fastcrypto::traits::{KeyPair, ToFromBytes};
+use shared::attestation::{commitment, purpose};
 use shared::{AssembleRequest, AssembleResponse};
 use std::sync::Arc;
 
@@ -41,8 +42,14 @@ use std::sync::Arc;
 ///
 /// Covers the enclave public key, the recipient key id and the ciphertext, so
 /// the document is about *this* assembly rather than about the enclave in
-/// general. Nothing verifies it yet -- step 3 of the roadmap -- and until
-/// something does, "the TEE did this" is unfalsifiable from the host.
+/// general. As a digest rather than the parts, because NSM caps `public_key` at
+/// 1024 bytes and a real ciphertext is kilobytes -- see
+/// `shared::attestation::commitment`, which also length-prefixes the parts so
+/// the commitment uniquely determines what it covers.
+///
+/// Verified by the device before it opens the blob (ADR 0026), which is the
+/// check that is not the operator's, and by the orchestrator and the gateway as
+/// a configuration check.
 pub async fn assemble_for_device(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AssembleRequest>,
@@ -63,10 +70,18 @@ pub async fn assemble_for_device(
     let sealed = seal_to_device(&recipient_key, &req.recipient_key_id, &plaintext)?;
 
     let pk = state.signing_key.public();
-    let mut committed = pk.as_bytes().to_vec();
-    committed.extend_from_slice(sealed.recipient_key_id.as_bytes());
-    committed.extend_from_slice(sealed.ciphertext_b64.as_bytes());
-    let attestation = get_attestation(committed).await?;
+    // A digest, not the parts: NSM caps `public_key` at 1024 bytes and this
+    // route was committing the whole ciphertext, so on real hardware it would
+    // have been refused. See `shared::attestation::commitment`.
+    let committed = commitment(
+        purpose::ASSEMBLE,
+        &[
+            pk.as_bytes(),
+            sealed.recipient_key_id.as_bytes(),
+            sealed.ciphertext_b64.as_bytes(),
+        ],
+    );
+    let attestation = get_attestation(committed.to_vec()).await?;
 
     // Counts only. The ids are in the response because the read log needs
     // them, but a log line naming what an agent read would put the disclosure
@@ -87,5 +102,6 @@ pub async fn assemble_for_device(
         denials: assembly.denials,
         considered: assembly.considered,
         attestation,
+        enclave_public_key_b64: B64.encode(pk.as_bytes()),
     }))
 }

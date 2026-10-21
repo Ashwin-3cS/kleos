@@ -19,8 +19,17 @@
 //! kleos-device pubkey  --key ~/.kleos/device.key           # the signing half
 //! kleos-device pubkey  --key ~/.kleos/device.key --encryption   # the receiving half
 //! kleos-device sign    --key ~/.kleos/device.key --scope scope.json --ttl-secs 3600
-//! kleos-device unseal  --key ~/.kleos/device.key < sealed.json
+//! kleos-device unseal  --key ~/.kleos/device.key --allow-mock < answer.json
+//! kleos-device verify  --root AWS_NitroEnclaves_Root-G1.der < answer.json
 //! ```
+//!
+//! **`unseal` verifies before it opens** (ADR 0026). The device is the one
+//! party in this system that is not the operator, so it is the one place where
+//! checking the attestation means something: a host that stood up an ordinary
+//! HTTP service in place of the enclave gets a refusal here and nowhere else.
+//! A mock document needs `--allow-mock`, a real one needs `--root`, and an
+//! answer with no attestation at all needs `--allow-unattested` -- which is
+//! the old behaviour, now something you have to ask for.
 //!
 //! **The encryption key is derived from the signing key, not stored beside
 //! it.** One file, one thing to lose, no state where a device holds half its
@@ -40,6 +49,7 @@
 use fastcrypto::ed25519::Ed25519KeyPair;
 use fastcrypto::traits::{KeyPair, ToFromBytes};
 use device::{encryption_public, encryption_secret, open_as_device};
+use shared::attestation::{commitment, purpose, Policy, Trust};
 use shared::{Scope, SealedToDevice};
 use std::io::Read;
 
@@ -72,11 +82,14 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         "sign" => sign(&args, &key_path),
-        "unseal" => unseal(&key_path),
+        "unseal" => unseal(&args, &key_path),
+        "verify" => verify_only(&args),
         _ => {
             eprintln!(
-                "usage: kleos-device <keygen|pubkey|key-id|sign|unseal> [--key PATH] \
-                 [--encryption] [--scope FILE|-] [--ttl-secs N]"
+                "usage: kleos-device <keygen|pubkey|key-id|sign|unseal|verify> [--key PATH] \
+                 [--encryption] [--scope FILE|-] [--ttl-secs N] \
+                 [--root PATH] [--allow-mock] [--allow-unattested] [--pcr0 HEX] \
+                 [--max-age-secs N]"
             );
             Err("unknown command".into())
         }
@@ -125,14 +138,164 @@ fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
 /// under sealing -- and writes the plaintext to stdout. Deliberately a filter:
 /// a device that wrote the answer to a file by default would leave plaintext on
 /// disk as a side effect of reading it.
-fn unseal(key_path: &str) -> Result<(), String> {
-    let private = load_bytes(key_path)?;
+/// What `query_memory` hands back under sealing, or a bare envelope.
+///
+/// Both shapes are accepted because both occur in practice: the orchestrator's
+/// answer carries the sealed envelope beside the attestation and the enclave
+/// key, and older captures are the envelope alone. The difference is not
+/// cosmetic -- the second cannot be verified, and says so.
+struct Answer {
+    sealed: SealedToDevice,
+    attestation: Option<String>,
+    enclave_public_key: Option<String>,
+}
+
+fn read_answer() -> Result<Answer, String> {
     let mut raw = String::new();
     std::io::stdin()
         .read_to_string(&mut raw)
         .map_err(|e| format!("could not read the sealed answer from stdin: {e}"))?;
-    let sealed: SealedToDevice = serde_json::from_str(raw.trim())
-        .map_err(|e| format!("stdin is not a sealed answer: {e}"))?;
+    let raw = raw.trim();
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("stdin is not JSON: {e}"))?;
+
+    if let Some(inner) = value.get("sealed") {
+        if inner.is_null() {
+            return Err("this answer is not sealed; there is nothing to open".into());
+        }
+        return Ok(Answer {
+            sealed: serde_json::from_value(inner.clone())
+                .map_err(|e| format!("the `sealed` field is not a sealed envelope: {e}"))?,
+            attestation: value
+                .get("attestation")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            enclave_public_key: value
+                .get("enclave_public_key")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+    Ok(Answer {
+        sealed: serde_json::from_str(raw)
+            .map_err(|e| format!("stdin is not a sealed answer: {e}"))?,
+        attestation: None,
+        enclave_public_key: None,
+    })
+}
+
+/// The policy the flags describe, deny-by-default.
+///
+/// `--allow-mock` and `--root` both have to be asked for, and neither is
+/// defaulted into existence: a verifier that trusts mocks unless told not to
+/// would make the `MOCK_ATTESTATION_` prefix decorative again.
+fn policy_from(args: &[String]) -> Result<(Policy, Trust), String> {
+    let allow_mock = args.iter().any(|a| a == "--allow-mock");
+    let mut policy = match flag(args, "--root") {
+        Some(path) => {
+            let der = read_root(&path)?;
+            Policy::with_root(der).map_err(|e| format!("{path}: {e}"))?
+        }
+        None => Policy::default(),
+    };
+    policy.allow_mock = allow_mock;
+    if let Some(hex_pcr0) = flag(args, "--pcr0") {
+        policy.expected_pcr0 = Some(
+            hex::decode(hex_pcr0.trim()).map_err(|_| "--pcr0 must be hex".to_string())?,
+        );
+    }
+    if let Some(secs) = flag(args, "--max-age-secs") {
+        let secs: u64 = secs
+            .parse()
+            .map_err(|_| "--max-age-secs must be a number".to_string())?;
+        policy.max_age_ms = secs * 1000;
+    }
+    // The floor: a mock satisfies it only because the caller said mocks are
+    // acceptable here. `--pcr0` raises it to `Pinned` on its own, inside
+    // `verify`, by refusing a measurement that does not match.
+    let floor = if allow_mock {
+        Trust::Mock
+    } else {
+        Trust::SignedByAws
+    };
+    Ok((policy, floor))
+}
+
+/// The root certificate, DER or PEM.
+fn read_root(path: &str) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("could not read {path}: {e}"))?;
+    let text = String::from_utf8_lossy(&bytes);
+    if text.contains("-----BEGIN CERTIFICATE-----") {
+        let body: String = text
+            .lines()
+            .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE-----"))
+            .skip(1)
+            .take_while(|l| !l.starts_with("-----END CERTIFICATE-----"))
+            .collect();
+        return unb64(&body).ok_or_else(|| format!("{path} is not valid PEM"));
+    }
+    Ok(bytes)
+}
+
+/// Checks the attestation over an assembled answer, and reports what verified.
+///
+/// Two checks, and the second is the one that is easy to leave out: the
+/// document has to verify, *and* it has to commit to this ciphertext sealed to
+/// this device. A document that only verifies says an enclave exists.
+fn check_attestation(args: &[String], answer: &Answer) -> Result<(), String> {
+    let Some(document) = &answer.attestation else {
+        if args.iter().any(|a| a == "--allow-unattested") {
+            eprintln!(
+                "kleos-device: warning: no attestation with this answer, and                  --allow-unattested was passed. Nothing here establishes that an                  enclave produced it."
+            );
+            return Ok(());
+        }
+        return Err("this answer carries no attestation, so nothing establishes that an                     enclave produced it. Pass --allow-unattested to open it anyway."
+            .into());
+    };
+
+    let (policy, floor) = policy_from(args)?;
+    let verified = shared::attestation::verify(document, &policy, now_ms()?)
+        .map_err(|e| format!("the attestation did not verify: {e}"))?;
+    if !verified.trust.at_least(floor) {
+        return Err(format!(
+            "the attestation verified only as `{}`, and this device requires at least `{}`",
+            verified.trust.as_str(),
+            floor.as_str()
+        ));
+    }
+
+    let Some(encoded) = &answer.enclave_public_key else {
+        return Err("the answer does not carry the enclave public key, so the attestation                     cannot be tied to this ciphertext"
+            .into());
+    };
+    let pk = unb64(encoded).ok_or("the enclave public key is not base64")?;
+    let expected = commitment(
+        purpose::ASSEMBLE,
+        &[
+            &pk,
+            answer.sealed.recipient_key_id.as_bytes(),
+            answer.sealed.ciphertext_b64.as_bytes(),
+        ],
+    );
+    if !verified.binds_key(&expected) {
+        return Err("the attestation does not commit to this answer: it verified, but it is                     about some other assembly. A relayed or substituted blob looks exactly                     like this."
+            .into());
+    }
+
+    eprintln!(
+        "kleos-device: attestation {} (module {}), committed to this answer",
+        verified.trust.as_str(),
+        verified.module_id
+    );
+    Ok(())
+}
+
+fn unseal(args: &[String], key_path: &str) -> Result<(), String> {
+    let private = load_bytes(key_path)?;
+    let answer = read_answer()?;
+    check_attestation(args, &answer)?;
+    let sealed = answer.sealed;
 
     let plaintext = open_as_device(&encryption_secret(&private), &sealed)?;
     println!(
@@ -143,6 +306,25 @@ fn unseal(key_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+
+/// Verifies without opening anything.
+///
+/// Separate from `unseal` because the question "is this enclave the one I
+/// expect" is worth asking before a device holds a key at all -- and because a
+/// verdict is a thing to print in a script.
+fn verify_only(args: &[String]) -> Result<(), String> {
+    let answer = read_answer()?;
+    check_attestation(args, &answer)?;
+    println!("ok");
+    Ok(())
+}
+
+fn now_ms() -> Result<u64, String> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "system clock before unix epoch".to_string())?
+        .as_millis() as u64)
+}
 
 #[cfg(unix)]
 fn restrict(path: &str) -> Result<(), String> {

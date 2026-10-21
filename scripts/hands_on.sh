@@ -124,6 +124,11 @@ if [ "${1:-}" != "grants" ]; then
   stop
   cd "$ORCH_DIR"
   export ORCHESTRATOR_MODE=mock EXTRACTOR GATEWAY_URL
+  # The gateway in front of this is the mock enclave, so every document it
+  # returns is a `MOCK_ATTESTATION_` stub and ADR 0026 refuses those unless
+  # something says mocks are acceptable. Found by this script failing:
+  # `run_local.sh` had it and this did not, so writes refused at the seal.
+  export ATTESTATION_ALLOW_MOCK="${ATTESTATION_ALLOW_MOCK:-1}"
   MCP_HTTP_ENABLED=1 "$PY" -m orchestrator.api \
     > "$ROOT_DIR/.local/orchestrator.log" 2>&1 &
   echo $! > "$ROOT_DIR/.local/orchestrator.pid"

@@ -1,3 +1,4 @@
+pub mod attestation;
 pub mod content;
 pub mod grants;
 pub mod identity;
@@ -6,6 +7,12 @@ pub mod oauth;
 pub mod permissions;
 pub mod protocol;
 
+pub use attestation::{commitment, purpose};
+#[cfg(feature = "attestation-verify")]
+pub use attestation::{
+    verify as verify_attestation, AttestationError, Policy as AttestationPolicy, Trust,
+    Verified as VerifiedAttestation, MOCK_PREFIX, NITRO_ROOT_SHA256,
+};
 pub use grants::{
     key_id_for, sign_grant, verify_grant, GrantClaims, GrantError, RegisteredKey,
 };

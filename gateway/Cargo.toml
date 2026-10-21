@@ -17,7 +17,10 @@ path = "src/main.rs"
 # dev-dependency below false for the server too. See ADR 0011 and 0024.
 
 [dependencies]
-shared = { path = "../shared" }
+# With the verifier on. The gateway's own check is a configuration check and
+# not a trust boundary -- see Config::attestation -- but relaying a document
+# nobody reads is what ADR 0026 exists to end.
+shared = { path = "../shared", features = ["attestation-verify"] }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

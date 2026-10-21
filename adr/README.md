@@ -78,6 +78,7 @@ is part of the history, and overwriting it loses why anyone thought otherwise.
 | [0023](0023-the-owners-key-lives-in-the-browser.md) | The owner's key lives in the browser |
 | [0024](0024-the-enclave-assembles-and-reseals-to-the-device.md) | The enclave assembles, and re-seals to the asking device |
 | [0025](0025-reasoning-across-sessions-writes-claims-not-blocks.md) | Reasoning across sessions, and why its output is a claim |
+| [0026](0026-verify-the-attestation-and-say-what-verified.md) | Verify the attestation, and say what verified |
 
 The seven from 0016 are the agent harness, written after the fact: steps 1
 through 11 landed with their reasoning in commit messages and code comments,

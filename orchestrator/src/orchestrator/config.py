@@ -195,6 +195,45 @@ class Settings(BaseSettings):
         default=False, validation_alias="ENCRYPT_CONTENT_AT_REST"
     )
 
+    #: Verify the attestation on everything the enclave returns (ADR 0026).
+    #:
+    #: On by default, because the alternative is what this replaced: a document
+    #: carried, stored and never read. Note what a check *here* is worth --
+    #: this process runs on the host, so it catches an orchestrator pointed at
+    #: something that is not an enclave, and catches a mock reaching a
+    #: deployment that should not take one. It catches nothing a hostile
+    #: operator does; the device's check is the one that does.
+    verify_attestation: bool = Field(default=True, validation_alias="VERIFY_ATTESTATION")
+
+    #: Whether `MOCK_ATTESTATION_...` is acceptable. Off by default, so the
+    #: prefix is a check and not a comment. `run_local.sh` turns it on.
+    attestation_allow_mock: bool = Field(
+        default=False, validation_alias="ATTESTATION_ALLOW_MOCK"
+    )
+
+    #: Path to the AWS Nitro root certificate (DER or PEM). Refused at startup
+    #: unless it matches the published fingerprint -- a wrong certificate should
+    #: be a boot failure, not a per-document refusal that reads like a bad
+    #: document. Fetch it from
+    #: https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip
+    attestation_root_path: str | None = Field(
+        default=None, validation_alias="ATTESTATION_ROOT_PATH"
+    )
+
+    #: Hex PCR0 of our own enclave image. With it set, a document that verifies
+    #: but measures a different image is refused rather than downgraded --
+    #: which is the only check that distinguishes our enclave from any other
+    #: Nitro enclave. Unset until an `.eif` has been built on real hardware.
+    attestation_expected_pcr0: str | None = Field(
+        default=None, validation_alias="ATTESTATION_EXPECTED_PCR0"
+    )
+
+    #: How old a document may be. 0 disables the check. A document is a
+    #: statement about the past, and a replayed one verifies perfectly.
+    attestation_max_age_secs: int = Field(
+        default=300, validation_alias="ATTESTATION_MAX_AGE_SECS"
+    )
+
     #: Where sealed ciphertext is written when Walrus is not configured. The
     #: bytes arrive already encrypted by the enclave, so this directory holds
     #: no plaintext -- but it holds the *only* copy of a sensitive body, so it

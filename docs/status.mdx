@@ -46,6 +46,12 @@ Works; not yet shippable — see below.
 Issue, inspect and revoke grants from a screen, with the signing key held in the
 browser. Plus what each agent has been working on, and what every grant did.
 </Card>
+<Card title="Attestation verification" icon="certificate">
+The document is parsed, its chain verified to the pinned AWS Nitro root, and
+checked to commit to the exact result it arrived with — on the device, in the
+gateway and in the orchestrator. Three outcomes, not a boolean: `mock`,
+`signed_by_aws`, `pinned`.
+</Card>
 <Card title="One real connector" icon="file-import">
 ChatGPT, via the person's own data export. It ingests real data today.
 </Card>
@@ -75,7 +81,10 @@ enclave, so when real Seal lands the invariant already holds and nothing outside
 the TEE has to change.
 </Accordion>
 <Accordion title="Attestation documents are prefixed MOCK_ATTESTATION_">
-So a mock document can never be mistaken for a real one.
+So a mock document can never be mistaken for a real one — and since the
+verifier landed, that prefix is a check rather than a convention: a mock is
+refused unless `ATTESTATION_ALLOW_MOCK` is on, which `run_local.sh` sets and a
+deployment does not.
 </Accordion>
 <Accordion title="OAuth providers short-circuit in mock mode">
 Pass a token of the form `mock_google_<subject>` or `mock_github_<login>` and
@@ -110,6 +119,22 @@ with the reason rather than failing silently.
 key is set and `ORCHESTRATOR_MODE=live`. It has not been run against the live
 API from this repository.
 
+## Verified, but only as far as there is something to verify against
+
+<Warning>
+**`pinned` is unreachable today.** Verification establishes `signed_by_aws`
+when a document chains to the AWS Nitro root. That excludes a plain HTTP
+service pretending to be an enclave — today's actual exposure — and it does
+**not** exclude a Nitro enclave running an image the operator built, because
+only PCR0 distinguishes ours from any other. PCR0 comes from a release build on
+real hardware, which has not happened (see below), so `ATTESTATION_EXPECTED_PCR0`
+is unset and the strongest available outcome is the middle one.
+
+The verifier reports which of the three it established rather than collapsing
+them into a boolean, so a deployment can tell the difference. ADR 0026 has the
+reasoning.
+</Warning>
+
 ## Never run on real hardware
 
 <Warning>
@@ -122,6 +147,14 @@ verified — `cargo build --release --no-default-features --features nitro -p en
 compiles cleanly, including the pinned `aws-nitro-enclaves-nsm-api` git
 dependency — but compiling is not handshaking with Google.
 </Warning>
+
+A second bug found the same way, this time by building the verifier: the
+`assemble` route committed the **whole base64 ciphertext** into the
+attestation's `public_key` field, and NSM caps that field at 1024 bytes. A real
+answer is several kilobytes, so that route would have been refused by the NSM
+driver the first time it ran on hardware — and mock mode could never have shown
+it, because the mock stub accepts any length. The commitment is now a SHA-384
+digest over length-prefixed parts, which is 48 bytes whatever it covers.
 
 A bug found while writing this down: until recently the enclave dialled
 `http://127.0.0.1:<port>` — plaintext HTTP — into a tunnel that landed on port

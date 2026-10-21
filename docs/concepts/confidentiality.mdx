@@ -89,6 +89,32 @@ consolidation have both been run end to end against a local llama.cpp, so that
 is a real option rather than a hypothetical one.
 </Note>
 
+## Who checks the attestation, and what their check is worth
+
+Every sealed thing this system produces carries an attestation document, and
+until ADR 0026 nothing read one. The check now runs in three places, and they do
+**not** mean the same thing.
+
+| Who checks | What a failure catches |
+| --- | --- |
+| **The device** (`kleos-device unseal`) | The real one. The device is not the operator and holds its own key: it refuses to open an answer whose attestation does not verify, or which verifies but is about some other assembly. |
+| **The owner's browser** | The other real one, for the same reason — ADR 0023 already puts the owner's key there. |
+| **The gateway and the orchestrator** | Misconfiguration. Both run on the host, so an operator who wanted to skip the check would skip it. |
+
+That last row is worth being blunt about, because a host-side check is the
+easiest thing to mistake for a boundary. It catches an orchestrator pointed at
+something that is not an enclave, and a mock document reaching a deployment that
+should not take one. It catches nothing a hostile operator does. It is still
+worth having — most failures are mistakes, not attacks — and it is not what
+makes the claim true.
+
+Two halves to each check, and the second is the one easy to omit: the document
+has to verify, **and** it has to commit to the exact result it arrived with. A
+document that only verifies says an enclave exists somewhere.
+
+What verification can establish today stops one step short of the claim: see
+[Project status](/status).
+
 `ENCRYPT_CONTENT_AT_REST` narrows this: an event's summary and body, a claim's
 statement, an entity's name and aliases, and a citation's quote are sealed at
 rest, while structure — ids, timestamps, edges, ACL fields, claim status — stays

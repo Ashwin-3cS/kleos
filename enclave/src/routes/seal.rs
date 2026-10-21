@@ -7,6 +7,7 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use fastcrypto::traits::{KeyPair, ToFromBytes};
+use shared::attestation::{commitment, purpose};
 use shared::{SealDecryptRequest, SealDecryptResponse, SealEncryptRequest, SealEncryptResponse};
 use std::sync::Arc;
 
@@ -25,15 +26,18 @@ pub async fn encrypt(
     let sealed = seal::encrypt(&req.owner_id, plaintext).await?;
 
     let pk = state.signing_key.public();
-    let mut committed = pk.as_bytes().to_vec();
-    committed.extend_from_slice(sealed.key_id.as_bytes());
-    let attestation = get_attestation(committed).await?;
+    let committed = commitment(
+        purpose::SEAL_ENCRYPT,
+        &[pk.as_bytes(), sealed.key_id.as_bytes()],
+    );
+    let attestation = get_attestation(committed.to_vec()).await?;
 
     Ok(Json(SealEncryptResponse {
         ciphertext_b64: B64.encode(&sealed.ciphertext),
         key_id: sealed.key_id,
         scheme: sealed.scheme,
         attestation,
+        enclave_public_key_b64: B64.encode(pk.as_bytes()),
     }))
 }
 

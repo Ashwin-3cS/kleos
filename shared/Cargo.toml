@@ -14,6 +14,33 @@ base64 = { workspace = true }
 # already uses, so this adds no new primitive to anything the attestation
 # measures. See grants.rs.
 fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto" }
+# Attestation verification (ADR 0026). Behind a feature the enclave does not
+# enable: it has no reason to verify its own document, and CBOR + X.509 + P-384
+# inside the measured image is weight bought for nothing.
+ciborium = { version = "0.2", optional = true }
+x509-cert = { version = "0.2", default-features = false, features = ["pem"], optional = true }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8"], optional = true }
+# Not optional: `attestation::commitment` is called by the enclave, which does
+# not enable the verifier. fastcrypto already brings sha2, so this is no new
+# weight inside the measured image.
+sha2 = "0.10"
+const-oid = { version = "0.9", optional = true }
+
+[features]
+default = []
+# Enabled by the gateway, the device and the test suite. Never by the enclave.
+attestation-verify = ["dep:ciborium", "dep:x509-cert", "dep:p384", "dep:const-oid"]
 
 [dev-dependencies]
+# A dev-dependency on itself, so `cargo test` turns the verifier on without
+# `--features`. Without it the attestation tests compile to nothing and a
+# workspace test run reports success for a suite it never built.
+shared = { path = ".", features = ["attestation-verify"] }
 rand = "0.8"
+# The attestation tests build a P-384 chain they control, so they can exercise
+# the chain walk and the COSE signature without AWS's root. See
+# tests/attestation_tests.rs.
+ciborium = "0.2"
+x509-cert = { version = "0.2", features = ["builder"] }
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+sha2 = "0.10"

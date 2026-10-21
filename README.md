@@ -199,7 +199,8 @@ enclave (Axum, inside Nitro Enclave)        <- core trust boundary
   - Exchanges OAuth authorization codes itself, and seals the refresh
     token before it leaves; holds the only copy of the client secret
   - Computes trust tier from stacked signals
-  - NSM attestation over the result
+  - NSM attestation over the result, committing to a digest of what the
+    route actually did, which the device recomputes before it trusts it
   - Seal-encrypts raw sensitive content before it leaves the TEE
         |
         v
@@ -353,6 +354,21 @@ told the enclave "trust me, this checked out," the attestation would cover
 nothing of value. So `enclave/src/routes/identity.rs` calls Google/GitHub's
 verification endpoints itself, and only then produces the attestation.
 
+**And who checks it.** Three places, meaning three different things (ADR 0026).
+The **device** refuses to open a sealed answer whose attestation does not
+verify, or which verifies but commits to some other assembly -- that is the
+check that counts, because a device is not the operator. The gateway and the
+orchestrator check too, and what *they* catch is misconfiguration: an
+orchestrator pointed at something that is not an enclave, a mock reaching a
+deployment that should not take one. They run on the host, so they catch nothing
+a hostile operator does. Worth saying rather than leaving a reader to assume.
+
+What verification can establish today stops one step short of the claim: a
+document chaining to the pinned AWS root proves *some* Nitro enclave produced
+it, which does not exclude one the operator built. Only PCR0 distinguishes ours,
+and PCR0 comes from a release build on hardware that has not happened. The
+verifier reports `signed_by_aws` rather than rounding it up to `pinned`.
+
 The same reasoning is why the OAuth **code exchange** is in the enclave
 (`enclave/src/routes/oauth.rs`). A refresh token is not an ordinary app
 secret; it is standing, renewable access to the user's mailbox. If the host
@@ -442,7 +458,9 @@ instead of dialing a tunnel that doesn't exist locally -- pass a token of
 the form `mock_google_<subject>` / `mock_github_<login>` and the provider
 deterministically returns that identity. The attestation document returned
 in mock mode is prefixed `MOCK_ATTESTATION_` so it can never be mistaken for
-a real one.
+a real one -- and since ADR 0026 that prefix is a *check*: a mock is refused
+unless `ATTESTATION_ALLOW_MOCK` is on, which `run_local.sh` and `hands_on.sh`
+set and a deployment does not.
 
 ```bash
 cargo build                     # workspace, mock feature (default)
