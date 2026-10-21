@@ -48,7 +48,7 @@ dropped — never returned to the host at all. Only the enclave has the OAuth
 client secret, so the host cannot repeat the exchange itself.
 </Card>
 <Card title="Derived memory, on a read: yes" icon="circle-check">
-Closed by [ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device).
+Closed by ADR 0024.
 The host ranks on structure and embeddings, reads none of the candidates, and
 hands them to the enclave still sealed; the enclave unseals, filters on real
 content, assembles and **re-encrypts the answer to the device that asked**. The
@@ -60,7 +60,7 @@ Extraction and resolution still run in the Python orchestrator. The resolver is
 the sharper of the two: it unseals *already-stored* claims on every ingestion to
 compare against, so an operator watching one write sees far more than what was
 written. Cross-session reasoning
-([ADR 0025](/adr/0025-reasoning-across-sessions-writes-claims-not-blocks)) is
+(ADR 0025) is
 the same exposure with a wider aperture — every claim about a subject at once.
 </Card>
 </CardGroup>
@@ -93,7 +93,7 @@ is a real option rather than a hypothetical one.
 statement, an entity's name and aliases, and a citation's quote are sealed at
 rest, while structure — ids, timestamps, edges, ACL fields, claim status — stays
 in the clear so the structural reads keep working. Embeddings do too, until a
-later stage. See [ADR 0010](/adr/0010-encrypt-the-resolved-record-at-rest).
+later stage. See ADR 0010.
 
 ## Where a plaintext refresh token exists
 

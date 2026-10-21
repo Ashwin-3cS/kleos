@@ -53,7 +53,7 @@ has the same four-node shape for this reason.
 ## The owner signs grants, not the gateway
 
 <Note>
-There is **no mint route**. [ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway)
+There is **no mint route**. ADR 0011
 moved signing to a key the owner holds, so the gateway can verify a grant and
 cannot produce one. `POST /memory/scope/grant` is gone, and a test holds its
 absence.
@@ -68,7 +68,7 @@ root secret via HMAC-SHA256 over a versioned label. One root rather than three
 secrets, because three environment variables let an operator paste the same
 value into all of them and never know. In `nitro` mode the gateway refuses to
 start on the public development default. See
-[ADR 0004](/adr/0004-derive-per-purpose-signing-keys-from-one-root).
+ADR 0004.
 
 ## Two identities, one of them authenticated
 
@@ -119,4 +119,4 @@ Entries carry **no `:Memory` label**. The vector index and every traversal key o
 that label, so a log entry retrievable as memory would disclose other agents'
 reads through the very check it audits. Reading the log needs an **owner
 session**, not a grant, and there is no MCP tool for it. See
-[ADR 0005](/adr/0005-log-what-each-grant-disclosed).
+ADR 0005.

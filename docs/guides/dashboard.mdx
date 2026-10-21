@@ -10,8 +10,8 @@ record of what each grant did.
 
 <Note>
 The signing key stays in your browser. The server composes nothing and signs
-nothing — see [ADR 0023](/adr/0023-the-owners-key-lives-in-the-browser) and
-[ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway). That is why nobody
+nothing — see ADR 0023 and
+ADR 0011. That is why nobody
 running the host can issue themselves a grant, and it is also why the dashboard
 needs a browser with Ed25519 in WebCrypto: Chrome 137+, Safari 17+, Firefox
 130+. There is deliberately no JavaScript fallback.
@@ -77,7 +77,7 @@ Each key is really two keypairs: Ed25519 signs grants, X25519 receives content
 the enclave seals back to this device. They are separate because a signature key
 cannot be encrypted to. Both private halves are generated in your browser and
 neither can be read by the page. See
-[ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device).
+ADR 0024.
 
 <Warning>
 **A registered key this browser does not hold** gets a prominent warning, and it

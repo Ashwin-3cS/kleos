@@ -87,9 +87,10 @@ proximity costs precision across projects.
 This is the memory and permissions core of something larger: a voice-first
 personal assistant, with Kleos as the layer that remembers and decides who may
 read what. "Where this is going" is the target architecture and the order it has
-to be built in. `docs/` is a Mintlify site covering all of it; `docs/adr/`
+to be built in. `docs/` is a Mintlify site covering all of it; `adr/`
 carries the decisions -- one per file, immutable once accepted, a reversal
-getting its own ADR rather than an edit.
+getting its own ADR rather than an edit. The records are not part of the site:
+they are written for whoever maintains this, not for whoever uses it.
 
 **What exists.** The enclave and gateway; owner-signed grants and a device key
 registry; the resolved memory schema with memory kinds and write attribution;
@@ -163,8 +164,8 @@ for the single authoritative version of it.
 
 `docs/` is a Mintlify site: concepts, architecture, guides and reference, with
 one page -- `docs/status.mdx` -- that is the single list of what is mocked,
-stubbed, or has never run on real hardware. `docs/adr/` is unchanged and is
-served as its own tab.
+stubbed, or has never run on real hardware. The decision records are
+unchanged, and live outside the site in `adr/`.
 
 ```bash
 npm i -g mint && cd docs && mint dev    # http://localhost:3000
@@ -568,7 +569,8 @@ orchestrator/ Python orchestration service (LangGraph + LlamaIndex); not in the 
               also owns docker-compose.yml for neo4j/redis/postgres
 ui/           the owner's dashboard (Vite + React + TS); builds into static/ui,
               which is committed, so running Kleos needs no Node
-docs/adr/     one architecture decision per file, immutable once accepted
+adr/          one architecture decision per file, immutable once accepted;
+              deliberately not part of the docs site
 scripts/      build/run/deploy/smoke-test plumbing, plus services.sh
 ```
 
@@ -1174,7 +1176,7 @@ Typed, with real signatures, failing explicitly rather than silently:
 > **Working on this?** [`PLAN.md`](PLAN.md) is the current thread: what is being
 > built next, the confidentiality architecture it is building toward, and the
 > things that would otherwise have to be re-derived. Settled decisions live in
-> `docs/adr/`.
+> `adr/`.
 
 ## Step 0: hardening, and testing the central bet
 

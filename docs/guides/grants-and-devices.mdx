@@ -5,7 +5,7 @@ description: "Registering a device key and signing a scope the gateway cannot mi
 
 A grant is signed by a key the **owner** holds. The gateway verifies it and has
 no way to produce one. See
-[ADR 0011](/adr/0011-the-owner-signs-grants-not-the-gateway).
+ADR 0011.
 
 <Tip>
 This is the command-line path, and it is what to use in CI, from a script, or on
@@ -41,7 +41,7 @@ curl -s localhost:8080/auth/device/register \
 A device that will be **sent** content, rather than only signing for it, also
 registers an X25519 key as `encryption_key_b64`. Ed25519 signs and cannot be
 encrypted to, so the two are separate keypairs — see
-[ADR 0024](/adr/0024-the-enclave-assembles-and-reseals-to-the-device). The
+ADR 0024. The
 response's `can_receive_sealed` says whether the gateway recorded one.
 
 Optional, and omitting it is a working state rather than a broken one: the
@@ -94,7 +94,7 @@ the signer makes and not a rule.
 That is why [the dashboard](/guides/dashboard) registers **one key per agent**:
 it makes "revoke this agent" expressible with the lever that exists. A
 convention, not an invariant — the gateway accepts one key signing for many
-agents. See [ADR 0023](/adr/0023-the-owners-key-lives-in-the-browser).
+agents. See ADR 0023.
 </Tip>
 
 ## 5. Check what it resolves to

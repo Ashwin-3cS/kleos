@@ -66,3 +66,15 @@ argument. A decision that is only visible in a commit message is not recorded.
 - Cost: a decision made in a hurry and not written down is now a visible gap
   rather than an invisible one. That is the point, but it does mean the
   directory is only as useful as the discipline behind it.
+
+## Amendment, 2026-10-21 — path only
+
+These records moved from `docs/adr/` to `adr/`, and the rendered index at
+`docs/decisions/index.mdx` was folded into `adr/README.md`. `docs/` is published
+as a site for people using Kleos; a decision record argues with alternatives and
+names what is stubbed, which is maintainer material.
+
+Recorded here as an amendment rather than an edit to the Decision above, because
+the Decision is about one-file-per-decision, sequential numbering, immutability
+and supersession — none of which changed. Only the directory did. No record's
+text was altered by the move.

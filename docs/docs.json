@@ -64,52 +64,10 @@
             ]
           }
         ]
-      },
-      {
-        "tab": "Decisions",
-        "groups": [
-          {
-            "group": "Architecture decision records",
-            "pages": [
-              "decisions/index",
-              "adr/0001-record-architecture-decisions",
-              "adr/0002-persist-sealed-ciphertext-in-a-blob-store",
-              "adr/0003-recency-is-a-real-half-life-and-ranking-is-configurable",
-              "adr/0004-derive-per-purpose-signing-keys-from-one-root",
-              "adr/0005-log-what-each-grant-disclosed",
-              "adr/0006-measure-the-central-bet-before-building-on-it",
-              "adr/0007-measure-disclosure-not-only-recall",
-              "adr/0008-store-sealed-bodies-as-quilt-patches",
-              "adr/0009-affect-as-a-closed-vocabulary-that-raises-the-floor",
-              "adr/0010-encrypt-the-resolved-record-at-rest",
-              "adr/0011-the-owner-signs-grants-not-the-gateway",
-              "adr/0012-embed-locally-with-a-real-model",
-              "adr/0013-a-push-path-for-what-the-person-says",
-              "adr/0014-following-what-the-person-referred-to",
-              "adr/0015-two-names-for-one-thing",
-              "adr/0016-agent-identity-is-the-device-that-signed-the-grant",
-              "adr/0017-an-agent-writes-under-a-grant-that-says-it-may",
-              "adr/0018-memory-kinds-and-short-term-as-a-state",
-              "adr/0019-every-state-change-is-a-record",
-              "adr/0020-reading-a-sealed-body-under-a-grant",
-              "adr/0021-the-briefing-and-why-reading-is-not-remembering",
-              "adr/0022-sensitive-actions-are-brokered-in-the-tee",
-              "adr/0023-the-owners-key-lives-in-the-browser",
-              "adr/0024-the-enclave-assembles-and-reseals-to-the-device",
-              "adr/0025-reasoning-across-sessions-writes-claims-not-blocks"
-            ]
-          }
-        ]
       }
     ]
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Architecture decisions",
-        "href": "https://github.com/Ashwin-3cS/kleos/tree/main/docs/adr"
-      }
-    ],
     "primary": {
       "type": "github",
       "href": "https://github.com/Ashwin-3cS/kleos"

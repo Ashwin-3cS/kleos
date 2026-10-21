@@ -43,7 +43,7 @@ neighbourhood  authorize -> walk -> permission-check -> assemble
 `enrich` sits behind a conditional edge and runs only when a record body
 contains a URL. `canonicalise` sits **before** `resolve` deliberately: merging
 entities after resolution would leave the graph tidy, the record wrong, and
-nothing failing. See [ADR 0015](/adr/0015-two-names-for-one-thing).
+nothing failing. See ADR 0015.
 
 <Note>
 The only point in the pipeline that crosses the trust boundary is `encrypt`. If
@@ -63,7 +63,7 @@ Recency is a real half-life, defaulting to **180 days rather than 30**: in a
 resolved record an old decision stands until something supersedes it, and
 `supersedes` carries that signal, not the clock. Weights are configurable so the
 eval harness can move them. See
-[ADR 0003](/adr/0003-recency-is-a-real-half-life-and-ranking-is-configurable).
+ADR 0003.
 
 ## Connectors
 
@@ -110,7 +110,7 @@ against. What they do not have is a working `fetch` — it raises, pointing at
 Two sources rather than one with a flag, because "read what I wrote down, not
 what I said out loud in my kitchen" is a real distinction and `permits()` can
 express it for free only if the ids differ. See
-[ADR 0013](/adr/0013-a-push-path-for-what-the-person-says).
+ADR 0013.
 </Accordion>
 <Accordion title="google and github — registered, and raising">
 Registered with their real metadata, so what is missing is the `fetch` body and
@@ -148,7 +148,7 @@ Two things deliberately not done, recorded so they are decisions rather than
 oversights: **DNS rebinding is not solved**, and **robots.txt is not consulted**
 — this fetches one page a person just said they read, on their explicit
 instruction; it is not a crawler. If it ever discovers its own URLs, that
-calculation changes. See [ADR 0014](/adr/0014-following-what-the-person-referred-to).
+calculation changes. See ADR 0014.
 </Warning>
 
 `extract_page` uses a **different prompt, not a different model**: pointing the

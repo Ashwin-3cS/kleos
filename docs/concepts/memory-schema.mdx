@@ -36,7 +36,7 @@ pub struct Entity {
 Ids are content-addressed over the name, which is why "RAG" and "retrieval
 augmented generation" were once two permanently separate nodes — and why a
 canonicalisation step now runs between extraction and resolution. See
-[ADR 0015](/adr/0015-two-names-for-one-thing).
+ADR 0015.
 </Accordion>
 <Accordion title="Event — an atomic ingested fact">
 Carries a `SourceRef`. Never rewritten; corrections arrive as new events.
