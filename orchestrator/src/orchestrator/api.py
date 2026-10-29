@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import mcp_server
+from . import mcp_server, models
 from .config import get_settings
 from .connectors.direct import SOURCES as DIRECT_SOURCES
 from .connectors.direct import TEXT as DIRECT_TEXT
@@ -338,7 +338,26 @@ def health() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         status["gateway"] = f"unreachable: {exc}"
         status["status"] = "degraded"
+
+    # Reported, and deliberately **not** counted as degraded. An install with no
+    # model is a working install with a smaller set of capabilities -- the whole
+    # agent loop needs none -- and marking it unhealthy would train people to
+    # ignore the word. `summary` says which half they have.
+    status["model"] = models.describe(settings).as_dict()
     return status
+
+
+@app.get("/health/model")
+def health_model(probe: bool = False) -> dict[str, Any]:
+    """What this install can do with the model it has, or has not.
+
+    Separate from `/health` because `probe=true` goes to the network, and a
+    liveness check that dials a third party is a liveness check that fails when
+    the third party does. `/health` answers from configuration alone.
+    """
+    settings = get_settings()
+    status = models.probe(settings) if probe else models.describe(settings)
+    return status.as_dict()
 
 
 @app.get("/sources")

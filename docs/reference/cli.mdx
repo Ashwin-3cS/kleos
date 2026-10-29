@@ -69,6 +69,7 @@ two installs cannot collide, and nobody picks it.
 
 | Script | Purpose |
 | --- | --- |
+| `scripts/kleos.sh {up,down,status,doctor,enrol,agent,logs}` | **the personal install.** One command for the whole stack, with a preflight that catches a stale process holding a port and warns when sealing is on. `enrol` makes a keypair the owner; `agent` mints a grant and prints the `claude mcp add` line |
 | `scripts/services.sh {up,down,reset,status}` | Neo4j, Redis and Postgres without the compose plugin. Waits for every port. Detects a pre-rename container set |
 | `scripts/run_local.sh [--with-orchestrator]` | enclave + gateway in mock mode; optionally the services too |
 | `scripts/smoke_test.sh` | mock tokens and the mock OAuth connect flow |
@@ -81,7 +82,11 @@ two installs cannot collide, and nobody picks it.
 
 <Note>
 `run_local.sh` writes pid files under `.local/`, so stopping is
-`kill $(cat .local/enclave.pid) $(cat .local/gateway.pid)`.
+`kill $(cat .local/enclave.pid) $(cat .local/gateway.pid)` — or
+`./scripts/kleos.sh down`, which stops all four and then **checks the ports
+actually came free**. A pid file is a claim about what was started; the port is
+the fact, and anything still holding one is what the next `up` would silently
+inherit.
 </Note>
 
 ## Repository layout

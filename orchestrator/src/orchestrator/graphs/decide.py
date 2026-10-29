@@ -421,6 +421,15 @@ class Consolidated:
     #: see what was kept without re-reading the graph.
     conclusions: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    #: Which consolidator ran, and -- when it was the rule-based one and it
+    #: found nothing -- what that means.
+    #:
+    #: "Concluded nothing" is the common and correct outcome, and it is also
+    #: exactly what an install with no model looks like when it cannot conclude
+    #: anything at all. Those are different facts and a caller seeing an empty
+    #: list cannot tell them apart, so the note says which.
+    consolidator: str = ""
+    note: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -455,6 +464,17 @@ def consolidate_session(
         conclusions = consolidator.consolidate(blocks)
     finally:
         consolidator.close()
+
+    note = None
+    if not conclusions and blocks and not runtime.settings.use_llm_extractor:
+        # Said rather than left to be inferred from an empty list. See
+        # `Consolidated.note` and `models.py`.
+        note = (
+            "no model is configured, so only blocks explicitly marked `Decision:` or "
+            "`Procedure:` can be kept. A regex cannot tell what a session concluded, "
+            "and one that guessed would write invented claims under this device's id. "
+            "Set EXTRACTOR=llm with a reachable LLM_BASE_URL to consolidate properly."
+        )
 
     written: list[str] = []
     errors: list[str] = []
@@ -525,4 +545,6 @@ def consolidate_session(
         claims=written,
         conclusions=kept,
         errors=errors,
+        consolidator=consolidator.name,
+        note=note,
     )

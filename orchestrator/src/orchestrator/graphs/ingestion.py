@@ -141,6 +141,14 @@ class IngestionResult:
     #: the totals, and recomputing them from the candidate set would reintroduce
     #: exactly the considered-versus-written gap the counts exist to close.
     written: list[str] = field(default_factory=list)
+    #: Why a run that read records wrote nothing, when the reason is the
+    #: deployment rather than the records.
+    #:
+    #: The rule-based extractor matches a fixture grammar and nothing else, so a
+    #: real export through it produces zero claims and zero errors -- which is
+    #: correct, silent, and indistinguishable from "your data had nothing in
+    #: it". This is the difference, stated.
+    note: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +165,7 @@ class IngestionResult:
             "contradictions": [list(p) for p in self.contradictions],
             "reconciliations": [list(p) for p in self.reconciliations],
             "errors": self.errors,
+            "note": self.note,
         }
 
 
@@ -774,4 +783,31 @@ def run_ingestion(
         reconciliations=[tuple(p) for p in final.get("reconciliations", [])],
         errors=final.get("errors", []),
         written=final.get("written", []),
+        note=_extraction_note(runtime, final, counts),
+    )
+
+
+def _extraction_note(runtime: Runtime, final: dict, counts: dict) -> str | None:
+    """Names the deployment when it, rather than the data, is why nothing landed.
+
+    Only for the case that is actually ambiguous: records were read, nothing at
+    all was written, no errors were raised, and the extractor is the rule-based
+    one. A run that wrote something, or that failed loudly, needs no note.
+    """
+    if runtime.settings.use_llm_extractor:
+        return None
+    if not final.get("records"):
+        return None
+    # Entities and claims, and deliberately not events. A pushed utterance is
+    # stored as an event whatever happens -- that is the record itself, not
+    # something extraction worked out -- so counting it would mean the note
+    # never fires on the path where it is most needed. Found by `/remember`
+    # returning `events: 1, claims: 0` and no note.
+    if counts.get("entities", 0) or counts.get("claims", 0):
+        return None
+    return (
+        "no model is configured, so extraction ran the rule-based fixture matcher, which "
+        "recognises only sentences of the form '<Person> decided that project <X> will ...'. "
+        "Real material produces nothing through it, with no error. Set EXTRACTOR=llm and "
+        "point LLM_BASE_URL at a provider or a local model."
     )

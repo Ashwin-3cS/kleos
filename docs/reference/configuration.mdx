@@ -63,6 +63,23 @@ description: "Every environment variable, and the ones whose defaults are decisi
 | `WALRUS_PUBLISHER_URL` / `WALRUS_AGGREGATOR_URL` | unset | When set, sealed blobs go to Walrus. Still a stub: it **raises** rather than silently falling back to `BLOB_STORE_DIR` |
 | `SEALED_TOKEN_STORE_URL` | unset | Unset means an in-memory store, which silently forgets tokens on restart |
 
+## What needs a model
+
+`EXTRACTOR=llm` plus `LLM_BASE_URL` points at any OpenAI-compatible endpoint.
+`GET /health` reports what is configured, and `GET /health/model?probe=true`
+asks whether it answers — separate routes because a liveness check that dials a
+third party fails when the third party does.
+
+| | |
+|---|---|
+| **Works with no model** | `record_decision`, `brief_before_acting`, `query_memory`, `why_this_shifted` |
+| **Needs a model** | ingesting a source. Without one the rule-based extractor matches a fixture grammar and real material yields nothing **with no error** — so the ingestion result carries a `note` saying that, rather than an empty count |
+| **Partly** | consolidation keeps lines marked `Decision:` and says in `note` why it kept nothing else; cross-session reasoning keeps its rule-based half |
+
+A local endpoint (`127.0.0.1`, `localhost`) is treated as needing no key, because
+a llama.cpp or vLLM takes any key or none — reporting that as a
+misconfiguration would train you to ignore the warning that matters.
+
 ## Signing in
 
 | Variable | Default | Notes |

@@ -46,6 +46,12 @@ Works; not yet shippable — see below.
 Issue, inspect and revoke grants from a screen, with the signing key held in the
 browser. Plus what each agent has been working on, and what every grant did.
 </Card>
+<Card title="One command, with a preflight" icon="terminal">
+`./scripts/kleos.sh up` brings up the whole stack and refuses to start when it
+finds a stale process holding a port — the failure that otherwise has the old
+build silently answering every request. `doctor` runs the checks alone and says
+which half of Kleos works without a language model.
+</Card>
 <Card title="A local owner, with no OAuth app" icon="key">
 `kleos-device enrol` turns a keypair into the install's owner, authorised by an
 enrolment code the gateway writes on first start and consumes on use.
@@ -207,6 +213,12 @@ llama.cpp, so that is a real option rather than a hypothetical one.
   state.
 - **`SEALED_TOKEN_STORE_URL` unset means an in-memory store.** Correct for mock
   mode; it silently forgets tokens on restart.
+- **Without a language model, ingesting a source writes nothing**, and
+  consolidation keeps only what was explicitly marked. Both are correct — a
+  regex that guessed what a session concluded would write invented claims under
+  an authenticated device id — and both used to be *silent*, which reads as a
+  broken product. They now say so in `note`, and `kleos.sh doctor` says it up
+  front. The agent loop itself needs no model.
 - **Mock sign-in is refused unless `ALLOW_MOCK_IDENTITY` is set**, and that is
   a change: it used to be accepted by any gateway in mock mode. Combined with
   the old `0.0.0.0` bind it meant anyone who could reach the port could mint a

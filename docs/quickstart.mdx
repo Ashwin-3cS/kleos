@@ -17,6 +17,46 @@ rather than fails when Neo4j is unreachable, so starting pytest too early looks
 exactly like everything passing.
 </Warning>
 
+## Running it as a personal install
+
+One command, and the rest is what it tells you:
+
+```bash
+./scripts/kleos.sh up        # containers, enclave, gateway, orchestrator, worker
+./scripts/kleos.sh enrol     # this keypair becomes the owner (ADR 0029)
+./scripts/kleos.sh agent     # a grant, and the line to connect an agent
+```
+
+`up` refuses to start if its preflight finds a blocking problem, and the
+preflight exists because two failures cost real time and neither announced
+itself: a **stale process already holding a port** — the new one fails to bind,
+exits, and the old build keeps answering every request — and
+`ENCRYPT_CONTENT_AT_REST`, which makes the briefing answer 409 (correct under
+ADR 0024, baffling if you did not know the setting was on).
+
+`./scripts/kleos.sh doctor` runs the preflight alone and changes nothing. It
+also says which half of Kleos works without a language model, because the
+answer is not obvious:
+
+| | |
+|---|---|
+| **Works with no model** | `record_decision`, `brief_before_acting`, `query_memory`, `why_this_shifted` — the claim is the statement the agent already wrote, and the read path formats rather than synthesises |
+| **Needs a model** | ingesting a source. The rule-based extractor matches a fixture grammar only, so real material produces nothing **and no error** |
+| **Partly** | session consolidation keeps lines explicitly marked `Decision:`; cross-session reasoning keeps the rule-based half |
+
+So a keyless install is a working memory layer for agents, not a broken one —
+and where it cannot do something it now says so in the result rather than
+returning an empty list.
+
+<Note>
+`EXTRACTOR=llm` plus `LLM_BASE_URL` points it at any OpenAI-compatible
+endpoint: Groq, OpenAI, or a local llama.cpp or vLLM, which needs no key.
+`GET /health/model?probe=true` asks whether it answers.
+</Note>
+
+The sections below are the development path — the individual scripts, the test
+suite, and the walkthrough of the whole flow.
+
 ## 1. Start the local services
 
 <CodeGroup>
