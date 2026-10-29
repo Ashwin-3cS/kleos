@@ -82,11 +82,14 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         "sign" => sign(&args, &key_path),
+        "enrol" | "enroll" => enrol(&args, &key_path),
+        "sign-session" => sign_session(&key_path),
         "unseal" => unseal(&args, &key_path),
         "verify" => verify_only(&args),
         _ => {
             eprintln!(
-                "usage: kleos-device <keygen|pubkey|key-id|sign|unseal|verify> [--key PATH] \
+                "usage: kleos-device \
+                 <keygen|pubkey|key-id|sign|unseal|verify|enrol|sign-session> [--key PATH] \
                  [--encryption] [--scope FILE|-] [--ttl-secs N] \
                  [--root PATH] [--allow-mock] [--allow-unattested] [--pcr0 HEX] \
                  [--max-age-secs N]"
@@ -373,6 +376,65 @@ fn sign(args: &[String], key_path: &str) -> Result<(), String> {
     let token = shared::sign_grant(&scope, &keypair, now_ms, ttl_secs * 1000, &nonce)
         .map_err(|e| e.to_string())?;
     println!("{token}");
+    Ok(())
+}
+
+/// The body for `POST /auth/local/enrol`, printed rather than posted.
+///
+/// This crate deliberately has no HTTP client -- its job is to hold a key and
+/// produce bytes -- so enrolment is a body you pipe into curl. ADR 0029 chose
+/// a signed assertion over a challenge round trip partly to keep that true.
+///
+///   kleos-device enrol --key ~/.kleos/device.key --code <code> \
+///     | curl -sS -X POST http://127.0.0.1:8080/auth/local/enrol \
+///         -H 'content-type: application/json' --data @-
+fn enrol(args: &[String], key_path: &str) -> Result<(), String> {
+    let code = flag(args, "--code")
+        .ok_or("enrol needs --code, the enrolment code the gateway printed on first start")?;
+    let keypair = load(key_path)?;
+    let private = load_bytes(key_path)?;
+    let label = flag(args, "--label").unwrap_or_else(|| "this device".to_string());
+    let body = serde_json::json!({
+        "enrolment_code": code,
+        "public_key_b64": b64(keypair.public().as_bytes()),
+        // Always sent. A device enrolled without it can sign and read but can
+        // never be sent a sealed answer, and registration is immutable -- so
+        // the moment to have it is now (the same argument keygen makes).
+        "encryption_key_b64": b64(encryption_public(&private).as_bytes()),
+        "label": label,
+    });
+    println!("{body}");
+    Ok(())
+}
+
+/// A signed assertion for `POST /auth/local/session`.
+///
+/// The signed bytes are built the same way `gateway::routes::local_auth::
+/// assertion_bytes` builds them, and the format is prefixed and versioned so
+/// these can never be read as something else this key signs -- a grant above
+/// all. A signature is only as specific as what it covers.
+fn sign_session(key_path: &str) -> Result<(), String> {
+    use fastcrypto::traits::Signer;
+
+    let keypair = load(key_path)?;
+    let key_id = shared::key_id_for(keypair.public().as_bytes());
+    let issued_at_ms = now_ms()? as i64;
+    let nonce = {
+        let bytes = Ed25519KeyPair::generate(&mut rand::thread_rng());
+        hex::encode(&bytes.public().as_bytes()[..12])
+    };
+    let message = format!("kleos-local-session|v1|{key_id}|{issued_at_ms}|{nonce}");
+    let signature = keypair.sign(message.as_bytes());
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "key_id": key_id,
+            "issued_at_ms": issued_at_ms,
+            "nonce": nonce,
+            "signature_b64": b64(signature.as_ref()),
+        })
+    );
     Ok(())
 }
 

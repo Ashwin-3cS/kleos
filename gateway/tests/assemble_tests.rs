@@ -54,6 +54,7 @@ async fn gateway_with_enclave() -> Arc<AppState> {
         pending_auth: Default::default(),
         tokens: Box::new(InMemoryTokenStore::default()),
         device_keys: Box::new(InMemoryDeviceKeyStore::default()),
+        local_nonces: Default::default(),
     })
 }
 

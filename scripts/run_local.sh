@@ -19,6 +19,12 @@ export ENCLAVE_MODE=mock
 # mocks are acceptable. Set here and nowhere in the defaults: a local run that
 # needs this is a local run admitting what it is.
 export ATTESTATION_ALLOW_MOCK="${ATTESTATION_ALLOW_MOCK:-1}"
+# The smoke scripts and the dashboard's development sign-in use
+# `mock_google_<subject>`, which ADR 0029 refuses by default -- the owner id is
+# a hash of the subject, so an accepted mock token is a derived identity rather
+# than a guessed one. A person running Kleos enrols a local owner instead and
+# never needs this.
+export ALLOW_MOCK_IDENTITY="${ALLOW_MOCK_IDENTITY:-1}"
 export ENCLAVE_PORT="${ENCLAVE_PORT:-4000}"
 export GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 export ENCLAVE_HOST="${ENCLAVE_HOST:-127.0.0.1}"

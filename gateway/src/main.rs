@@ -46,6 +46,7 @@ async fn main() -> Result<()> {
         pending_auth: Default::default(),
         tokens,
         device_keys,
+        local_nonces: Default::default(),
     });
 
     let router = build_router(state);

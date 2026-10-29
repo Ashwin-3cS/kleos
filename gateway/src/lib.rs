@@ -1,4 +1,5 @@
 pub mod config;
+pub mod enrolment;
 pub mod error;
 pub mod keys;
 pub mod middleware;
@@ -29,6 +30,11 @@ pub struct AppState {
     /// There is no private key anywhere in this process, which is the point:
     /// the gateway can check a grant and cannot mint one. See ADR 0011.
     pub device_keys: Box<dyn DeviceKeyStore>,
+    /// Local-session nonces already used (ADR 0029). In process, like the PKCE
+    /// verifiers above and with the same consequence: a restart forgets them,
+    /// which reopens a window two minutes wide for bytes an attacker already
+    /// had to have captured.
+    pub local_nonces: routes::local_auth::NonceCache,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -69,6 +75,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(routes::memory::unseal_for_resolution),
         )
         .route("/auth/device/register", post(routes::memory::device_register))
+        .route("/auth/local/enrol", post(routes::local_auth::enrol))
+        .route("/auth/local/session", post(routes::local_auth::session))
         .route("/auth/device/keys", get(routes::memory::device_keys))
         .route("/auth/device/revoke", post(routes::memory::device_revoke))
         .route(

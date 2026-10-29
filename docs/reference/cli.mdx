@@ -17,6 +17,8 @@ only ever sees the public half.
 | `pubkey --key <path> --encryption` | the X25519 half, which receives sealed answers |
 | `unseal --key <path>` | open a sealed answer on stdin, after verifying what sealed it |
 | `verify --key <path>` | the same checks, printing the verdict and opening nothing |
+| `enrol --key <path> --code <code>` | the body for `POST /auth/local/enrol`: turns this keypair into the install's owner |
+| `sign-session --key <path>` | a signed assertion for `POST /auth/local/session` |
 
 `sign` reads a `Scope` as JSON from a file or stdin and generates a fresh nonce
 per grant, so two grants over an identical scope stay distinguishable in the read
@@ -38,6 +40,30 @@ in the system that is not the operator.
 Two checks run, and the second is the one easy to omit: the document has to
 verify, **and** it has to commit to this ciphertext sealed to this device. A
 relayed document from another assembly verifies perfectly and is refused here.
+
+### Signing in to a personal install
+
+No OAuth app (ADR 0029). The gateway writes an enrolment code on first start;
+the first device to present it becomes the owner, and the code is consumed.
+
+```bash
+kleos-device keygen --key ~/.kleos/device.key
+kleos-device enrol  --key ~/.kleos/device.key --code "$(cat .local/enrolment-code)" \
+  | curl -sS -X POST http://127.0.0.1:8080/auth/local/enrol \
+      -H 'content-type: application/json' --data @-
+
+# afterwards
+kleos-device sign-session --key ~/.kleos/device.key \
+  | curl -sS -X POST http://127.0.0.1:8080/auth/local/session \
+      -H 'content-type: application/json' --data @-
+```
+
+`enrol` and `sign-session` **print a body rather than posting it**. This crate
+holds a key and produces bytes; it has no HTTP client, which is also why ADR
+0029 chose a signed assertion over a challenge round trip.
+
+The owner id is `hex("local:<key_id>")`, so it is the key rather than a name —
+two installs cannot collide, and nobody picks it.
 
 ## Scripts
 

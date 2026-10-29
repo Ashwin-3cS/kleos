@@ -228,6 +228,7 @@ pub async fn session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<shared::IdentityVerifyRequest>,
 ) -> Result<Json<SessionResponse>, GatewayError> {
+    refuse_mock_identity(&state, &req)?;
     let verified = state.enclave.verify_identity(&req).await?;
     // Before the session token exists, not after. A session is the owner
     // identity turned into a bearer credential, so a document that does not
@@ -346,5 +347,38 @@ fn check_identity_attestation(
         ));
     }
     tracing::info!(trust = document.trust.as_str(), "identity attestation verified");
+    Ok(())
+}
+
+/// Refuses a `mock_*` token unless this gateway was told to accept one.
+///
+/// In mock mode the enclave derives an identity from the token's own suffix,
+/// and the owner id is a deterministic hash of it -- so an accepted
+/// `mock_google_alice` is not a guessed session, it is a *derived* one. That
+/// was fine while this only ever listened on a developer's loopback and became
+/// the way into a personal install the moment it did not.
+///
+/// Checked here rather than in the enclave because it is a property of this
+/// deployment, not of the verification: the enclave is doing exactly what mock
+/// mode asks of it. ADR 0029, and the same shape `ATTESTATION_ALLOW_MOCK` has.
+fn refuse_mock_identity(
+    state: &AppState,
+    req: &shared::IdentityVerifyRequest,
+) -> Result<(), GatewayError> {
+    if state.config.allow_mock_identity {
+        return Ok(());
+    }
+    let mocked = [req.google_token.as_deref(), req.github_token.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|token| token.starts_with("mock_google_") || token.starts_with("mock_github_"));
+    if mocked {
+        return Err(GatewayError::Unauthorized(
+            "mock sign-in is disabled on this gateway. A personal install enrols a local \
+             owner instead -- see POST /auth/local/enrol -- and ALLOW_MOCK_IDENTITY=1 is \
+             for the test suites."
+                .into(),
+        ));
+    }
     Ok(())
 }

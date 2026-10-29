@@ -63,6 +63,14 @@ description: "Every environment variable, and the ones whose defaults are decisi
 | `WALRUS_PUBLISHER_URL` / `WALRUS_AGGREGATOR_URL` | unset | When set, sealed blobs go to Walrus. Still a stub: it **raises** rather than silently falling back to `BLOB_STORE_DIR` |
 | `SEALED_TOKEN_STORE_URL` | unset | Unset means an in-memory store, which silently forgets tokens on restart |
 
+## Signing in
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `LOCAL_ENROLMENT` | on under `mock`, off under `nitro` | Enables `/auth/local/enrol` and `/auth/local/session`, which turn a device keypair into this install's owner (ADR 0029). A hosted deployment leaves it off: it uses OAuth, and an open enrolment route would mint owners for anyone who can reach it |
+| `ENROLMENT_CODE_PATH` | `.local/enrolment-code` | Written on first start, mode `0600`, and **consumed by the first device that enrols**. Delete it and restart to enrol a different owner |
+| `ALLOW_MOCK_IDENTITY` | `false` | Whether `mock_google_<subject>` is accepted at `/auth/session`. The owner id is a deterministic hash of the subject, so an accepted mock token is a derived identity rather than a guessed one. `run_local.sh` sets it for the smoke scripts and the dashboard's development sign-in |
+
 ## Where the services listen
 
 | Variable | Default | Notes |

@@ -31,6 +31,20 @@ pub struct Config {
     /// Postgres URL for the sealed refresh-token store. Unset means the
     /// in-memory store, which is the local mock-mode default.
     pub sealed_token_store_url: Option<String>,
+    /// Where the local enrolment code lives, when local sign-in is enabled
+    /// (ADR 0029). `None` disables `/auth/local/*` entirely, which is what a
+    /// hosted deployment wants: it uses OAuth, and an open enrolment route
+    /// there would mint owners for anyone who can reach it.
+    pub local_enrolment: Option<crate::enrolment::Enrolment>,
+    /// Whether `mock_google_<subject>` is accepted as a sign-in.
+    ///
+    /// Off unless asked for, the same shape `ATTESTATION_ALLOW_MOCK` has. It
+    /// was effectively on for every mock-mode gateway, and the owner id is a
+    /// deterministic hash of the subject, so it minted any identity on
+    /// request. The scripts and the test suites set it; a person running Kleos
+    /// has a local owner and does not need it.
+    pub allow_mock_identity: bool,
+
     /// What this gateway accepts as an attestation (ADR 0026).
     ///
     /// Built at boot, so a root certificate that is not the AWS root stops the
@@ -88,6 +102,10 @@ impl Config {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             attestation: attestation_policy()?,
+            local_enrolment: local_enrolment()?,
+            allow_mock_identity: env::var("ALLOW_MOCK_IDENTITY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         })
     }
 
@@ -102,6 +120,11 @@ impl Config {
             // Mocks allowed, and nothing else: the mock enclave produces
             // nothing else. The tests build on this.
             attestation: Some(AttestationPolicy::mock_only()),
+            // The test suites sign in with `mock_google_<subject>`; that is
+            // what `Config::mock()` is for, and a person's install is not
+            // built from it.
+            local_enrolment: None,
+            allow_mock_identity: true,
             session_ttl_secs: 3600,
             oauth_state_ttl_secs: 600,
             google_client_id: "mock-google-client-id".to_string(),
@@ -187,4 +210,24 @@ fn read_certificate(path: &str) -> anyhow::Result<Vec<u8>> {
         return Ok(base64::engine::general_purpose::STANDARD.decode(body)?);
     }
     Ok(bytes)
+}
+
+/// Local enrolment, when it is enabled.
+///
+/// On by default in `mock` mode and off in `nitro`: a personal install is the
+/// case mock mode exists for, and a deployment behind a real enclave uses
+/// OAuth. Either default can be overridden, because "local" is about who runs
+/// it rather than which enclave is underneath.
+fn local_enrolment() -> anyhow::Result<Option<crate::enrolment::Enrolment>> {
+    let nitro = env::var("ENCLAVE_MODE").map(|m| m == "nitro").unwrap_or(false);
+    let enabled = match env::var("LOCAL_ENROLMENT") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+        Err(_) => !nitro,
+    };
+    if !enabled {
+        return Ok(None);
+    }
+    let path = env::var("ENROLMENT_CODE_PATH")
+        .unwrap_or_else(|_| ".local/enrolment-code".to_string());
+    Ok(Some(crate::enrolment::Enrolment::open(path)?))
 }
