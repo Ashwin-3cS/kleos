@@ -25,5 +25,8 @@ cat <<'EOF'
   nitro-cli run-enclave --cpu-count 2 --memory 4096 \
     --eif-path ~/kleos-enclave.eif --enclave-cid 16
   ./parent_forwarder.sh &
-  ENCLAVE_MODE=nitro ./kleos-gateway
+  # GATEWAY_BIND is loopback by default so a laptop does not serve the local
+  # network. A parent instance has to be reachable, so it says so here --
+  # behind TLS, because a grant token travels in a request body.
+  ENCLAVE_MODE=nitro GATEWAY_BIND=0.0.0.0 ./kleos-gateway
 EOF

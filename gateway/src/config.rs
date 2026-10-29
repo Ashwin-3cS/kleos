@@ -6,6 +6,15 @@ use shared::attestation::Policy as AttestationPolicy;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub gateway_port: u16,
+    /// The interface the gateway listens on. **Loopback by default.**
+    ///
+    /// It used to be `0.0.0.0`, hard-coded, which on a laptop in mock mode put
+    /// the whole gateway on the local network -- and mock mode accepts
+    /// `mock_google_<subject>` as a sign-in, so anyone on the same wifi could
+    /// mint an owner session, register a device key under it and sign
+    /// themselves a grant. A personal install should be reachable by the
+    /// person, and a deployment that wants more says so.
+    pub gateway_bind: String,
     pub enclave_host: String,
     pub enclave_port: u16,
     /// Per-purpose signing keys, derived from one root secret so that no two
@@ -46,6 +55,8 @@ impl Config {
         let nitro = env::var("ENCLAVE_MODE").map(|m| m == "nitro").unwrap_or(false);
         Ok(Self {
             keys: SigningKeys::from_env(nitro)?,
+            gateway_bind: env::var("GATEWAY_BIND")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
             gateway_port: env::var("GATEWAY_PORT")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -83,6 +94,7 @@ impl Config {
     /// Mock/dev defaults; also what the test suites build on.
     pub fn mock() -> Self {
         Self {
+            gateway_bind: "127.0.0.1".to_string(),
             gateway_port: 8080,
             enclave_host: "127.0.0.1".to_string(),
             enclave_port: 4000,

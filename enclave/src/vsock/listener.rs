@@ -10,8 +10,15 @@ use tokio::net::TcpListener;
 /// this ordinary TCP listener. In `mock` mode there is no VSOCK at all --
 /// the gateway just dials this TCP port directly on localhost. Either way,
 /// this function binds the same thing: a plain TCP listener.
+///
+/// **Loopback, not `0.0.0.0`.** Both callers are local: under `nitro` it is
+/// socat inside the enclave connecting to `TCP:localhost:4000`, and under
+/// `mock` it is the gateway on the same machine. Binding every interface
+/// bought nothing in either mode and, on a laptop in mock mode, put the
+/// enclave's seal and identity routes on the local network -- which
+/// `docs/quickstart.mdx` had already been describing as loopback.
 pub async fn bind(port: u16) -> Result<TcpListener> {
-    let addr = format!("0.0.0.0:{port}");
+    let addr = format!("127.0.0.1:{port}");
     let listener = TcpListener::bind(&addr).await?;
     Ok(listener)
 }

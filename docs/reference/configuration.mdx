@@ -63,6 +63,17 @@ description: "Every environment variable, and the ones whose defaults are decisi
 | `WALRUS_PUBLISHER_URL` / `WALRUS_AGGREGATOR_URL` | unset | When set, sealed blobs go to Walrus. Still a stub: it **raises** rather than silently falling back to `BLOB_STORE_DIR` |
 | `SEALED_TOKEN_STORE_URL` | unset | Unset means an in-memory store, which silently forgets tokens on restart |
 
+## Where the services listen
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `GATEWAY_BIND` | `127.0.0.1` | The interface the gateway listens on. It was `0.0.0.0` and hard-coded; on a laptop in mock mode that put every route on the local network, where `mock_google_<subject>` is a valid sign-in. A server that must be reachable sets this **and puts TLS in front**, because a grant travels in a request body. The gateway logs a warning when it is bound beyond loopback |
+| `ORCHESTRATOR_HOST` | `127.0.0.1` | Same argument, and it was already loopback |
+
+The enclave's own listener is always loopback and has no setting: under `nitro`
+the only thing dialling it is socat inside the enclave (`TCP:localhost:4000`),
+and under `mock` it is the gateway on the same machine.
+
 ## Permission verdicts
 
 | Variable | Default | Notes |

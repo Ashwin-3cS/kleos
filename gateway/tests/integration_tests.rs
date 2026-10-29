@@ -44,3 +44,31 @@ async fn auth_callback_requires_a_state_parameter() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+/// The gateway listens on loopback unless something says otherwise.
+///
+/// A test on a default rather than on behaviour, which is usually a smell --
+/// but this default is a security boundary. It was `0.0.0.0` hard-coded in
+/// `main.rs`, so on a laptop in mock mode the whole gateway sat on the local
+/// network, and mock mode accepts `mock_google_<subject>` as a sign-in: a
+/// stranger on the same wifi could mint an owner session, register a device key
+/// under it, and sign themselves a grant. Nothing else in the suite would have
+/// noticed the day someone changed it back.
+///
+/// Both halves in one test on purpose. `set_var` is process-global and the
+/// test harness runs threads in parallel, so two tests touching `GATEWAY_BIND`
+/// race and fail each other intermittently -- which is worse than a long test.
+#[test]
+fn the_gateway_binds_loopback_unless_told_otherwise() {
+    std::env::remove_var("GATEWAY_BIND");
+    assert_eq!(
+        gateway::config::Config::from_env().expect("config").gateway_bind,
+        "127.0.0.1"
+    );
+    assert_eq!(gateway::config::Config::mock().gateway_bind, "127.0.0.1");
+
+    std::env::set_var("GATEWAY_BIND", "0.0.0.0");
+    let widened = gateway::config::Config::from_env().expect("config");
+    std::env::remove_var("GATEWAY_BIND");
+    assert_eq!(widened.gateway_bind, "0.0.0.0");
+}

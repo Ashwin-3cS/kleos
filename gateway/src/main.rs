@@ -7,7 +7,7 @@ use gateway::store::{InMemoryTokenStore, SealedTokenStore};
 use gateway::vsock::client::EnclaveClient;
 use gateway::{build_router, AppState};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
     info!(backend = device_keys.backend(), "device key store ready");
 
     let port = config.gateway_port;
+    let bind = config.gateway_bind.clone();
     let state = Arc::new(AppState {
         config,
         enclave,
@@ -48,8 +49,19 @@ async fn main() -> Result<()> {
     });
 
     let router = build_router(state);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{bind}:{port}")).await?;
     info!("gateway listening on {}", listener.local_addr()?);
+    if bind != "127.0.0.1" && bind != "localhost" && bind != "::1" {
+        // Said loudly, because the consequence is not obvious from the
+        // address: every route this serves is now reachable by anything that
+        // can route to this host, and in mock mode that includes a sign-in
+        // that accepts any subject.
+        warn!(
+            bind = %bind,
+            "the gateway is bound beyond loopback; anything that can reach this host can \
+             reach every route it serves"
+        );
+    }
 
     axum::serve(listener, router).await?;
     Ok(())
